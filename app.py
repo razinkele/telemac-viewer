@@ -260,30 +260,15 @@ app_ui = ui.page_sidebar(
 
 def server(input, output, session):
     playing = reactive.value(False)
-    last_good_file = reactive.value(None)
 
     @reactive.calc
     def tel_file():
-        ui.notification_show("Loading file...", id="loading", duration=None)
-        try:
-            uploaded = input.upload()
-            if uploaded:
-                tf = TelemacFile(uploaded[0]["datapath"])
-            else:
-                tf = TelemacFile(EXAMPLES[input.example()])
-            last_good_file.set(tf)
-            ui.notification_remove("loading")
-            return tf
-        except Exception as e:
-            ui.notification_remove("loading")
-            ui.notification_show(
-                f"Error loading file: {e}",
-                type="error",
-                duration=5,
-            )
-            if last_good_file.get() is not None:
-                return last_good_file.get()
-            return TelemacFile(EXAMPLES[list(EXAMPLES.keys())[0]])
+        uploaded = input.upload()
+        if uploaded:
+            path = uploaded[0]["datapath"]
+        else:
+            path = EXAMPLES[input.example()]
+        return TelemacFile(path)
 
     @output
     @render.ui
@@ -302,12 +287,24 @@ def server(input, output, session):
             "time_idx", "Time step", min=0, max=n - 1, value=n - 1, step=1
         )
 
+    def safe_variable(tf):
+        """Return current variable if valid for this file, else first available."""
+        var = input.variable() if input.variable() else None
+        if var and var in tf.varnames:
+            return var
+        return tf.varnames[0]
+
+    def safe_time_idx(tf):
+        """Return current time index clamped to valid range for this file."""
+        tidx = input.time_idx() if input.time_idx() is not None else 0
+        return min(tidx, len(tf.times) - 1)
+
     @output
     @render.ui
     def filter_ui():
         tf = tel_file()
-        var = input.variable() if input.variable() else tf.varnames[0]
-        tidx = input.time_idx() if input.time_idx() is not None else 0
+        var = safe_variable(tf)
+        tidx = safe_time_idx(tf)
         vals = tf.get_data_value(var, tidx)
         vmin, vmax = float(vals.min()), float(vals.max())
         step = round((vmax - vmin) / 100, 4) if vmax > vmin else 0.01
@@ -350,8 +347,8 @@ def server(input, output, session):
     @render.ui
     def stats_ui():
         tf = tel_file()
-        var = input.variable() if input.variable() else tf.varnames[0]
-        tidx = input.time_idx() if input.time_idx() is not None else 0
+        var = safe_variable(tf)
+        tidx = safe_time_idx(tf)
         vals = tf.get_data_value(var, tidx)
         t = tf.times[tidx]
         return ui.layout_column_wrap(
@@ -381,8 +378,8 @@ def server(input, output, session):
     @reactive.effect
     async def update_map():
         tf = tel_file()
-        var = input.variable() if input.variable() else tf.varnames[0]
-        tidx = input.time_idx() if input.time_idx() is not None else 0
+        var = safe_variable(tf)
+        tidx = safe_time_idx(tf)
         palette = PALETTES.get(input.palette(), PALETTE_VIRIDIS)
 
         filt = input.filter_range() if input.filter_range() is not None else None
