@@ -62,6 +62,105 @@ def export_crosssection_csv(abscissa, values, varname):
     return buf.getvalue()
 
 
+def compute_discharge(tf, tidx, polyline_m):
+    """Compute discharge (Q) through a cross-section polyline.
+
+    Q = integral of (velocity · normal) * depth along the section.
+    Returns total discharge in m³/s and per-segment breakdown.
+    """
+    varnames = [v.strip() for v in tf.varnames]
+    if "VELOCITY U" not in varnames or "VELOCITY V" not in varnames:
+        return {"total_q": 0.0, "segments": []}
+    if "WATER DEPTH" not in varnames:
+        return {"total_q": 0.0, "segments": []}
+
+    total_q = 0.0
+    segments = []
+
+    for i in range(len(polyline_m) - 1):
+        x1, y1 = polyline_m[i]
+        x2, y2 = polyline_m[i + 1]
+        # Midpoint
+        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+        seg_len = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        if seg_len < 1e-10:
+            continue
+
+        # Normal vector (perpendicular to segment, pointing left)
+        nx, ny = -(y2 - y1) / seg_len, (x2 - x1) / seg_len
+
+        try:
+            u = float(tf.get_data_on_points("VELOCITY U", tidx, [[mx, my]])[0])
+            v = float(tf.get_data_on_points("VELOCITY V", tidx, [[mx, my]])[0])
+            h = float(tf.get_data_on_points("WATER DEPTH", tidx, [[mx, my]])[0])
+        except Exception:
+            continue
+
+        # Q = (V · n) * h * length
+        vn = u * nx + v * ny
+        q = vn * max(h, 0.0) * seg_len
+        total_q += q
+        segments.append({"length": seg_len, "q": q, "depth": h, "velocity_n": vn})
+
+    return {"total_q": total_q, "segments": segments}
+
+
+def compute_courant_number(tf, tidx):
+    """Compute Courant number (CFL) per vertex: CFL = V * dt / dx.
+
+    dx is estimated as sqrt(min element area around each vertex).
+    """
+    varnames = [v.strip() for v in tf.varnames]
+    if "VELOCITY U" not in varnames or "VELOCITY V" not in varnames:
+        return None
+
+    x, y = tf.meshx, tf.meshy
+    npoin = tf.npoin2
+    ikle = tf.ikle2
+    nelem = tf.nelem2
+
+    dt = float(tf.times[1] - tf.times[0]) if len(tf.times) > 1 else 1.0
+
+    u = tf.get_data_value("VELOCITY U", tidx)[:npoin]
+    v = tf.get_data_value("VELOCITY V", tidx)[:npoin]
+    speed = np.sqrt(u**2 + v**2)
+
+    # Estimate dx per vertex as sqrt of minimum adjacent element area
+    min_area = np.full(npoin, 1e30, dtype=np.float64)
+    for e in range(nelem):
+        i0, i1, i2 = ikle[e]
+        area = abs((x[i1]-x[i0])*(y[i2]-y[i0]) - (x[i2]-x[i0])*(y[i1]-y[i0])) / 2.0
+        for node in (i0, i1, i2):
+            if area < min_area[node]:
+                min_area[node] = area
+
+    dx = np.sqrt(np.maximum(min_area, 1e-20))
+    cfl = speed * dt / dx
+    return cfl.astype(np.float32)
+
+
+def compute_element_area(tf):
+    """Compute per-vertex element area (average of adjacent element areas)."""
+    x, y = tf.meshx, tf.meshy
+    npoin = tf.npoin2
+    ikle = tf.ikle2
+    nelem = tf.nelem2
+
+    vertex_area = np.zeros(npoin, dtype=np.float64)
+    vertex_count = np.zeros(npoin, dtype=np.int32)
+
+    for e in range(nelem):
+        i0, i1, i2 = ikle[e]
+        area = abs((x[i1]-x[i0])*(y[i2]-y[i0]) - (x[i2]-x[i0])*(y[i1]-y[i0])) / 2.0
+        for node in (i0, i1, i2):
+            vertex_area[node] += area
+            vertex_count[node] += 1
+
+    mask = vertex_count > 0
+    vertex_area[mask] /= vertex_count[mask]
+    return vertex_area.astype(np.float32)
+
+
 def compute_mesh_integral(tf, values, threshold=None):
     """Compute area-weighted integral and statistics over the mesh.
 

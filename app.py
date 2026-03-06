@@ -63,6 +63,9 @@ from analysis import (
     export_all_variables_csv,
     compute_mesh_integral,
     evaluate_expression,
+    compute_discharge,
+    compute_courant_number,
+    compute_element_area,
 )
 from data_manip.extraction.telemac_file import TelemacFile
 
@@ -117,10 +120,13 @@ app_ui = ui.page_sidebar(
                 ui.input_action_button("draw_xsec", "Draw Cross-Section",
                                        class_="btn-sm btn-outline-primary w-100 mb-1"),
                 ui.output_ui("clear_xsec_ui"),
+                ui.output_ui("discharge_ui"),
                 ui.input_switch("particles", "Show particle traces", value=False),
                 ui.output_ui("particle_seed_ui"),
                 ui.input_switch("mesh_quality", "Show mesh quality", value=False),
                 ui.input_switch("show_slope", "Show slope/gradient", value=False),
+                ui.input_switch("show_courant", "Show Courant number", value=False),
+                ui.input_switch("show_elem_area", "Show element area", value=False),
                 ui.input_action_button("measure_btn", "Measure Distance",
                                        class_="btn-sm btn-outline-warning w-100 mb-1"),
                 ui.output_ui("measure_info_ui"),
@@ -159,6 +165,8 @@ app_ui = ui.page_sidebar(
                 "Statistics",
                 ui.output_ui("stats_ui"),
                 ui.output_ui("hover_info_ui"),
+                ui.input_action_button("show_multivar", "All Vars Time Series",
+                                       class_="btn-sm btn-outline-primary w-100 mb-1"),
                 ui.input_action_button("show_histogram", "Value Histogram",
                                        class_="btn-sm btn-outline-primary w-100 mb-1"),
                 ui.input_action_button("compute_integral", "Compute Integral",
@@ -437,7 +445,8 @@ def server(input, output, session):
         if mode == "none":
             return ui.div()
         titles = {"timeseries": "Time Series", "crosssection": "Cross-Section",
-                  "vertprofile": "Vertical Profile", "histogram": "Value Histogram"}
+                  "vertprofile": "Vertical Profile", "histogram": "Value Histogram",
+                  "multivar": "All Variables"}
         title = titles.get(mode, mode)
         n_pts = len(clicked_points.get()) if mode == "timeseries" else 0
         subtitle = f" ({n_pts} point{'s' if n_pts != 1 else ''})" if n_pts else ""
@@ -523,6 +532,25 @@ def server(input, output, session):
             fig.add_trace(go.Histogram(x=vals[:npoin], nbinsx=50, name=var))
             fig.update_layout(
                 xaxis_title=var, yaxis_title="Count",
+                margin=dict(l=50, r=20, t=10, b=40), height=220,
+            )
+            return fig
+
+        if mode == "multivar":
+            pts = clicked_points.get()
+            if not pts:
+                return go.Figure()
+            px, py = pts[-1]
+            fig = go.Figure()
+            for vname in tf.varnames:
+                times, values = time_series_at_point(tf, vname, px, py)
+                fig.add_trace(go.Scatter(
+                    x=times, y=values, mode="lines", name=vname,
+                ))
+            if tidx < len(tf.times):
+                fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
+            fig.update_layout(
+                xaxis_title="Time (s)", yaxis_title="Value",
                 margin=dict(l=50, r=20, t=10, b=40), height=220,
             )
             return fig
@@ -701,6 +729,31 @@ def server(input, output, session):
                 ui.update_action_button("play_btn", label="Play")
                 return
         ui.update_slider("time_idx", value=next_idx)
+
+    # -- Discharge computation --
+
+    @output
+    @render.ui
+    def discharge_ui():
+        xsec = cross_section_points.get()
+        if xsec is None:
+            return ui.div()
+        tf = tel_file()
+        tidx = current_tidx()
+        result = compute_discharge(tf, tidx, xsec)
+        q = result["total_q"]
+        return ui.div(
+            ui.strong(f"Q = {q:.4f} m³/s", class_="small"),
+            ui.span(f" ({len(result['segments'])} segments)", class_="text-muted small"),
+            class_="mb-1",
+        )
+
+    # -- Multi-variable time series --
+
+    @reactive.effect
+    @reactive.event(input.show_multivar)
+    def handle_show_multivar():
+        analysis_mode.set("multivar")
 
     # -- Goto time --
 
@@ -1120,6 +1173,15 @@ def server(input, output, session):
         if input.show_slope():
             tf = tel_file()
             return compute_slope(tf, current_values())
+        if input.show_courant():
+            tf = tel_file()
+            tidx = current_tidx()
+            cfl = compute_courant_number(tf, tidx)
+            if cfl is not None:
+                return cfl
+        if input.show_elem_area():
+            tf = tel_file()
+            return compute_element_area(tf)
         # Temporal stats display
         stats = temporal_stats_cache.get()
         td = input.temporal_display() if input.temporal_display() else "none"
@@ -1254,6 +1316,10 @@ def server(input, output, session):
             display_var = "MESH QUALITY"
         elif input.show_slope():
             display_var = f"SLOPE ({var})"
+        elif input.show_courant():
+            display_var = "COURANT NUMBER"
+        elif input.show_elem_area():
+            display_var = "ELEMENT AREA (m²)"
         elif td != "none" and temporal_stats_cache.get() is not None:
             display_var = f"{var} (temporal {td})"
         elif input.diff_mode():
