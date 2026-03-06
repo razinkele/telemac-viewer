@@ -64,6 +64,7 @@ EXAMPLE_GROUPS = {
         "Pluie (rainfall-runoff)": os.path.join(_E, "examples/telemac2d/pluie/f2d_rain_CN.slf"),
         "Confluence (river junction)": os.path.join(_E, "examples/telemac2d/confluence/f2d_confluence.slf"),
         "Culm (river)": os.path.join(_E, "examples/telemac2d/culm/ini_culm.slf"),
+        "Breach (dam failure)": os.path.join(_E, "examples/telemac2d/breach/r2d_breach.slf"),
     },
     "TELEMAC-3D": {
         "3D Canal": os.path.join(_E, "examples/telemac3d/canal/r3d_canal-t3d.slf"),
@@ -74,6 +75,7 @@ EXAMPLE_GROUPS = {
         "Guenter (bedload)": os.path.join(_E, "examples/gaia/guenter-t2d/f2d_guenter.slf"),
         "Yen (multi-grain)": os.path.join(_E, "examples/gaia/yen-t2d/f2d_multi1.slf"),
         "Sliding (slope)": os.path.join(_E, "examples/gaia/sliding-t2d/f2d_slide1_slope1.slf"),
+        "Bosse (bedform)": os.path.join(_E, "examples/gaia/bosse-t2d/f2d_bosse-t2d_fe.slf"),
     },
     "TOMAWAC (waves)": {
         "Wave-current interaction": os.path.join(_E, "examples/tomawac/opposing_current/fom_opposing_cur.slf"),
@@ -83,6 +85,7 @@ EXAMPLE_GROUPS = {
     "ARTEMIS (coastal)": {
         "Beach waves": os.path.join(_E, "examples/artemis/beach/tom_plage.slf"),
         "Wave breaking (BJ78)": os.path.join(_E, "examples/artemis/bj78/famp_bj78_20per.slf"),
+        "Westcoast (waves)": os.path.join(_E, "examples/artemis/westcoast/tom_westcoast.slf"),
     },
     "KHIONE (ice)": {
         "Frazil ice flume": os.path.join(_E, "examples/khione/flume_frazil-t2d/ini_longflume.slf"),
