@@ -46,24 +46,62 @@ from data_manip.extraction.telemac_file import TelemacFile
 # Constants
 # ---------------------------------------------------------------------------
 
-EXAMPLES = {
-    "Gouttedo (raindrop)": os.path.join(
-        os.environ["HOMETEL"],
-        "examples/telemac2d/gouttedo/r2d_gouttedo_v1p0.slf",
-    ),
-    "Ritter (dam break)": os.path.join(
-        os.environ["HOMETEL"],
-        "examples/telemac2d/dambreak/r2d_ritter-hllc.slf",
-    ),
-    "Malpasset (dam break)": os.path.join(
-        os.environ["HOMETEL"],
-        "examples/telemac2d/malpasset/r2d_malpasset-hllc.slf",
-    ),
-    "3D Canal": os.path.join(
-        os.environ["HOMETEL"],
-        "examples/telemac3d/canal/r3d_canal-t3d.slf",
-    ),
+_E = os.environ["HOMETEL"]
+
+# Flat lookup: display name -> file path
+EXAMPLES = {}
+
+# Grouped choices for the UI dropdown (optgroup support)
+EXAMPLE_GROUPS = {
+    "TELEMAC-2D": {
+        "Gouttedo (raindrop)": os.path.join(_E, "examples/telemac2d/gouttedo/r2d_gouttedo_v1p0.slf"),
+        "Ritter (dam break)": os.path.join(_E, "examples/telemac2d/dambreak/r2d_ritter-hllc.slf"),
+        "Malpasset (dam break)": os.path.join(_E, "examples/telemac2d/malpasset/r2d_malpasset-hllc.slf"),
+        "Bump (critical flow)": os.path.join(_E, "examples/telemac2d/bump/r2d_bump.slf"),
+        "Vasque (basin flow)": os.path.join(_E, "examples/telemac2d/vasque/f2d_vasque.slf"),
+        "Cavity (recirculation)": os.path.join(_E, "examples/telemac2d/cavity/f2d_cavity.slf"),
+        "Estimation (parameter)": os.path.join(_E, "examples/telemac2d/estimation/f2d_estimation.slf"),
+        "Pluie (rainfall-runoff)": os.path.join(_E, "examples/telemac2d/pluie/f2d_rain_CN.slf"),
+        "Confluence (river junction)": os.path.join(_E, "examples/telemac2d/confluence/f2d_confluence.slf"),
+        "Culm (river)": os.path.join(_E, "examples/telemac2d/culm/ini_culm.slf"),
+    },
+    "TELEMAC-3D": {
+        "3D Canal": os.path.join(_E, "examples/telemac3d/canal/r3d_canal-t3d.slf"),
+        "3D Pluie (rainfall)": os.path.join(_E, "examples/telemac3d/pluie/f3d_pluie.slf"),
+        "3D V-shape": os.path.join(_E, "examples/telemac3d/V/f3d_V.slf"),
+    },
+    "GAIA (sediment)": {
+        "Guenter (bedload)": os.path.join(_E, "examples/gaia/guenter-t2d/f2d_guenter.slf"),
+        "Yen (multi-grain)": os.path.join(_E, "examples/gaia/yen-t2d/f2d_multi1.slf"),
+        "Sliding (slope)": os.path.join(_E, "examples/gaia/sliding-t2d/f2d_slide1_slope1.slf"),
+    },
+    "TOMAWAC (waves)": {
+        "Wave-current interaction": os.path.join(_E, "examples/tomawac/opposing_current/fom_opposing_cur.slf"),
+        "Coupled wind-waves": os.path.join(_E, "examples/tomawac/Coupling_Wind/fom_different.slf"),
+        "3D wave coupling": os.path.join(_E, "examples/tomawac/3Dcoupling/fom_littoral_diff.slf"),
+    },
+    "ARTEMIS (coastal)": {
+        "Beach waves": os.path.join(_E, "examples/artemis/beach/tom_plage.slf"),
+        "Wave breaking (BJ78)": os.path.join(_E, "examples/artemis/bj78/famp_bj78_20per.slf"),
+    },
+    "KHIONE (ice)": {
+        "Frazil ice flume": os.path.join(_E, "examples/khione/flume_frazil-t2d/ini_longflume.slf"),
+        "Ice clogging": os.path.join(_E, "examples/khione/clogging-t2d/ini_slowflume.slf"),
+    },
 }
+
+# Build flat lookup and filter to files that actually exist
+for _group, _items in EXAMPLE_GROUPS.items():
+    for _name, _path in _items.items():
+        if os.path.isfile(_path):
+            EXAMPLES[_name] = _path
+
+# Build grouped choices dict for input_select (only existing files)
+EXAMPLE_CHOICES = {}
+for _group, _items in EXAMPLE_GROUPS.items():
+    valid = {k: k for k, v in _items.items() if os.path.isfile(v)}
+    if valid:
+        EXAMPLE_CHOICES[_group] = valid
 
 PALETTES = {
     "Viridis": PALETTE_VIRIDIS,
@@ -305,7 +343,7 @@ app_ui = ui.page_sidebar(
         ui.accordion(
             ui.accordion_panel(
                 "Data",
-                ui.input_select("example", "Example case", choices=list(EXAMPLES.keys())),
+                ui.input_select("example", "Example case", choices=EXAMPLE_CHOICES),
                 ui.input_file("upload", "Or upload .slf file", accept=[".slf"]),
             ),
             ui.accordion_panel(
