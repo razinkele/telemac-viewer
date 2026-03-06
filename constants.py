@@ -87,18 +87,47 @@ PALETTES = {
     "Chlorophyll": PALETTE_CHLOROPHYLL,
 }
 
+# Diverging palette for difference mode (blue → white → red)
+PALETTE_DIVERGING = [
+    [49, 54, 149, 255],
+    [69, 117, 180, 255],
+    [116, 173, 209, 255],
+    [171, 217, 233, 255],
+    [224, 243, 248, 255],
+    [255, 255, 255, 255],
+    [254, 224, 144, 255],
+    [253, 174, 97, 255],
+    [244, 109, 67, 255],
+    [215, 48, 39, 255],
+    [165, 0, 38, 255],
+]
+
 _M2D = 111320.0  # meters per degree at equator
 
 
-@functools.lru_cache(maxsize=8)
-def cached_palette_arr(palette_id):
-    palette = PALETTES[palette_id]
-    return np.array(color_range(256, palette), dtype=np.uint8)
+@functools.lru_cache(maxsize=16)
+def cached_palette_arr(palette_id, reverse=False):
+    if palette_id == "_diverging":
+        arr = np.array(color_range(256, PALETTE_DIVERGING), dtype=np.uint8)
+    else:
+        palette = PALETTES[palette_id]
+        arr = np.array(color_range(256, palette), dtype=np.uint8)
+    if reverse:
+        arr = arr[::-1].copy()
+    return arr
 
 
-@functools.lru_cache(maxsize=8)
-def cached_gradient_colors(palette_id):
-    palette = PALETTES[palette_id]
+@functools.lru_cache(maxsize=16)
+def cached_gradient_colors(palette_id, reverse=False):
+    if palette_id == "_diverging":
+        full = color_range(256, PALETTE_DIVERGING)
+    else:
+        palette = PALETTES[palette_id]
+        full = color_range(256, palette)
+    colors = [full[i] for i in range(0, 256, 32)]
+    if reverse:
+        colors = colors[::-1]
+    return colors
     full = color_range(256, palette)
     return [full[i] for i in range(0, 256, 32)]
 
