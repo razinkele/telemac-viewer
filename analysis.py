@@ -1,6 +1,64 @@
 # analysis.py
+import io
 import numpy as np
 from constants import _M2D
+
+# Derived variable definitions: name -> (required_vars, compute_fn)
+DERIVED_VARIABLES = {
+    "VELOCITY MAGNITUDE": {
+        "requires": ["VELOCITY U", "VELOCITY V"],
+        "compute": lambda tf, tidx: np.sqrt(
+            tf.get_data_value("VELOCITY U", tidx)**2 +
+            tf.get_data_value("VELOCITY V", tidx)**2
+        ),
+    },
+    "FROUDE NUMBER": {
+        "requires": ["VELOCITY U", "VELOCITY V", "WATER DEPTH"],
+        "compute": lambda tf, tidx: (
+            lambda u, v, h: np.where(h > 0.001, np.sqrt(u**2 + v**2) / np.sqrt(9.81 * np.maximum(h, 0.001)), 0.0)
+        )(tf.get_data_value("VELOCITY U", tidx), tf.get_data_value("VELOCITY V", tidx), tf.get_data_value("WATER DEPTH", tidx)),
+    },
+    "VORTICITY": {
+        "requires": ["VELOCITY U", "VELOCITY V"],
+        "compute": None,  # needs mesh info, computed separately
+    },
+}
+
+
+def get_available_derived(tf):
+    """Return list of derived variable names available for this file."""
+    varnames = [v.strip() for v in tf.varnames]
+    available = []
+    for name, spec in DERIVED_VARIABLES.items():
+        if name == "VORTICITY":
+            continue  # skip for now — needs gradient computation
+        if all(r in varnames for r in spec["requires"]):
+            available.append(name)
+    return available
+
+
+def compute_derived(tf, varname, tidx):
+    """Compute a derived variable. Returns numpy array."""
+    spec = DERIVED_VARIABLES[varname]
+    return spec["compute"](tf, tidx)
+
+
+def export_timeseries_csv(times, values, varname):
+    """Format time series data as CSV string."""
+    buf = io.StringIO()
+    buf.write(f"Time (s),{varname}\n")
+    for t, v in zip(times, values):
+        buf.write(f"{t},{v}\n")
+    return buf.getvalue()
+
+
+def export_crosssection_csv(abscissa, values, varname):
+    """Format cross-section data as CSV string."""
+    buf = io.StringIO()
+    buf.write(f"Distance (m),{varname}\n")
+    for d, v in zip(abscissa, values):
+        buf.write(f"{d},{v}\n")
+    return buf.getvalue()
 
 
 def coord_to_meters(lon, lat, x_off, y_off):

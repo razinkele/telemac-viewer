@@ -140,10 +140,10 @@ def build_contour_layer_fn(tf, values, geom, n_contours=6):
     )
 
 
-def build_marker_layer(x_m, y_m):
+def build_marker_layer(x_m, y_m, layer_id="marker"):
     """Build a single-point scatterplot layer to mark clicked location."""
     return scatterplot_layer(
-        "marker",
+        layer_id,
         [{"position": [x_m, y_m]}],
         getPosition="@@=d.position",
         getColor=[255, 0, 0, 220],

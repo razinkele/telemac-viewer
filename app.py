@@ -1,4 +1,5 @@
 # app.py — TELEMAC Viewer v3
+import io
 import numpy as np
 import plotly.graph_objects as go
 from shiny import App, reactive, render, ui
@@ -40,6 +41,10 @@ from analysis import (
     cross_section_profile,
     compute_particle_paths,
     generate_seed_grid,
+    get_available_derived,
+    compute_derived,
+    export_timeseries_csv,
+    export_crosssection_csv,
 )
 from data_manip.extraction.telemac_file import TelemacFile
 
@@ -110,6 +115,10 @@ app_ui = ui.page_sidebar(
                 ui.output_ui("stats_ui"),
                 ui.output_ui("hover_info_ui"),
             ),
+            ui.accordion_panel(
+                "File Info",
+                ui.output_ui("file_info_ui"),
+            ),
             id="sidebar_accordion",
             open=True,
             multiple=True,
@@ -141,7 +150,7 @@ def server(input, output, session):
     playing = reactive.value(False)
     last_file_path = reactive.value("")
     analysis_mode = reactive.value("none")
-    clicked_point = reactive.value(None)  # (x_meters, y_meters) or None
+    clicked_points = reactive.value([])  # list of (x_meters, y_meters)
     cross_section_points = reactive.value(None)  # [[x_m, y_m], ...] or None
     particle_paths = reactive.value(None)  # list of paths or None
     is_3d_mode = reactive.value(False)
@@ -187,7 +196,12 @@ def server(input, output, session):
     @reactive.calc
     def current_values():
         tf = tel_file()
-        return tf.get_data_value(current_var(), current_tidx())
+        var = current_var()
+        tidx = current_tidx()
+        derived = get_available_derived(tf)
+        if var in derived:
+            return compute_derived(tf, var, tidx)
+        return tf.get_data_value(var, tidx)
 
     # -- Dynamic UI --
 
@@ -195,7 +209,12 @@ def server(input, output, session):
     @render.ui
     def var_select_ui():
         tf = tel_file()
-        choices = {v: v for v in tf.varnames}
+        file_vars = {v: v for v in tf.varnames}
+        derived = get_available_derived(tf)
+        if derived:
+            choices = {"File variables": file_vars, "Derived": {d: d for d in derived}}
+        else:
+            choices = file_vars
         selected = "WATER DEPTH" if "WATER DEPTH" in tf.varnames else tf.varnames[0]
         return ui.input_select("variable", "Variable", choices=choices, selected=selected)
 
@@ -290,9 +309,13 @@ def server(input, output, session):
         if mode == "none":
             return ui.div()
         title = "Time Series" if mode == "timeseries" else "Cross-Section"
+        n_pts = len(clicked_points.get()) if mode == "timeseries" else 0
+        subtitle = f" ({n_pts} point{'s' if n_pts != 1 else ''})" if n_pts else ""
         return ui.div(
             ui.div(
-                ui.strong(title),
+                ui.strong(title + subtitle),
+                ui.download_button("download_csv", "CSV",
+                                   class_="btn-sm btn-outline-success ms-2"),
                 ui.input_action_button("close_analysis", "Close",
                                        class_="btn-sm btn-outline-secondary ms-2"),
                 class_="d-flex align-items-center p-2 border-top",
@@ -310,14 +333,18 @@ def server(input, output, session):
         tidx = current_tidx()
 
         if mode == "timeseries":
-            pt = clicked_point.get()
-            if pt is None:
+            pts = clicked_points.get()
+            if not pts:
                 return go.Figure()
-            times, values = time_series_at_point(tf, var, pt[0], pt[1])
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=times, y=values, mode="lines", name=var))
-            if tidx < len(times):
-                fig.add_vline(x=times[tidx], line_dash="dash", line_color="red")
+            for i, pt in enumerate(pts):
+                times, values = time_series_at_point(tf, var, pt[0], pt[1])
+                fig.add_trace(go.Scatter(
+                    x=times, y=values, mode="lines",
+                    name=f"Pt {i+1} ({pt[0]:.0f}, {pt[1]:.0f})",
+                ))
+            if tidx < len(tf.times):
+                fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
             fig.update_layout(
                 xaxis_title="Time (s)", yaxis_title=var,
                 margin=dict(l=50, r=20, t=10, b=40), height=220,
@@ -325,10 +352,10 @@ def server(input, output, session):
             return fig
 
         if mode == "crosssection":
-            pts = cross_section_points.get()
-            if pts is None:
+            xsec_pts = cross_section_points.get()
+            if xsec_pts is None:
                 return go.Figure()
-            abscissa, values = cross_section_profile(tf, var, tidx, pts)
+            abscissa, values = cross_section_profile(tf, var, tidx, xsec_pts)
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=abscissa, y=values, mode="lines", name=var))
             fig.update_layout(
@@ -350,14 +377,16 @@ def server(input, output, session):
         coord = click["coordinate"]
         geom = mesh_geom()
         x_m, y_m = coord_to_meters(coord[0], coord[1], geom["x_off"], geom["y_off"])
-        clicked_point.set((x_m, y_m))
+        pts = clicked_points.get().copy()
+        pts.append((x_m, y_m))
+        clicked_points.set(pts)
         analysis_mode.set("timeseries")
 
     @reactive.effect
     @reactive.event(input.close_analysis)
     def handle_close_analysis():
         analysis_mode.set("none")
-        clicked_point.set(None)
+        clicked_points.set([])
         cross_section_points.set(None)
 
     # -- Cross-section drawing --
@@ -421,7 +450,7 @@ def server(input, output, session):
             else:
                 # Cross-section mode
                 cross_section_points.set(poly_m)
-                clicked_point.set(None)
+                clicked_points.set([])
                 analysis_mode.set("crosssection")
 
             await map_widget.disable_draw(session)
@@ -539,6 +568,88 @@ def server(input, output, session):
                      class_="text-muted small"),
         )
 
+    # -- File info --
+
+    @output
+    @render.ui
+    def file_info_ui():
+        tf = tel_file()
+        dt = tf.times[1] - tf.times[0] if len(tf.times) > 1 else 0
+        precision = "Double" if getattr(tf, 'float_type', 'f') == 'd' else "Single"
+        nplan = getattr(tf, 'nplan', 0)
+        dim = "3D" if nplan > 1 else "2D"
+        date_info = ""
+        if hasattr(tf, 'datetime') and tf.datetime:
+            date_info = str(tf.datetime[0]) if isinstance(tf.datetime, (list, tuple)) else str(tf.datetime)
+
+        rows = [
+            ("Type", f"{dim} ({nplan} planes)" if nplan > 1 else dim),
+            ("Nodes", f"{tf.npoin2:,}"),
+            ("Elements", f"{tf.nelem2:,}"),
+            ("Variables", f"{len(tf.varnames)}"),
+            ("Time steps", f"{len(tf.times)}"),
+            ("dt", f"{dt:.2f} s" if dt else "N/A"),
+            ("Duration", format_time(float(tf.times[-1] - tf.times[0])) if len(tf.times) > 1 else "N/A"),
+            ("Precision", precision),
+        ]
+        if date_info:
+            rows.append(("Start date", date_info))
+
+        items = [ui.div(
+            ui.span(label, class_="text-muted", style="width:80px;display:inline-block;"),
+            ui.strong(value),
+            class_="small mb-1",
+        ) for label, value in rows]
+
+        var_list = ", ".join(tf.varnames)
+        items.append(ui.div(
+            ui.span("Vars: ", class_="text-muted small"),
+            ui.span(var_list, class_="small"),
+            class_="mt-1",
+        ))
+        return ui.div(*items)
+
+    # -- CSV download --
+
+    @render.download(filename=lambda: f"telemac_{analysis_mode.get()}.csv")
+    def download_csv():
+        mode = analysis_mode.get()
+        tf = tel_file()
+        var = current_var()
+        tidx = current_tidx()
+
+        if mode == "timeseries":
+            pts = clicked_points.get()
+            if not pts:
+                yield ""
+                return
+            # Export all points as columns
+            buf = io.StringIO()
+            times_arr = np.array(tf.times)
+            buf.write("Time (s)")
+            all_values = []
+            for i, pt in enumerate(pts):
+                _, values = time_series_at_point(tf, var, pt[0], pt[1])
+                all_values.append(values)
+                buf.write(f",Pt{i+1} ({pt[0]:.0f} {pt[1]:.0f})")
+            buf.write("\n")
+            for j in range(len(times_arr)):
+                buf.write(f"{times_arr[j]}")
+                for vals in all_values:
+                    buf.write(f",{vals[j]}")
+                buf.write("\n")
+            yield buf.getvalue()
+
+        elif mode == "crosssection":
+            xsec_pts = cross_section_points.get()
+            if xsec_pts is None:
+                yield ""
+                return
+            abscissa, values = cross_section_profile(tf, var, tidx, xsec_pts)
+            yield export_crosssection_csv(abscissa, values, var)
+        else:
+            yield ""
+
     # -- Map update --
 
     @reactive.effect
@@ -566,11 +677,11 @@ def server(input, output, session):
             if clyr is not None:
                 layers.append(clyr)
 
-        # Marker for clicked point
-        pt = clicked_point.get()
-        if pt is not None:
+        # Markers for clicked points
+        pts = clicked_points.get()
+        for i, pt in enumerate(pts):
             mx, my = float(pt[0] - geom["x_off"]), float(pt[1] - geom["y_off"])
-            layers.append(build_marker_layer(mx, my))
+            layers.append(build_marker_layer(mx, my, layer_id=f"marker-{i}"))
 
         # Cross-section path
         xsec = cross_section_points.get()
