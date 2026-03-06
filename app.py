@@ -1,6 +1,7 @@
 import math
 import sys
 import os
+import functools
 import numpy as np
 
 # Add shiny-deckgl and TELEMAC to path
@@ -18,6 +19,7 @@ from shiny_deckgl import (
     MapWidget,
     head_includes,
     layer,
+    line_layer,
     encode_binary_attribute,
     orthographic_view,
     color_range,
@@ -35,6 +37,8 @@ from shiny_deckgl import (
     transition,
     contour_layer,
     data_filter_extension,
+    reset_view_widget,
+    loading_widget,
 )
 from data_manip.extraction.telemac_file import TelemacFile
 
@@ -70,69 +74,23 @@ PALETTES = {
 }
 
 # ---------------------------------------------------------------------------
-# SELAFIN to deck.gl conversion
+# Cached helpers
 # ---------------------------------------------------------------------------
 
 
-def build_mesh_layer(tf, var_name, time_idx, palette, layer_id="mesh", animate=False, filter_range=None):
-    """Convert TelemacFile mesh + variable into a SolidPolygonLayer dict."""
-    ikle = tf.ikle2  # (nelem, 3), 0-indexed
-    x, y = tf.meshx, tf.meshy
-    values = tf.get_data_value(var_name, time_idx)
+@functools.lru_cache(maxsize=8)
+def cached_palette_arr(palette_id):
+    """Cache the 256-color palette array by palette identity."""
+    palette = PALETTES[palette_id]
+    return np.array(color_range(256, palette), dtype=np.uint8)
 
-    nelem = ikle.shape[0]
-    i0, i1, i2 = ikle[:, 0], ikle[:, 1], ikle[:, 2]
 
-    # Per-triangle vertex positions: (nelem, 3, 2)
-    positions = np.empty((nelem, 3, 2), dtype=np.float64)
-    positions[:, 0, 0] = x[i0]
-    positions[:, 0, 1] = y[i0]
-    positions[:, 1, 0] = x[i1]
-    positions[:, 1, 1] = y[i1]
-    positions[:, 2, 0] = x[i2]
-    positions[:, 2, 1] = y[i2]
-
-    # Per-triangle mean value
-    tri_values = (values[i0] + values[i1] + values[i2]) / 3.0
-
-    # Color mapping — vectorized
-    vmin, vmax = float(tri_values.min()), float(tri_values.max())
-    if vmax == vmin:
-        vmax = vmin + 1.0
-    palette_arr = np.array(color_range(256, palette), dtype=np.uint8)  # (256, 4)
-    normalized = np.clip((tri_values - vmin) / (vmax - vmin), 0, 1)
-    indices = (normalized * 255).astype(int)
-    tri_colors = palette_arr[indices]  # (nelem, 4)
-    fill_colors = np.repeat(tri_colors[:, np.newaxis, :], 3, axis=1)  # (nelem, 3, 4)
-
-    # startIndices: every polygon is exactly 3 vertices
-    start_indices = np.arange(0, nelem * 3 + 1, 3, dtype=np.int32).tolist()
-
-    extra = {}
-    if animate:
-        extra["transitions"] = {
-            "getFillColor": transition(200, easing="ease-in-out-cubic"),
-        }
-
-    if filter_range is not None:
-        extra["extensions"] = [data_filter_extension(filter_size=1)]
-        filter_vals = np.repeat(tri_values, 3).astype(np.float32)
-        extra["getFilterValue"] = encode_binary_attribute(filter_vals.reshape(-1, 1))
-        extra["filterRange"] = list(filter_range)
-
-    lyr = layer(
-        "SolidPolygonLayer",
-        layer_id,
-        data={"length": int(nelem), "startIndices": start_indices},
-        getPolygon=encode_binary_attribute(positions.reshape(-1, 2)),
-        getFillColor=encode_binary_attribute(fill_colors.reshape(-1, 4)),
-        _normalize=False,
-        pickable=True,
-        autoHighlight=True,
-        highlightColor=[255, 255, 255, 60],
-        **extra,
-    )
-    return lyr, vmin, vmax
+@functools.lru_cache(maxsize=8)
+def cached_gradient_colors(palette_id):
+    """Cache the 8-sample gradient for the legend."""
+    palette = PALETTES[palette_id]
+    full = color_range(256, palette)
+    return [full[i] for i in range(0, 256, 32)]
 
 
 def format_time(seconds):
@@ -148,15 +106,154 @@ def format_time(seconds):
     return f"{hours} h {mins} min"
 
 
-def build_contour_layer(tf, var_name, time_idx, n_contours=6):
+# ---------------------------------------------------------------------------
+# Mesh geometry (static per file, cached)
+# ---------------------------------------------------------------------------
+
+
+def build_mesh_geometry(tf):
+    """Build static mesh geometry arrays. Only depends on file, not timestep."""
+    ikle = tf.ikle2
+    x, y = tf.meshx, tf.meshy
+    nelem = ikle.shape[0]
+    i0, i1, i2 = ikle[:, 0], ikle[:, 1], ikle[:, 2]
+
+    positions = np.empty((nelem, 3, 2), dtype=np.float64)
+    positions[:, 0, 0] = x[i0]
+    positions[:, 0, 1] = y[i0]
+    positions[:, 1, 0] = x[i1]
+    positions[:, 1, 1] = y[i1]
+    positions[:, 2, 0] = x[i2]
+    positions[:, 2, 1] = y[i2]
+
+    start_indices = np.arange(0, nelem * 3 + 1, 3, dtype=np.int32).tolist()
+    pos_binary = encode_binary_attribute(positions.reshape(-1, 2))
+
+    # View extent
+    cx = float((x.min() + x.max()) / 2)
+    cy = float((y.min() + y.max()) / 2)
+    extent = max(float(x.max() - x.min()), float(y.max() - y.min()), 1.0)
+    zoom = math.log2(800 / extent) if extent > 0 else 0
+
+    return {
+        "nelem": nelem,
+        "i0": i0, "i1": i1, "i2": i2,
+        "start_indices": start_indices,
+        "pos_binary": pos_binary,
+        "cx": cx, "cy": cy, "zoom": zoom,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Layer builders
+# ---------------------------------------------------------------------------
+
+
+def build_mesh_layer(geom, values, palette_id, animate=False, filter_range=None):
+    """Build SolidPolygonLayer from cached geometry + current values."""
+    i0, i1, i2 = geom["i0"], geom["i1"], geom["i2"]
+    nelem = geom["nelem"]
+
+    tri_values = (values[i0] + values[i1] + values[i2]) / 3.0
+
+    vmin, vmax = float(tri_values.min()), float(tri_values.max())
+    if vmax == vmin:
+        vmax = vmin + 1.0
+
+    palette_arr = cached_palette_arr(palette_id)
+    normalized = np.clip((tri_values - vmin) / (vmax - vmin), 0, 1)
+    indices = (normalized * 255).astype(int)
+    tri_colors = palette_arr[indices]
+    fill_colors = np.repeat(tri_colors[:, np.newaxis, :], 3, axis=1)
+
+    extra = {}
+    if animate:
+        extra["transitions"] = {
+            "getFillColor": transition(200, easing="ease-in-out-cubic"),
+        }
+
+    if filter_range is not None:
+        extra["extensions"] = [data_filter_extension(filter_size=1)]
+        filter_vals = np.repeat(tri_values, 3).astype(np.float32)
+        extra["getFilterValue"] = encode_binary_attribute(filter_vals.reshape(-1, 1))
+        extra["filterRange"] = list(filter_range)
+
+    lyr = layer(
+        "SolidPolygonLayer",
+        "mesh",
+        data={"length": int(nelem), "startIndices": geom["start_indices"]},
+        getPolygon=geom["pos_binary"],
+        getFillColor=encode_binary_attribute(fill_colors.reshape(-1, 4)),
+        _normalize=False,
+        pickable=True,
+        autoHighlight=True,
+        highlightColor=[255, 255, 255, 60],
+        **extra,
+    )
+    return lyr, vmin, vmax
+
+
+def build_velocity_layer(tf, time_idx, geom):
+    """Build velocity arrow layer from U/V components."""
+    varnames = [v.strip() for v in tf.varnames]
+    has_u = "VELOCITY U" in varnames
+    has_v = "VELOCITY V" in varnames
+    if not has_u or not has_v:
+        return None
+
+    u = tf.get_data_value("VELOCITY U", time_idx)
+    v = tf.get_data_value("VELOCITY V", time_idx)
+    x, y = tf.meshx, tf.meshy
+    npoin = tf.npoin2
+
+    mag = np.sqrt(u[:npoin]**2 + v[:npoin]**2)
+    max_mag = float(mag.max())
+    if max_mag < 1e-10:
+        return None
+
+    # Subsample for performance (max ~1500 arrows)
+    step = max(1, npoin // 1500)
+    idx = np.arange(0, npoin, step)
+
+    # Scale arrows relative to mesh extent
+    extent = max(float(x[:npoin].max() - x[:npoin].min()),
+                 float(y[:npoin].max() - y[:npoin].min()), 1.0)
+    arrow_scale = extent / (max_mag * 30)
+
+    arrows = []
+    for i in idx:
+        if mag[i] < max_mag * 0.01:
+            continue
+        arrows.append({
+            "sourcePosition": [float(x[i]), float(y[i])],
+            "targetPosition": [float(x[i] + u[i] * arrow_scale),
+                               float(y[i] + v[i] * arrow_scale)],
+        })
+
+    if not arrows:
+        return None
+
+    return line_layer(
+        "velocity",
+        arrows,
+        getColor=[20, 20, 20, 160],
+        getWidth=2,
+        widthMinPixels=1,
+        widthMaxPixels=3,
+        pickable=False,
+    )
+
+
+def build_contour_layer_fn(tf, values, n_contours=6):
     """Build a ContourLayer from mesh node positions and values."""
     x, y = tf.meshx, tf.meshy
-    values = tf.get_data_value(var_name, time_idx)
-    vmin, vmax = float(values.min()), float(values.max())
+    npoin = tf.npoin2
+    vmin, vmax = float(values[:npoin].min()), float(values[:npoin].max())
     if vmax == vmin:
         return None
 
-    points = [{"position": [float(x[i]), float(y[i])], "weight": float(values[i])} for i in range(len(x))]
+    points = [{"position": [float(x[i]), float(y[i])], "weight": float(values[i])}
+              for i in range(npoin)]
 
     step = (vmax - vmin) / (n_contours + 1)
     contours = [
@@ -164,8 +261,8 @@ def build_contour_layer(tf, var_name, time_idx, n_contours=6):
         for i in range(n_contours)
     ]
 
-    dx = float(x.max() - x.min())
-    dy = float(y.max() - y.min())
+    dx = float(x[:npoin].max() - x[:npoin].min())
+    dy = float(y[:npoin].max() - y[:npoin].min())
     cell_size = max(dx, dy) / 100
 
     return contour_layer(
@@ -215,6 +312,7 @@ app_ui = ui.page_sidebar(
                 "Visualization",
                 ui.output_ui("var_select_ui"),
                 ui.input_select("palette", "Color palette", choices=list(PALETTES.keys())),
+                ui.input_switch("vectors", "Show velocity vectors", value=False),
                 ui.input_switch("contours", "Show contour lines", value=False),
                 ui.output_ui("filter_ui"),
             ),
@@ -236,6 +334,7 @@ app_ui = ui.page_sidebar(
             ui.accordion_panel(
                 "Statistics",
                 ui.output_ui("stats_ui"),
+                ui.output_ui("hover_info_ui"),
             ),
             id="sidebar_accordion",
             open=True,
@@ -260,6 +359,9 @@ app_ui = ui.page_sidebar(
 
 def server(input, output, session):
     playing = reactive.value(False)
+    last_file_path = reactive.value("")
+
+    # -- Core reactive calcs (shared, computed once per change) --
 
     @reactive.calc
     def tel_file():
@@ -269,6 +371,36 @@ def server(input, output, session):
         else:
             path = EXAMPLES[input.example()]
         return TelemacFile(path)
+
+    @reactive.calc
+    def mesh_geom():
+        """Cached mesh geometry — only recomputes on file change."""
+        tf = tel_file()
+        return build_mesh_geometry(tf)
+
+    @reactive.calc
+    def current_var():
+        """Current variable, validated against file."""
+        tf = tel_file()
+        var = input.variable() if input.variable() else None
+        if var and var in tf.varnames:
+            return var
+        return tf.varnames[0]
+
+    @reactive.calc
+    def current_tidx():
+        """Current time index, clamped to valid range."""
+        tf = tel_file()
+        tidx = input.time_idx() if input.time_idx() is not None else 0
+        return min(tidx, len(tf.times) - 1)
+
+    @reactive.calc
+    def current_values():
+        """Current variable data — single read shared by all consumers."""
+        tf = tel_file()
+        return tf.get_data_value(current_var(), current_tidx())
+
+    # -- Dynamic UI outputs --
 
     @output
     @render.ui
@@ -287,25 +419,10 @@ def server(input, output, session):
             "time_idx", "Time step", min=0, max=n - 1, value=n - 1, step=1
         )
 
-    def safe_variable(tf):
-        """Return current variable if valid for this file, else first available."""
-        var = input.variable() if input.variable() else None
-        if var and var in tf.varnames:
-            return var
-        return tf.varnames[0]
-
-    def safe_time_idx(tf):
-        """Return current time index clamped to valid range for this file."""
-        tidx = input.time_idx() if input.time_idx() is not None else 0
-        return min(tidx, len(tf.times) - 1)
-
     @output
     @render.ui
     def filter_ui():
-        tf = tel_file()
-        var = safe_variable(tf)
-        tidx = safe_time_idx(tf)
-        vals = tf.get_data_value(var, tidx)
+        vals = current_values()
         vmin, vmax = float(vals.min()), float(vals.max())
         step = round((vmax - vmin) / 100, 4) if vmax > vmin else 0.01
         return ui.input_slider(
@@ -314,6 +431,8 @@ def server(input, output, session):
             value=[round(vmin, 4), round(vmax, 4)],
             step=step,
         )
+
+    # -- Playback --
 
     @reactive.effect
     @reactive.event(input.play_btn)
@@ -343,13 +462,15 @@ def server(input, output, session):
                 return
         ui.update_slider("time_idx", value=next_idx)
 
+    # -- Statistics --
+
     @output
     @render.ui
     def stats_ui():
         tf = tel_file()
-        var = safe_variable(tf)
-        tidx = safe_time_idx(tf)
-        vals = tf.get_data_value(var, tidx)
+        var = current_var()
+        tidx = current_tidx()
+        vals = current_values()
         t = tf.times[tidx]
         return ui.layout_column_wrap(
             ui.value_box(
@@ -375,32 +496,63 @@ def server(input, output, session):
             width=1,
         )
 
+    # -- Hover info --
+
+    @output
+    @render.ui
+    def hover_info_ui():
+        hover = input.map_hover()
+        if not hover or "coordinate" not in hover:
+            return ui.p("Hover over the mesh to see values", class_="text-muted small")
+        coord = hover["coordinate"]
+        tf = tel_file()
+        x, y = tf.meshx, tf.meshy
+        npoin = tf.npoin2
+        # Find nearest node
+        px, py = float(coord[0]), float(coord[1])
+        dists = (x[:npoin] - px)**2 + (y[:npoin] - py)**2
+        nearest = int(np.argmin(dists))
+        vals = current_values()
+        var = current_var()
+        val = float(vals[nearest])
+        return ui.div(
+            ui.strong(f"{var}: {val:.4f}"),
+            ui.br(),
+            ui.span(f"Node {nearest} ({x[nearest]:.1f}, {y[nearest]:.1f})",
+                     class_="text-muted small"),
+        )
+
+    # -- Map update --
+
     @reactive.effect
     async def update_map():
         tf = tel_file()
-        var = safe_variable(tf)
-        tidx = safe_time_idx(tf)
-        palette = PALETTES.get(input.palette(), PALETTE_VIRIDIS)
+        geom = mesh_geom()
+        var = current_var()
+        tidx = current_tidx()
+        values = current_values()
+        palette_id = input.palette() if input.palette() in PALETTES else "Viridis"
 
         filt = input.filter_range() if input.filter_range() is not None else None
-        lyr, vmin, vmax = build_mesh_layer(tf, var, tidx, palette, animate=not playing.get(), filter_range=filt)
+        lyr, vmin, vmax = build_mesh_layer(
+            geom, values, palette_id,
+            animate=not playing.get(),
+            filter_range=filt,
+        )
 
         layers = [lyr]
+
+        if input.vectors():
+            vlyr = build_velocity_layer(tf, tidx, geom)
+            if vlyr is not None:
+                layers.append(vlyr)
+
         if input.contours():
-            clyr = build_contour_layer(tf, var, tidx)
+            clyr = build_contour_layer_fn(tf, values)
             if clyr is not None:
                 layers.append(clyr)
 
-        cx = float((tf.meshx.min() + tf.meshx.max()) / 2)
-        cy = float((tf.meshy.min() + tf.meshy.max()) / 2)
-        dx = float(tf.meshx.max() - tf.meshx.min())
-        dy = float(tf.meshy.max() - tf.meshy.min())
-        extent = max(dx, dy, 1.0)
-        zoom = math.log2(800 / extent) if extent > 0 else 0
-
-        # Sample 8 colors from the palette for the gradient legend
-        palette_arr = color_range(256, palette)
-        gradient_colors = [palette_arr[i] for i in range(0, 256, 32)]
+        gradient_colors = cached_gradient_colors(palette_id)
         legend = deck_legend_control(
             entries=[
                 {
@@ -415,19 +567,29 @@ def server(input, output, session):
             title="Legend",
         )
 
+        # Only send view_state on file change (P4: don't reset user's pan/zoom)
+        uploaded = input.upload()
+        current_path = uploaded[0]["datapath"] if uploaded else EXAMPLES.get(input.example(), "")
+        kwargs = {}
+        if current_path != last_file_path.get():
+            last_file_path.set(current_path)
+            kwargs["view_state"] = {"target": [geom["cx"], geom["cy"], 0], "zoom": geom["zoom"]}
+
         await map_widget.update(
             session,
             layers=layers,
             views=[orthographic_view()],
-            view_state={"target": [cx, cy, 0], "zoom": zoom},
             widgets=[
                 zoom_widget(),
                 fullscreen_widget(),
                 scale_widget(),
                 screenshot_widget(),
                 compass_widget(),
+                reset_view_widget(),
+                loading_widget(),
                 legend,
             ],
+            **kwargs,
         )
 
 
