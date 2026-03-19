@@ -427,6 +427,60 @@ def read_cli_file(cli_path: str) -> dict[int, int] | None:
         return None
 
 
+def extract_layer_2d(values_3d: np.ndarray, npoin2: int, layer_k: int) -> np.ndarray:
+    """Extract a single horizontal layer from 3D variable data.
+
+    For TELEMAC-3D files with nplan vertical planes, variable arrays have
+    length npoin2 * nplan. This extracts plane k as a 2D array of length npoin2.
+
+    layer_k=0 is the bottom, layer_k=nplan-1 is the surface.
+    """
+    start = layer_k * npoin2
+    return values_3d[start : start + npoin2].copy()
+
+
+def polygon_zonal_stats(tf: Any, values: np.ndarray, polygon_m: list[list[float]], geom: dict[str, Any]) -> dict[str, float]:
+    """Compute statistics of a variable within a drawn polygon.
+
+    polygon_m: list of [x_m, y_m] vertices in mesh meters.
+    Returns dict with area, mean, min, max, count, flooded_area, flooded_fraction.
+    """
+    from matplotlib.path import Path
+
+    x, y = tf.meshx, tf.meshy
+    npoin = tf.npoin2
+
+    # Check which nodes are inside the polygon
+    poly_path = Path(polygon_m)
+    points = np.column_stack([x[:npoin], y[:npoin]])
+    inside = poly_path.contains_points(points)
+
+    n_inside = int(inside.sum())
+    if n_inside == 0:
+        return {"area": 0.0, "mean": 0.0, "min": 0.0, "max": 0.0, "count": 0,
+                "flooded_area": 0.0, "flooded_fraction": 0.0}
+
+    vals_inside = values[:npoin][inside]
+
+    # Estimate area using Shoelace formula on the polygon
+    poly = np.array(polygon_m)
+    n = len(poly)
+    area = 0.5 * abs(sum(poly[i][0] * poly[(i+1)%n][1] - poly[(i+1)%n][0] * poly[i][1] for i in range(n)))
+
+    # Flooded fraction (depth > 0.01)
+    flooded = int((vals_inside > 0.01).sum())
+
+    return {
+        "area": float(area),
+        "mean": float(np.nanmean(vals_inside)),
+        "min": float(np.nanmin(vals_inside)),
+        "max": float(np.nanmax(vals_inside)),
+        "count": n_inside,
+        "flooded_area": float(area * flooded / n_inside) if n_inside > 0 else 0.0,
+        "flooded_fraction": float(flooded / n_inside) if n_inside > 0 else 0.0,
+    }
+
+
 def coord_to_meters(lon: float, lat: float, x_off: float, y_off: float) -> tuple[float, float]:
     """Convert map click coordinate (pseudo lon/lat from deck.gl) to mesh meters.
 

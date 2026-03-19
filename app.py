@@ -70,10 +70,16 @@ from analysis import (
     compute_flood_arrival,
     compute_flood_duration,
     read_cli_file,
+    extract_layer_2d,
+    polygon_zonal_stats,
 )
 from telemac_defaults import (
     suggest_palette, is_bipolar,
     detect_module as detect_module_vars, find_velocity_pair,
+)
+from validation import (
+    parse_observation_csv, compute_rmse, compute_nse,
+    compute_volume_timeseries, parse_liq_file,
 )
 from data_manip.extraction.telemac_file import TelemacFile
 
@@ -279,6 +285,7 @@ app_ui = ui.page_sidebar(
                 ui.input_select("example", "Example case", choices=EXAMPLE_CHOICES),
                 ui.input_file("upload", "Or upload .slf file", accept=[".slf"]),
                 ui.output_ui("clear_upload_ui"),
+                ui.input_file("compare_upload", "Compare file (.slf)", accept=[".slf"]),
                 ui.input_select("basemap", "Background", choices={
                     "light": "Light (blank)",
                     "dark": "Dark (blank)",
@@ -320,6 +327,9 @@ app_ui = ui.page_sidebar(
                     ui.output_ui("particle_seed_ui"),
                     ui.input_action_button("measure_btn", "Measure Distance",
                                            class_="btn-sm btn-outline-warning w-100 mb-1"),
+                    ui.input_action_button("draw_polygon", "Draw Polygon",
+                                           class_="btn-sm btn-outline-success w-100 mb-1"),
+                    ui.output_ui("polygon_stats_ui"),
                     ui.output_ui("measure_info_ui"),
                     ui.input_select("diagnostic", "Mesh diagnostic", choices={
                         "none": "None",
@@ -347,6 +357,7 @@ app_ui = ui.page_sidebar(
                     ),
                     class_="mb-2",
                 ),
+                ui.input_action_button("record_btn", "Record", class_="btn-sm btn-outline-danger w-100 mb-1"),
                 ui.div(
                     ui.input_numeric("goto_time", "Go to time (s)", value=0, min=0, step=1),
                     ui.input_action_button("goto_btn", "Go",
@@ -364,6 +375,7 @@ app_ui = ui.page_sidebar(
                 "Statistics",
                 ui.output_ui("stats_ui"),
                 ui.output_ui("hover_info_ui"),
+                ui.input_file("obs_upload", "Upload observations (.csv)", accept=[".csv"]),
                 ui.input_action_button("show_multivar", "All Vars Time Series",
                                        class_="btn-sm btn-outline-primary w-100 mb-1"),
                 ui.input_action_button("show_histogram", "Value Histogram",
@@ -374,6 +386,9 @@ app_ui = ui.page_sidebar(
                 ui.input_action_button("compute_temporal", "Compute Temporal Stats",
                                        class_="btn-sm btn-outline-info w-100 mb-1"),
                 ui.output_ui("temporal_stats_ui"),
+                ui.input_action_button("compute_volume", "Volume over time",
+                                       class_="btn-sm btn-outline-info w-100 mb-1"),
+                ui.output_ui("liq_display_ui"),
                 ui.output_ui("node_inspector_ui"),
             ),
             ui.accordion_panel(
@@ -428,6 +443,36 @@ app_ui = ui.page_sidebar(
                 } else if (e.key === 'PageDown') {
                     e.preventDefault();
                     Shiny.setInputValue('kb_var_next', Math.random());
+                }
+            });
+
+            // Animation recording via MediaRecorder
+            let mediaRecorder = null;
+            let recordedChunks = [];
+            Shiny.addCustomMessageHandler('toggle_recording', function(data) {
+                if (data.start) {
+                    const canvas = document.querySelector('#map-container canvas');
+                    if (!canvas) { Shiny.setInputValue('record_error', 'No canvas found'); return; }
+                    try {
+                        const stream = canvas.captureStream(30);
+                        mediaRecorder = new MediaRecorder(stream, {mimeType: 'video/webm'});
+                        recordedChunks = [];
+                        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+                        mediaRecorder.onstop = () => {
+                            const blob = new Blob(recordedChunks, {type: 'video/webm'});
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url; a.download = 'animation.webm'; a.click();
+                            URL.revokeObjectURL(url);
+                        };
+                        mediaRecorder.start();
+                        Shiny.setInputValue('recording_active', true);
+                    } catch(e) { Shiny.setInputValue('record_error', e.message); }
+                } else {
+                    if (mediaRecorder && mediaRecorder.state === 'recording') {
+                        mediaRecorder.stop();
+                        Shiny.setInputValue('recording_active', false);
+                    }
                 }
             });
         """),
@@ -485,6 +530,12 @@ def server(input, output, session):
     measure_points = reactive.value([])  # list of [x_mesh_m, y_mesh_m] (max 2)
     measure_mode = reactive.value(False)  # True when waiting for measurement clicks
     use_upload = reactive.value(False)  # True when uploaded file should be used
+    obs_data = reactive.value(None)  # parsed observation CSV: (times, values, varname) or None
+    compare_tf = reactive.value(None)  # secondary TelemacFile for comparison
+    recording = reactive.value(False)  # animation recording state
+    polygon_mode = reactive.value(False)  # polygon drawing mode
+    polygon_stats_data = reactive.value(None)  # polygon zonal stats result
+    volume_cache = reactive.value(None)  # {"times": ndarray, "volumes": ndarray}
 
     # -- Help modal --
     @reactive.effect
@@ -512,6 +563,27 @@ def server(input, output, session):
     @reactive.event(input.clear_upload)
     def handle_clear_upload():
         use_upload.set(False)
+
+    # -- Observation CSV upload --
+
+    @reactive.effect
+    @reactive.event(input.obs_upload)
+    def handle_obs_upload():
+        uploaded = input.obs_upload()
+        if not uploaded:
+            obs_data.set(None)
+            return
+        try:
+            path = uploaded[0]["datapath"]
+            times, values, varname = parse_observation_csv(path)
+            obs_data.set((times, values, varname))
+            ui.notification_show(
+                f"Loaded {len(times)} observation points for '{varname}'",
+                duration=4,
+            )
+        except Exception as e:
+            obs_data.set(None)
+            ui.notification_show(f"Failed to parse observations: {e}", type="error", duration=6)
 
     # -- Core reactive calcs --
 
@@ -548,6 +620,10 @@ def server(input, output, session):
         measure_points.set([])
         measure_mode.set(False)
         analysis_mode.set("none")
+        obs_data.set(None)
+        compare_tf.set(None)
+        volume_cache.set(None)
+        polygon_stats_data.set(None)
         return tf
 
     @reactive.calc
@@ -590,8 +666,19 @@ def server(input, output, session):
         tidx = current_tidx()
         derived = get_available_derived(tf)
         if var in derived:
-            return compute_derived(tf, var, tidx)
-        return tf.get_data_value(var, tidx)
+            vals = compute_derived(tf, var, tidx)
+        else:
+            vals = tf.get_data_value(var, tidx)
+        # 3D layer extraction
+        try:
+            layer = input.layer_select()
+            if layer and layer != "all":
+                nplan = getattr(tf, 'nplan', 0)
+                if nplan > 1:
+                    return extract_layer_2d(vals, tf.npoin2, int(layer))
+        except (AttributeError, KeyError):
+            pass
+        return vals
 
     # -- Topology-only reactive calcs (independent of timestep) --
 
@@ -743,6 +830,11 @@ def server(input, output, session):
             return ui.div()
         return ui.div(
             ui.input_switch("view_3d", "3D View", value=False),
+            ui.input_select("layer_select", "Display layer", choices=
+                {"all": "All planes (3D)"} |
+                {str(k): f"Layer {k}" + (" (bottom)" if k == 0 else " (surface)" if k == tf.nplan - 1 else "")
+                 for k in range(tf.nplan)}
+            ),
             ui.output_ui("z_scale_ui"),
         )
 
@@ -777,7 +869,8 @@ def server(input, output, session):
             return ui.div()
         titles = {"timeseries": "Time Series", "crosssection": "Cross-Section",
                   "vertprofile": "Vertical Profile", "histogram": "Value Histogram",
-                  "multivar": "All Variables", "rating": "Rating Curve (h-Q)"}
+                  "multivar": "All Variables", "rating": "Rating Curve (h-Q)",
+                  "volume": "Volume Conservation", "boundary_ts": "Boundary Time Series"}
         title = titles.get(mode, mode)
         n_pts = len(clicked_points.get()) if mode == "timeseries" else 0
         subtitle = f" ({n_pts} point{'s' if n_pts != 1 else ''})" if n_pts else ""
@@ -819,6 +912,30 @@ def server(input, output, session):
                 ))
             if tidx < len(tf.times):
                 fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
+            # Overlay observation data if available
+            obs = obs_data.get()
+            if obs is not None:
+                obs_times, obs_values, obs_varname = obs
+                fig.add_trace(go.Scatter(
+                    x=obs_times, y=obs_values, mode="lines",
+                    name=f"Obs: {obs_varname}",
+                    line=dict(color="red", dash="dash"),
+                ))
+                # Compare with the last clicked point's model trace
+                if pts:
+                    last_pt = pts[-1]
+                    model_times, model_values = time_series_at_point(tf, var, last_pt[0], last_pt[1])
+                    model_interp = np.interp(obs_times, model_times, model_values)
+                    rmse = compute_rmse(model_interp, obs_values)
+                    nse = compute_nse(model_interp, obs_values)
+                    fig.add_annotation(
+                        text=f"RMSE={rmse:.4f}  NSE={nse:.4f}",
+                        xref="paper", yref="paper",
+                        x=0.02, y=0.98,
+                        showarrow=False,
+                        font=dict(size=11, color="red"),
+                        bgcolor="rgba(255,255,255,0.8)",
+                    )
             fig.update_layout(
                 xaxis_title="Time (s)", yaxis_title=var,
                 margin=dict(l=50, r=20, t=10, b=40), height=220,
@@ -920,6 +1037,34 @@ def server(input, output, session):
             )
             return fig
 
+        if mode == "volume":
+            vc = volume_cache.get()
+            if vc is None:
+                return go.Figure()
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=vc["times"], y=vc["volumes"], mode="lines", name="Volume"))
+            fig.update_layout(
+                xaxis_title="Time (s)", yaxis_title="Volume (m³)",
+                margin=dict(l=50, r=20, t=10, b=40), height=220,
+            )
+            return fig
+
+        if mode == "boundary_ts":
+            data = liq_data()
+            if data is None:
+                return go.Figure()
+            fig = go.Figure()
+            for name, entry in data.items():
+                label = f"{name} ({entry['unit']})" if entry.get("unit") else name
+                fig.add_trace(go.Scatter(
+                    x=entry["times"], y=entry["values"], mode="lines", name=label))
+            fig.update_layout(
+                xaxis_title="Time (s)", yaxis_title="Value",
+                margin=dict(l=50, r=20, t=10, b=40), height=220,
+            )
+            return fig
+
         return go.Figure()
 
     # -- Click handler (time series) --
@@ -973,7 +1118,19 @@ def server(input, output, session):
         if not features or "features" not in features:
             return
         for feat in features["features"]:
-            if feat.get("geometry", {}).get("type") != "LineString":
+            geom_type = feat.get("geometry", {}).get("type")
+            if geom_type == "Polygon" and polygon_mode.get():
+                coords = feat["geometry"]["coordinates"][0]  # outer ring
+                geom = mesh_geom()
+                poly_m = [list(coord_to_meters(c[0], c[1], geom["x_off"], geom["y_off"]))
+                          for c in coords]
+                values = effective_values()
+                stats = polygon_zonal_stats(tel_file(), values, poly_m, geom)
+                polygon_stats_data.set(stats)
+                polygon_mode.set(False)
+                await map_widget.disable_draw(session)
+                return
+            if geom_type != "LineString":
                 continue
             coords = feat["geometry"]["coordinates"]
             geom = mesh_geom()
@@ -1220,6 +1377,48 @@ def server(input, output, session):
         ui.notification_remove("temporal_notif")
         ui.notification_show("Temporal statistics computed", duration=3)
 
+    # -- Volume conservation --
+
+    @reactive.effect
+    @reactive.event(input.compute_volume)
+    async def handle_compute_volume():
+        tf = tel_file()
+        ui.notification_show("Computing volume over time...",
+                             duration=None, id="volume_notif")
+        loop = asyncio.get_running_loop()
+        times, vols = await loop.run_in_executor(
+            None, _run_with_lock, compute_volume_timeseries, tf, compute_mesh_integral)
+        volume_cache.set({"times": times, "volumes": vols})
+        ui.notification_remove("volume_notif")
+        analysis_mode.set("volume")
+
+    # -- .liq boundary display --
+
+    @reactive.calc
+    def liq_data():
+        """Auto-detect and parse .liq file from the same directory as .slf."""
+        uploaded = input.upload()
+        if uploaded and use_upload.get():
+            return None
+        import glob
+        path = EXAMPLES.get(input.example(), "")
+        liq_files = glob.glob(_os.path.join(_os.path.dirname(path), "*.liq"))
+        return parse_liq_file(liq_files[0]) if liq_files else None
+
+    @output
+    @render.ui
+    def liq_display_ui():
+        data = liq_data()
+        if data is None:
+            return ui.div()
+        return ui.input_action_button("show_liq", "Show boundary time series",
+                                      class_="btn-sm btn-outline-primary w-100 mb-1")
+
+    @reactive.effect
+    @reactive.event(input.show_liq)
+    def handle_show_liq():
+        analysis_mode.set("boundary_ts")
+
     @output
     @render.ui
     def temporal_stats_ui():
@@ -1459,6 +1658,68 @@ def server(input, output, session):
         measure_points.set([])
         measure_mode.set(False)
 
+    # -- Animation recording --
+
+    @reactive.effect
+    @reactive.event(input.record_btn)
+    async def handle_record():
+        rec = not recording.get()
+        recording.set(rec)
+        await session.send_custom_message("toggle_recording", {"start": rec})
+        if rec:
+            ui.update_action_button("record_btn", label="Stop Recording")
+        else:
+            ui.update_action_button("record_btn", label="Record")
+
+    @reactive.effect
+    @reactive.event(input.record_error)
+    def handle_record_error():
+        ui.notification_show(f"Recording failed: {input.record_error()}", type="error", duration=5)
+
+    # -- Secondary file overlay --
+
+    @reactive.effect
+    @reactive.event(input.compare_upload)
+    def handle_compare_upload():
+        uploaded = input.compare_upload()
+        if not uploaded:
+            return
+        try:
+            tf2 = TelemacFile(uploaded[0]["datapath"])
+            if tf2.npoin2 != tel_file().npoin2:
+                ui.notification_show(f"Mesh mismatch: {tf2.npoin2} vs {tel_file().npoin2} nodes", type="error", duration=5)
+                return
+            compare_tf.set(tf2)
+            ui.notification_show(f"Comparison file loaded: {tf2.npoin2} nodes, {len(tf2.varnames)} vars", duration=3)
+        except Exception as e:
+            ui.notification_show(f"Failed to open comparison file: {e}", type="error", duration=5)
+
+    # -- Polygon zonal statistics --
+
+    @reactive.effect
+    @reactive.event(input.draw_polygon)
+    async def start_polygon_draw():
+        polygon_mode.set(True)
+        await map_widget.enable_draw(session, modes=["draw_polygon"])
+
+    @output
+    @render.ui
+    def polygon_stats_ui():
+        stats = polygon_stats_data.get()
+        if stats is None:
+            return ui.div()
+        return ui.div(
+            ui.strong("Polygon Statistics", class_="small"),
+            ui.div(
+                ui.span(f"Area: {stats['area']:.0f} m²", class_="small"), ui.br(),
+                ui.span(f"Nodes inside: {stats['count']}", class_="small"), ui.br(),
+                ui.span(f"Mean: {stats['mean']:.4f}", class_="small"), ui.br(),
+                ui.span(f"Min: {stats['min']:.4f}  Max: {stats['max']:.4f}", class_="small"), ui.br(),
+                ui.span(f"Flooded: {stats['flooded_fraction']*100:.1f}%", class_="small"),
+            ),
+            class_="mt-1 mb-1 border rounded p-2",
+        )
+
     # -- Comparison variable --
 
     @output
@@ -1467,6 +1728,10 @@ def server(input, output, session):
         tf = tel_file()
         choices = {"": "None (off)"}
         choices.update({v: v for v in tf.varnames})
+        ctf = compare_tf.get()
+        if ctf is not None:
+            for v in ctf.varnames:
+                choices[f"(2) {v}"] = f"(2) {v}"
         return ui.input_select("compare_var", "Contour overlay variable",
                                choices=choices, selected="")
 
@@ -1817,8 +2082,13 @@ def server(input, output, session):
 
         # Comparison variable contour overlay
         compare = input.compare_var() if input.compare_var() else ""
-        if compare and compare in tf.varnames:
+        compare_vals = None
+        if compare.startswith("(2) ") and compare_tf.get() is not None:
+            real_name = compare[4:]
+            compare_vals = compare_tf.get().get_data_value(real_name, tidx)
+        elif compare and compare in tf.varnames:
             compare_vals = tf.get_data_value(compare, tidx)
+        if compare_vals is not None:
             clyr2 = build_contour_layer_fn(tf, compare_vals, geom, n_contours=8,
                                            layer_id="compare-contours",
                                            contour_color=[0, 0, 180])
