@@ -259,6 +259,7 @@ app_ui = ui.page_sidebar(
                 icon=ui.tags.i(class_="bi bi-question-circle-fill"),
                 class_="btn btn-sm btn-outline-secondary p-1",
                 style="font-size:16px; line-height:1;",
+                **{"aria-label": "Help"},
             ),
             ui.h5("TELEMAC Viewer", style="display:inline; margin:0 8px;"),
             ui.input_dark_mode(id="dark_mode", mode="light"),
@@ -270,7 +271,12 @@ app_ui = ui.page_sidebar(
                 ui.input_select("example", "Example case", choices=EXAMPLE_CHOICES),
                 ui.input_file("upload", "Or upload .slf file", accept=[".slf"]),
                 ui.output_ui("clear_upload_ui"),
-                ui.input_switch("dark_bg", "Dark map background", value=False),
+                ui.input_select("basemap", "Background", choices={
+                    "light": "Light (blank)",
+                    "dark": "Dark (blank)",
+                    "osm": "OpenStreetMap",
+                    "satellite": "Satellite (ESRI)",
+                }),
             ),
             ui.accordion_panel(
                 "Visualization",
@@ -293,10 +299,13 @@ app_ui = ui.page_sidebar(
                 ui.output_ui("discharge_ui"),
                 ui.input_switch("particles", "Show particle traces", value=False),
                 ui.output_ui("particle_seed_ui"),
-                ui.input_switch("mesh_quality", "Show mesh quality", value=False),
-                ui.input_switch("show_slope", "Show slope/gradient", value=False),
-                ui.input_switch("show_courant", "Show Courant number", value=False),
-                ui.input_switch("show_elem_area", "Show element area", value=False),
+                ui.input_select("diagnostic", "Mesh diagnostic", choices={
+                    "none": "None",
+                    "mesh_quality": "Mesh quality",
+                    "slope": "Slope/gradient",
+                    "courant": "Courant number",
+                    "elem_area": "Element area",
+                }),
                 ui.input_action_button("measure_btn", "Measure Distance",
                                        class_="btn-sm btn-outline-warning w-100 mb-1"),
                 ui.output_ui("measure_info_ui"),
@@ -364,7 +373,7 @@ app_ui = ui.page_sidebar(
                 ),
             ),
             id="sidebar_accordion",
-            open=True,
+            open=["Data", "Visualization", "Playback"],
             multiple=True,
         ),
         width="300px",
@@ -375,6 +384,7 @@ app_ui = ui.page_sidebar(
             rel="stylesheet",
             href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css",
         ),
+        ui.busy_indicators.use(spinners=True, pulse=True),
         ui.div(
             map_widget.ui(height="100%"),
             id="map-container",
@@ -1209,14 +1219,14 @@ def server(input, output, session):
         if not hover or "coordinate" not in hover:
             return ui.div(
                 ui.span("Move cursor over mesh", class_="text-muted"),
-                style="font-size:11px; padding:2px 8px; border-top:1px solid #ddd; background:#f8f9fa;",
+                style="font-size:11px; padding:2px 8px; border-top:1px solid var(--bs-border-color); background:var(--bs-body-bg);",
             )
         coord = hover["coordinate"]
         geom = mesh_geom()
         x_m, y_m = coord_to_meters(coord[0], coord[1], geom["x_off"], geom["y_off"])
         return ui.div(
             ui.span(f"X: {x_m:.2f} m  Y: {y_m:.2f} m", style="font-family:monospace;"),
-            style="font-size:11px; padding:2px 8px; border-top:1px solid #ddd; background:#f8f9fa;",
+            style="font-size:11px; padding:2px 8px; border-top:1px solid var(--bs-border-color); background:var(--bs-body-bg);",
         )
 
     # -- Undo last point --
@@ -1433,17 +1443,18 @@ def server(input, output, session):
         er = expr_result.get()
         if er is not None:
             return er
-        if input.mesh_quality():
+        diag = input.diagnostic() if input.diagnostic() else "none"
+        if diag == "mesh_quality":
             return mesh_quality_values()
-        if input.show_slope():
+        elif diag == "slope":
             return compute_slope(tel_file(), current_values())
-        if input.show_courant():
+        elif diag == "courant":
             cfl = compute_courant_number(tel_file(), current_tidx())
             if cfl is not None:
                 return cfl
             ui.notification_show("Courant number requires VELOCITY U/V variables",
                                  type="warning", duration=4, id="cfl_warn")
-        if input.show_elem_area():
+        elif diag == "elem_area":
             return elem_area_values()
         # Temporal stats display
         stats = temporal_stats_cache.get()
@@ -1586,7 +1597,8 @@ def server(input, output, session):
         palette_id = input.palette() if input.palette() in PALETTES else "Viridis"
 
         # Auto-switch to diverging palette for difference mode
-        use_diverging = input.diff_mode() and not input.mesh_quality()
+        diag = input.diagnostic() if input.diagnostic() else "none"
+        use_diverging = input.diff_mode() and diag == "none"
         if use_diverging:
             palette_id = "_diverging"
 
@@ -1597,13 +1609,13 @@ def server(input, output, session):
             td = "none"
         if expr_result.get() is not None:
             display_var = f"EXPR: {input.expr_input()}"
-        elif input.mesh_quality():
+        elif diag == "mesh_quality":
             display_var = "MESH QUALITY"
-        elif input.show_slope():
+        elif diag == "slope":
             display_var = f"SLOPE ({var})"
-        elif input.show_courant():
+        elif diag == "courant":
             display_var = "COURANT NUMBER"
-        elif input.show_elem_area():
+        elif diag == "elem_area":
             display_var = "ELEMENT AREA (m²)"
         elif td != "none" and temporal_stats_cache.get() is not None:
             display_var = f"{var} (temporal {td})"
@@ -1738,9 +1750,16 @@ def server(input, output, session):
             legend,
         ]
 
-        # Map background
-        if input.dark_bg():
-            kwargs["style"] = "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%231a1a2e%22%7D%7D%5D%7D"
+        # Map background / basemap
+        basemap = input.basemap() if input.basemap() else "light"
+        _BASEMAP_STYLES = {
+            "light": "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%23f8f9fa%22%7D%7D%5D%7D",
+            "dark": "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%231a1a2e%22%7D%7D%5D%7D",
+            "osm": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+            "satellite": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        }
+        if basemap != "light":
+            kwargs["style"] = _BASEMAP_STYLES.get(basemap, _BASEMAP_STYLES["light"])
 
         # 3D mode: add gimbal widget and first-person view
         if is_3d_mode.get():
