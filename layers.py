@@ -13,6 +13,7 @@ from shiny_deckgl import (
 # deck.gl _COORD_METER_OFFSETS = 2
 _COORD_METER_OFFSETS = 2
 from constants import cached_palette_arr
+from telemac_defaults import find_velocity_pair
 
 _GRAY = np.array([0.85, 0.85, 0.85], dtype=np.float32)
 _WIRE_COLOR = [100, 100, 100, 80]
@@ -76,12 +77,12 @@ def build_mesh_layer(geom: dict[str, Any], values: np.ndarray, palette_id: str,
 
 def build_velocity_layer(tf: Any, time_idx: int, geom: dict[str, Any]) -> dict | None:
     """Build velocity arrow layer from U/V components."""
-    varnames = [v.strip() for v in tf.varnames]
-    if "VELOCITY U" not in varnames or "VELOCITY V" not in varnames:
+    pair = find_velocity_pair(tf.varnames)
+    if pair is None:
         return None
 
-    u = tf.get_data_value("VELOCITY U", time_idx)
-    v = tf.get_data_value("VELOCITY V", time_idx)
+    u = tf.get_data_value(pair[0], time_idx)
+    v = tf.get_data_value(pair[1], time_idx)
     x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
     x_off, y_off = geom["x_off"], geom["y_off"]
@@ -381,17 +382,36 @@ def build_measurement_layer(points_m: list[list[float]]) -> list[dict]:
     return layers
 
 
-def build_boundary_layer(tf: Any, geom: dict[str, Any], boundary_nodes: list[int]) -> dict:
-    """Build scatterplot layer highlighting boundary nodes."""
+def build_boundary_layer(tf: Any, geom: dict[str, Any], boundary_nodes: list[int],
+                         bc_types: dict[int, int] | None = None) -> dict:
+    """Build scatterplot layer highlighting boundary nodes.
+
+    If bc_types is provided (dict of node_num → LIHBOR code),
+    nodes are color-coded: wall=gray, prescribed=blue, free=green.
+    """
     x, y = tf.meshx, tf.meshy
     x_off, y_off = geom["x_off"], geom["y_off"]
-    data = [{"position": [float(x[n] - x_off), float(y[n] - y_off)]}
-            for n in boundary_nodes]
+    _BC_COLORS = {
+        2: [128, 128, 128, 180],   # wall — gray
+        4: [0, 200, 0, 200],       # free/Neumann — green
+        5: [0, 100, 255, 200],     # prescribed — blue
+    }
+    default_color = [255, 0, 255, 160]  # magenta fallback
+
+    data = []
+    for n in boundary_nodes:
+        color = default_color
+        if bc_types and (n + 1) in bc_types:
+            color = _BC_COLORS.get(bc_types[n + 1], default_color)
+        data.append({
+            "position": [float(x[n] - x_off), float(y[n] - y_off)],
+            "color": color,
+        })
     return scatterplot_layer(
         "boundary",
         data,
         getPosition="@@=d.position",
-        getColor=[255, 0, 255, 160],
+        getColor="@@=d.color",
         getRadius=4,
         radiusMinPixels=2,
         radiusMaxPixels=6,

@@ -8,6 +8,7 @@ import re
 import numpy as np
 from typing import Any
 from constants import _M2D
+from telemac_defaults import find_velocity_pair
 
 # Derived variable definitions: name -> (required_vars, compute_fn)
 DERIVED_VARIABLES = {
@@ -99,7 +100,8 @@ def compute_discharge(tf: Any, tidx: int, polyline_m: list[list[float]]) -> dict
     Returns total discharge in m³/s and per-segment breakdown.
     """
     varnames = [v.strip() for v in tf.varnames]
-    if "VELOCITY U" not in varnames or "VELOCITY V" not in varnames:
+    pair = find_velocity_pair(tf.varnames)
+    if pair is None:
         return {"total_q": None, "segments": [], "error": "Missing VELOCITY U/V variables"}
     if "WATER DEPTH" not in varnames:
         return {"total_q": None, "segments": [], "error": "Missing WATER DEPTH variable"}
@@ -121,8 +123,8 @@ def compute_discharge(tf: Any, tidx: int, polyline_m: list[list[float]]) -> dict
         nx, ny = -(y2 - y1) / seg_len, (x2 - x1) / seg_len
 
         try:
-            u = float(tf.get_data_on_points("VELOCITY U", tidx, [[mx, my]])[0])
-            v = float(tf.get_data_on_points("VELOCITY V", tidx, [[mx, my]])[0])
+            u = float(tf.get_data_on_points(pair[0], tidx, [[mx, my]])[0])
+            v = float(tf.get_data_on_points(pair[1], tidx, [[mx, my]])[0])
             h = float(tf.get_data_on_points("WATER DEPTH", tidx, [[mx, my]])[0])
         except Exception:
             skipped += 1
@@ -174,8 +176,8 @@ def compute_courant_number(tf: Any, tidx: int) -> np.ndarray | None:
     numerical stability may be much smaller. This metric is useful for
     comparing relative flow intensity across the domain.
     """
-    varnames = [v.strip() for v in tf.varnames]
-    if "VELOCITY U" not in varnames or "VELOCITY V" not in varnames:
+    pair = find_velocity_pair(tf.varnames)
+    if pair is None:
         return None
 
     npoin = tf.npoin2
@@ -188,8 +190,8 @@ def compute_courant_number(tf: Any, tidx: int) -> np.ndarray | None:
     else:
         dt = 1.0
 
-    u = tf.get_data_value("VELOCITY U", tidx)[:npoin]
-    v = tf.get_data_value("VELOCITY V", tidx)[:npoin]
+    u = tf.get_data_value(pair[0], tidx)[:npoin]
+    v = tf.get_data_value(pair[1], tidx)[:npoin]
     speed = np.sqrt(u**2 + v**2)
 
     areas = _element_areas(tf)
@@ -404,6 +406,27 @@ def find_boundary_nodes(tf: Any) -> list[int]:
     return sorted(set(b_nodes_a.tolist() + b_nodes_b.tolist()))
 
 
+def read_cli_file(cli_path: str) -> dict[int, int] | None:
+    """Read TELEMAC .cli boundary condition file.
+
+    Returns dict mapping node_number (1-based) to LIHBOR code:
+      2 = solid wall, 4 = free (Neumann), 5 = prescribed H or Q.
+    Returns None if file cannot be read.
+    """
+    try:
+        bc_types: dict[int, int] = {}
+        with open(cli_path) as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 12:
+                    lihbor = int(parts[0])
+                    node_num = int(parts[11])
+                    bc_types[node_num] = lihbor
+        return bc_types if bc_types else None
+    except Exception:
+        return None
+
+
 def coord_to_meters(lon: float, lat: float, x_off: float, y_off: float) -> tuple[float, float]:
     """Convert map click coordinate (pseudo lon/lat from deck.gl) to mesh meters.
 
@@ -455,8 +478,8 @@ def compute_particle_paths(tf: Any, seed_points: list[list[float]], x_off: float
     seed_points: list of [x_m, y_m] in mesh meters.
     Returns list of paths, each path is [[x_centered, y_centered, time], ...].
     """
-    varnames = [v.strip() for v in tf.varnames]
-    if "VELOCITY U" not in varnames or "VELOCITY V" not in varnames:
+    pair = find_velocity_pair(tf.varnames)
+    if pair is None:
         return []
 
     ntimes = len(tf.times)
@@ -493,8 +516,8 @@ def compute_particle_paths(tf: Any, seed_points: list[list[float]], x_off: float
             continue
 
         # Fetch velocity field once for this timestep
-        u_field = tf.get_data_value("VELOCITY U", t)[:npoin]
-        v_field = tf.get_data_value("VELOCITY V", t)[:npoin]
+        u_field = tf.get_data_value(pair[0], t)[:npoin]
+        v_field = tf.get_data_value(pair[1], t)[:npoin]
 
         # Find which triangle each active particle is in
         active_idx = np.where(active)[0]

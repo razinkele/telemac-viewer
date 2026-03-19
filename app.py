@@ -69,6 +69,11 @@ from analysis import (
     compute_flood_envelope,
     compute_flood_arrival,
     compute_flood_duration,
+    read_cli_file,
+)
+from telemac_defaults import (
+    suggest_palette, is_bipolar,
+    detect_module as detect_module_vars, find_velocity_pair,
 )
 from data_manip.extraction.telemac_file import TelemacFile
 
@@ -602,6 +607,17 @@ def server(input, output, session):
     def boundary_nodes_cached():
         return find_boundary_nodes(tel_file())
 
+    @reactive.calc
+    def cli_data():
+        """Try to read .cli file from the same directory as the .slf."""
+        uploaded = input.upload()
+        if uploaded and use_upload.get():
+            return None
+        import glob
+        path = EXAMPLES.get(input.example(), "")
+        cli_files = glob.glob(_os.path.join(_os.path.dirname(path), "*.cli"))
+        return read_cli_file(cli_files[0]) if cli_files else None
+
     # -- Dynamic UI --
 
     @output
@@ -616,6 +632,18 @@ def server(input, output, session):
             choices = file_vars
         selected = "WATER DEPTH" if "WATER DEPTH" in tf.varnames else tf.varnames[0]
         return ui.input_select("variable", "Variable", choices=choices, selected=selected)
+
+    @reactive.effect
+    @reactive.event(input.variable)
+    def auto_palette():
+        """Auto-select palette based on variable semantics."""
+        var = input.variable()
+        if not var:
+            return
+        palette = suggest_palette(var)
+        # _diverging is handled in update_map for bipolar vars, not via the select widget
+        if palette and palette in PALETTES:
+            ui.update_select("palette", selected=palette)
 
     @output
     @render.ui
@@ -988,6 +1016,14 @@ def server(input, output, session):
         if input.particles():
             tf = tel_file()
             geom = mesh_geom()
+            pair = find_velocity_pair(tf.varnames)
+            if pair is None:
+                ui.notification_show(
+                    "No velocity variables found for particle tracing. "
+                    "Expected: VELOCITY U/V, UX/UY, or QSBLX/QSBLY.",
+                    type="warning", duration=6)
+                particle_paths.set(None)
+                return
             ui.notification_show("Computing particle trajectories...",
                                  duration=None, id="particle_notif")
             seeds = generate_seed_grid(tf, n_target=500)
@@ -1173,9 +1209,11 @@ def server(input, output, session):
         def _compute_all_temporal(tf, var):
             stats = compute_temporal_stats(tf, var)
             if stats is not None:
-                stats["envelope"] = compute_flood_envelope(tf, var)
-                stats["arrival"] = compute_flood_arrival(tf, var)
-                stats["duration"] = compute_flood_duration(tf, var)
+                # Flood metrics always use WATER DEPTH when available
+                flood_var = "WATER DEPTH" if "WATER DEPTH" in [v.strip() for v in tf.varnames] else var
+                stats["envelope"] = compute_flood_envelope(tf, flood_var)
+                stats["arrival"] = compute_flood_arrival(tf, flood_var)
+                stats["duration"] = compute_flood_duration(tf, flood_var)
             return stats
         stats = await loop.run_in_executor(None, _run_with_lock, _compute_all_temporal, tf, var)
         temporal_stats_cache.set(stats)
@@ -1442,6 +1480,7 @@ def server(input, output, session):
         precision = "Double" if getattr(tf, 'float_type', 'f') == 'd' else "Single"
         nplan = getattr(tf, 'nplan', 0)
         dim = "3D" if nplan > 1 else "2D"
+        module = "TELEMAC-3D" if nplan > 1 else detect_module_vars(tf.varnames)
         date_info = ""
         if hasattr(tf, 'datetime') and tf.datetime is not None:
             dt_val = tf.datetime
@@ -1451,6 +1490,7 @@ def server(input, output, session):
                 date_info = str(dt_val)
 
         rows = [
+            ("Module", module),
             ("Type", f"{dim} ({nplan} planes)" if nplan > 1 else dim),
             ("Nodes", f"{tf.npoin2:,}"),
             ("Elements", f"{tf.nelem2:,}"),
@@ -1691,10 +1731,11 @@ def server(input, output, session):
         values = effective_values()
         palette_id = input.palette() if input.palette() in PALETTES else "Viridis"
 
-        # Auto-switch to diverging palette for difference mode
+        # Auto-switch to diverging palette for bipolar variables or difference mode
         diag = input.diagnostic() if input.diagnostic() else "none"
-        use_diverging = input.diff_mode() and diag == "none"
-        if use_diverging:
+        if is_bipolar(var) and diag == "none" and not input.diff_mode():
+            palette_id = "_diverging"
+        elif input.diff_mode() and diag == "none":
             palette_id = "_diverging"
 
         # Display variable label
@@ -1725,8 +1766,9 @@ def server(input, output, session):
 
         # Custom color range
         crange = None
+        use_diverging = palette_id == "_diverging"
         if use_diverging and not input.custom_range():
-            # Auto-symmetric range for difference mode
+            # Auto-symmetric range for diverging/bipolar variables
             abs_max = max(abs(float(values.min())), abs(float(values.max())))
             if abs_max > 0:
                 crange = (-abs_max, abs_max)
@@ -1756,7 +1798,7 @@ def server(input, output, session):
 
         # Boundary nodes
         if input.boundary_nodes():
-            layers.append(build_boundary_layer(tf, geom, boundary_nodes_cached()))
+            layers.append(build_boundary_layer(tf, geom, boundary_nodes_cached(), bc_types=cli_data()))
 
         # Min/max location markers
         if input.show_extrema():
