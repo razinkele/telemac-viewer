@@ -67,6 +67,10 @@ EXAMPLE_GROUPS = {
         "Frazil ice flume": os.path.join(_E, "examples/khione/flume_frazil-t2d/ini_longflume.slf"),
         "Ice clogging": os.path.join(_E, "examples/khione/clogging-t2d/ini_slowflume.slf"),
     },
+    "Case Studies": {
+        "Curonian Lagoon (24h)": "/home/razinka/telemac/Curonian/case/r2d_curonian.slf",
+        "Curonian Lagoon (geometry)": "/home/razinka/telemac/Curonian/case/curonian_geo.slf",
+    },
 }
 
 for _group, _items in EXAMPLE_GROUPS.items():
