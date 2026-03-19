@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import numpy as np
 from typing import Any
+from shiny_deckgl import encode_binary_attribute
 from constants import _M2D
 
 
@@ -17,8 +18,9 @@ def build_mesh_geometry(tf: Any, z_values: np.ndarray | None = None, z_scale: fl
     If z_values and z_scale are provided, positions[:,2] is set to
     z_values * z_scale for 3D visualization.
 
-    Returns dict with positions (flat float32 list), indices (flat int32
-    list), x_off/y_off (mesh center for round-trip), extent_m, zoom.
+    Returns dict with positions and indices as binary-encoded dicts
+    (base64 transport for efficient WebSocket transfer), plus
+    x_off/y_off (mesh center for round-trip), extent_m, zoom.
     """
     x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
@@ -41,8 +43,8 @@ def build_mesh_geometry(tf: Any, z_values: np.ndarray | None = None, z_scale: fl
 
     return {
         "npoin": npoin,
-        "positions": positions.flatten().tolist(),
-        "indices": indices.tolist(),
+        "positions": encode_binary_attribute(positions.flatten()),
+        "indices": encode_binary_attribute(indices),
         "x_off": x_off, "y_off": y_off,
         "extent_m": extent_m,
         "zoom": zoom,

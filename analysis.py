@@ -385,25 +385,31 @@ def find_boundary_nodes(tf: Any) -> list[int]:
 
     Boundary edges appear in only one triangle. Returns list of node indices.
     """
+    _, nodes_a, nodes_b = find_boundary_edges(tf)
+    return sorted(set(nodes_a.tolist() + nodes_b.tolist()))
+
+
+def find_boundary_edges(tf: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Find boundary edges of the 2D mesh.
+
+    Returns (boundary_keys, nodes_a, nodes_b) where nodes_a[i]-nodes_b[i]
+    form the i-th boundary edge.
+    """
     ikle = tf.ikle2
-    # Build all edges as sorted pairs: (min_node, max_node)
     e0 = np.column_stack([ikle[:, 0], ikle[:, 1]])
     e1 = np.column_stack([ikle[:, 1], ikle[:, 2]])
     e2 = np.column_stack([ikle[:, 2], ikle[:, 0]])
     all_edges = np.vstack([e0, e1, e2])
     all_edges.sort(axis=1)
 
-    # Find edges that appear exactly once (boundary)
-    # Encode as single int for fast counting
     max_node = int(all_edges.max()) + 1
     edge_keys = all_edges[:, 0].astype(np.int64) * max_node + all_edges[:, 1].astype(np.int64)
     unique_keys, counts = np.unique(edge_keys, return_counts=True)
     boundary_keys = unique_keys[counts == 1]
 
-    # Decode back to node pairs
-    b_nodes_a = (boundary_keys // max_node).astype(np.int32)
-    b_nodes_b = (boundary_keys % max_node).astype(np.int32)
-    return sorted(set(b_nodes_a.tolist() + b_nodes_b.tolist()))
+    nodes_a = (boundary_keys // max_node).astype(np.int32)
+    nodes_b = (boundary_keys % max_node).astype(np.int32)
+    return boundary_keys, nodes_a, nodes_b
 
 
 def read_cli_file(cli_path: str) -> dict[int, int] | None:

@@ -22,6 +22,11 @@ from shiny_deckgl import (
     PALETTE_OCEAN,
     PALETTE_THERMAL,
     PALETTE_CHLOROPHYLL,
+    PALETTE_BLUES,
+    PALETTE_GREENS,
+    PALETTE_REDS,
+    PALETTE_YELLOW_RED,
+    PALETTE_BLUE_WHITE,
 )
 
 _E = os.environ["HOMETEL"]
@@ -90,6 +95,11 @@ PALETTES = {
     "Ocean": PALETTE_OCEAN,
     "Thermal": PALETTE_THERMAL,
     "Chlorophyll": PALETTE_CHLOROPHYLL,
+    "Blues": PALETTE_BLUES,
+    "Greens": PALETTE_GREENS,
+    "Reds": PALETTE_REDS,
+    "Yellow-Red": PALETTE_YELLOW_RED,
+    "Blue-White": PALETTE_BLUE_WHITE,
 }
 
 # Diverging palette for difference mode (blue → white → red)

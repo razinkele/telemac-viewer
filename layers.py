@@ -4,10 +4,12 @@ import numpy as np
 from typing import Any
 from shiny_deckgl import (
     layer,
+    simple_mesh_layer,
     line_layer,
     scatterplot_layer,
     path_layer,
     trips_layer,
+    encode_binary_attribute,
 )
 
 # deck.gl _COORD_METER_OFFSETS = 2
@@ -57,13 +59,13 @@ def build_mesh_layer(geom: dict[str, Any], values: np.ndarray, palette_id: str,
         mask = (values[:npoin] < lo) | (values[:npoin] > hi)
         colors_f32[mask] = _GRAY
 
-    lyr = layer("SimpleMeshLayer",
+    lyr = simple_mesh_layer(
         "mesh",
         data=[{"position": [0, 0, 0]}],
         mesh="@@CustomGeometry",
         _meshPositions=geom["positions"],
         _meshNormals=[],
-        _meshColors=colors_f32.flatten().tolist(),
+        _meshColors=encode_binary_attribute(colors_f32.flatten()),
         _meshIndices=geom["indices"],
         coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=[0, 0],
@@ -383,39 +385,99 @@ def build_measurement_layer(points_m: list[list[float]]) -> list[dict]:
 
 
 def build_boundary_layer(tf: Any, geom: dict[str, Any], boundary_nodes: list[int],
-                         bc_types: dict[int, int] | None = None) -> dict:
-    """Build scatterplot layer highlighting boundary nodes.
+                         bc_types: dict[int, int] | None = None,
+                         boundary_edges: tuple | None = None) -> list[dict]:
+    """Build boundary edge lines color-coded by hydrodynamic type.
 
-    If bc_types is provided (dict of node_num → LIHBOR code),
-    nodes are color-coded: wall=gray, prescribed=blue, free=green.
+    Returns a list of layers: one line layer per boundary type plus
+    a scatterplot layer for prescribed-value nodes.
+
+    LIHBOR codes: 2=wall (gray), 4=free/Neumann (green), 5=prescribed (blue).
     """
+    from analysis import find_boundary_edges as _find_edges
+
     x, y = tf.meshx, tf.meshy
     x_off, y_off = geom["x_off"], geom["y_off"]
-    _BC_COLORS = {
-        2: [128, 128, 128, 180],   # wall — gray
-        4: [0, 200, 0, 200],       # free/Neumann — green
-        5: [0, 100, 255, 200],     # prescribed — blue
-    }
-    default_color = [255, 0, 255, 160]  # magenta fallback
 
-    data = []
-    for n in boundary_nodes:
-        color = default_color
-        if bc_types and (n + 1) in bc_types:
-            color = _BC_COLORS.get(bc_types[n + 1], default_color)
-        data.append({
-            "position": [float(x[n] - x_off), float(y[n] - y_off)],
-            "color": color,
+    # Get boundary edges
+    if boundary_edges is not None:
+        _, nodes_a, nodes_b = boundary_edges
+    else:
+        _, nodes_a, nodes_b = _find_edges(tf)
+
+    _BC_COLORS = {
+        2: [160, 160, 170, 220],   # wall — light gray
+        4: [0, 200, 80, 220],      # free/Neumann — green
+        5: [40, 120, 255, 240],    # prescribed H or Q — blue
+    }
+    _BC_LABELS = {2: "Wall", 4: "Free", 5: "Prescribed"}
+    default_color = [255, 100, 255, 180]  # magenta fallback
+
+    # Group edges by boundary type
+    edges_by_type: dict[int, list[dict]] = {}
+    prescribed_nodes: list[dict] = []
+
+    for na, nb in zip(nodes_a.tolist(), nodes_b.tolist()):
+        # Determine edge type from both endpoint nodes
+        type_a = bc_types.get(na + 1, 0) if bc_types else 0
+        type_b = bc_types.get(nb + 1, 0) if bc_types else 0
+        # Use the more specific (higher) code
+        bc_type = max(type_a, type_b) if (type_a and type_b) else (type_a or type_b)
+        if bc_type == 0:
+            bc_type = 2  # default to wall if no .cli data
+
+        edges_by_type.setdefault(bc_type, []).append({
+            "sourcePosition": [float(x[na] - x_off), float(y[na] - y_off)],
+            "targetPosition": [float(x[nb] - x_off), float(y[nb] - y_off)],
         })
-    return scatterplot_layer(
-        "boundary",
-        data,
-        getPosition="@@=d.position",
-        getColor="@@=d.color",
-        getRadius=4,
-        radiusMinPixels=2,
-        radiusMaxPixels=6,
-        pickable=False,
-        coordinateSystem=_COORD_METER_OFFSETS,
-        coordinateOrigin=[0, 0],
-    )
+
+        # Collect prescribed nodes for marker display
+        if bc_type == 5:
+            for n in (na, nb):
+                prescribed_nodes.append({
+                    "position": [float(x[n] - x_off), float(y[n] - y_off)],
+                })
+
+    layers = []
+    for bc_type, edges in edges_by_type.items():
+        color = _BC_COLORS.get(bc_type, default_color)
+        label = _BC_LABELS.get(bc_type, f"BC {bc_type}")
+        layers.append(line_layer(
+            f"boundary-{label.lower()}",
+            edges,
+            getColor=color,
+            getWidth=3,
+            widthMinPixels=2,
+            widthMaxPixels=5,
+            pickable=False,
+            coordinateSystem=_COORD_METER_OFFSETS,
+            coordinateOrigin=[0, 0],
+        ))
+
+    # Add diamond markers at prescribed boundary nodes (inlets/outlets)
+    if prescribed_nodes:
+        # Deduplicate by position
+        seen = set()
+        unique = []
+        for p in prescribed_nodes:
+            key = (p["position"][0], p["position"][1])
+            if key not in seen:
+                seen.add(key)
+                unique.append(p)
+        layers.append(scatterplot_layer(
+            "boundary-prescribed-markers",
+            unique,
+            getPosition="@@=d.position",
+            getFillColor=[40, 120, 255, 180],
+            getLineColor=[255, 255, 255, 220],
+            getRadius=6,
+            radiusMinPixels=4,
+            radiusMaxPixels=10,
+            stroked=True,
+            lineWidthMinPixels=1,
+            pickable=False,
+            coordinateSystem=_COORD_METER_OFFSETS,
+            coordinateOrigin=[0, 0],
+        ))
+
+    return layers

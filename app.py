@@ -12,11 +12,14 @@ from shiny_deckgl import (
     scale_widget,
     screenshot_widget,
     compass_widget,
-    deck_legend_control,
+    layer_legend_widget,
     reset_view_widget,
     loading_widget,
     gimbal_widget,
     first_person_view,
+    ambient_light,
+    directional_light,
+    lighting_effect,
 )
 
 from constants import (
@@ -59,6 +62,7 @@ from analysis import (
     compute_temporal_stats,
     find_extrema,
     find_boundary_nodes,
+    find_boundary_edges,
     compute_slope,
     export_all_variables_csv,
     compute_mesh_integral,
@@ -90,11 +94,19 @@ from data_manip.extraction.telemac_file import TelemacFile
 map_widget = MapWidget(
     "map",
     view_state={"longitude": 0, "latitude": 0, "zoom": 0},
-    style="data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%23f8f9fa%22%7D%7D%5D%7D",
+    style="data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%230f1923%22%7D%7D%5D%7D",
     cooperative_gestures=True,
     tooltip={
-        "html": "<b>TELEMAC Mesh</b><br/>Hover over the mesh to inspect",
-        "style": {"backgroundColor": "#1a1a2e", "color": "#eee", "fontSize": "12px"},
+        "html": "<b>{layerType}</b><br/>{info}",
+        "style": {
+            "backgroundColor": "rgba(15, 25, 35, 0.92)",
+            "color": "#c8dce8",
+            "fontSize": "12px",
+            "borderRadius": "6px",
+            "border": "1px solid rgba(13, 115, 119, 0.5)",
+            "padding": "6px 10px",
+            "boxShadow": "0 2px 8px rgba(0,0,0,0.3)",
+        },
     },
 )
 
@@ -265,20 +277,372 @@ _HELP_MODAL = ui.modal(
     easy_close=True,
 )
 
-app_ui = ui.page_sidebar(
-    ui.sidebar(
+# ---------------------------------------------------------------------------
+# Custom CSS — Marine-depth theme (light shell + dark data zones)
+# ---------------------------------------------------------------------------
+CUSTOM_CSS = """
+:root {
+    --coastal-bg: #f0f4f8;
+    --coastal-sidebar: #e8eff5;
+    --coastal-text: #1a3a5c;
+    --coastal-border: #d0dbe6;
+    --ocean-bg: #0f1923;
+    --ocean-header: #142330;
+    --ocean-text: #c8dce8;
+    --ocean-muted: #8899aa;
+    --accent-teal: #0d7377;
+    --accent-cyan: #00b4d8;
+    --accent-green: #48c78e;
+    --accent-amber: #f0a040;
+    --accent-coral: #ff6b6b;
+    --accent-slate: #5a6f80;
+}
+
+/* Navbar */
+.navbar {
+    min-height: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    background: var(--coastal-bg) !important;
+    border-bottom: 2px solid var(--accent-teal) !important;
+}
+.navbar > .container-fluid { min-height: 0 !important; }
+.navbar-brand { padding-top: 0 !important; padding-bottom: 0 !important; }
+.navbar .nav-link {
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+    color: var(--coastal-text) !important;
+    font-weight: 500;
+    transition: color 0.2s, border-color 0.2s;
+    border-bottom: 2px solid transparent;
+}
+.navbar .nav-link:hover { color: var(--accent-teal) !important; }
+.navbar .nav-link.active,
+.navbar .nav-item.active .nav-link {
+    color: var(--accent-teal) !important;
+    border-bottom: 2px solid var(--accent-teal);
+}
+
+/* Sidebar */
+.sidebar {
+    background-color: var(--coastal-sidebar) !important;
+    border-right: 1px solid var(--coastal-border);
+}
+.sidebar h5, .sidebar h6 { color: var(--coastal-text); font-weight: 600; }
+.sidebar label {
+    color: var(--coastal-text);
+    font-weight: 500;
+    font-size: 0.85rem;
+}
+.sidebar .text-muted { color: var(--accent-slate) !important; }
+.sidebar hr { border-color: var(--coastal-border); opacity: 0.6; }
+
+/* Sidebar buttons */
+.sidebar .btn-primary {
+    background: var(--accent-teal) !important;
+    border-color: var(--accent-teal) !important;
+    border-radius: 6px;
+    font-weight: 500;
+    transition: background 0.2s, transform 0.1s;
+}
+.sidebar .btn-primary:hover {
+    background: #0b6264 !important;
+    transform: translateY(-1px);
+}
+.sidebar .btn-outline-primary {
+    color: var(--accent-teal) !important;
+    border-color: var(--accent-teal) !important;
+    border-radius: 6px;
+}
+.sidebar .btn-outline-primary:hover {
+    background: var(--accent-teal) !important;
+    color: white !important;
+}
+.sidebar .btn-outline-warning { border-radius: 6px; }
+.sidebar .btn-outline-success { border-radius: 6px; }
+.sidebar .btn-outline-secondary { border-radius: 6px; }
+.sidebar .btn-danger {
+    background: var(--accent-coral) !important;
+    border-color: var(--accent-coral) !important;
+    border-radius: 6px;
+}
+
+/* Slider: teal track */
+.sidebar .irs--shiny .irs-bar {
+    background: var(--accent-teal) !important;
+    border-color: var(--accent-teal) !important;
+}
+.sidebar .irs--shiny .irs-handle {
+    border-color: var(--accent-teal) !important;
+}
+.sidebar .irs--shiny .irs-single {
+    background: var(--accent-teal) !important;
+}
+
+/* Accordion styling */
+.accordion-button {
+    background: var(--coastal-sidebar) !important;
+    color: var(--coastal-text) !important;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0.5rem 0.75rem;
+}
+.accordion-button:not(.collapsed) {
+    background: var(--coastal-bg) !important;
+    color: var(--accent-teal) !important;
+}
+
+/* Cards */
+.card {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    border-radius: 8px;
+    border: 1px solid var(--coastal-border);
+}
+.card.ocean-card {
+    background: var(--ocean-bg) !important;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-left: 3px solid var(--accent-teal);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.card.ocean-card .card-header {
+    background: var(--ocean-header) !important;
+    color: var(--accent-cyan) !important;
+    font-weight: 600;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-size: 0.9rem;
+}
+.card.ocean-card .card-body { color: var(--ocean-text); }
+
+/* Stat chips row */
+.stat-row { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.stat-chip {
+    flex: 1 1 100px; text-align: center; padding: 4px 10px;
+    border-radius: 6px; font-size: 0.75rem; line-height: 1.4;
+    color: #fff; font-weight: 500;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    min-width: 0;
+}
+.stat-chip .stat-label { font-weight: 400; opacity: 0.85; }
+.stat-chip .stat-val { font-weight: 700; font-size: 0.85rem; }
+.stat-var { background: var(--accent-teal) !important; }
+.stat-time { background: var(--accent-cyan) !important; color: #000 !important; }
+.stat-nodes { background: var(--accent-green) !important; }
+.stat-range { background: var(--accent-amber) !important; }
+
+/* Stats tab cards */
+.stats-card {
+    background: var(--ocean-bg);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-left: 3px solid var(--accent-teal);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    color: var(--ocean-text);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+.stats-card h6 { color: var(--accent-cyan); font-weight: 600; margin-bottom: 8px; }
+
+/* Simulation console */
+.sim-console {
+    max-height: 300px; overflow-y: auto;
+    font-size: 11px; font-family: monospace;
+    background: var(--ocean-bg); color: var(--accent-green);
+    padding: 8px; border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.06);
+}
+
+/* File info table */
+.file-info-table { width: 100%; border-collapse: collapse; }
+.file-info-table th, .file-info-table td {
+    padding: 6px 12px; text-align: left;
+    border-bottom: 1px solid var(--coastal-border);
+}
+.file-info-table th { color: var(--accent-teal); font-weight: 600; width: 40%; }
+
+/* Error display */
+.shiny-output-error { color: var(--accent-coral); }
+.shiny-output-error:before { content: '⚠ '; }
+
+/* Details/summary styling in sidebar */
+.sidebar details summary {
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    margin: 6px 0 4px; color: var(--coastal-text);
+    transition: color 0.2s;
+}
+.sidebar details summary:hover { color: var(--accent-teal); }
+.sidebar details[open] summary { color: var(--accent-teal); }
+
+/* Tab content settings sub-tabs */
+.navset-card-tab .nav-link { color: var(--coastal-text) !important; }
+.navset-card-tab .nav-link.active {
+    color: var(--accent-teal) !important;
+    border-bottom-color: var(--accent-teal) !important;
+}
+
+/* Map card: remove padding for full-bleed map */
+#map-container .card-body { padding: 0 !important; }
+#map-container .card { border-color: rgba(13, 115, 119, 0.3) !important; }
+
+/* Legend widget styling */
+.deckgl-legend-panel {
+    background: rgba(15, 25, 35, 0.88) !important;
+    color: var(--ocean-text) !important;
+    border: 1px solid rgba(13, 115, 119, 0.4) !important;
+    border-radius: 6px !important;
+    backdrop-filter: blur(4px);
+    font-size: 0.8rem !important;
+}
+.deckgl-legend-panel .legend-title {
+    color: var(--accent-cyan) !important;
+    font-weight: 600;
+}
+
+/* Map widgets: subtle dark background */
+.maplibregl-ctrl-group {
+    background: rgba(15, 25, 35, 0.75) !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    border-radius: 6px !important;
+}
+.maplibregl-ctrl-group button {
+    color: var(--ocean-text) !important;
+}
+.maplibregl-ctrl-group button:hover {
+    background: rgba(13, 115, 119, 0.3) !important;
+}
+.maplibregl-ctrl-group button + button {
+    border-top: 1px solid rgba(255,255,255,0.08) !important;
+}
+"""
+
+app_ui = ui.page_navbar(
+    # ── Tab 1: Map (Dashboard) ─────────────────────────────────────────
+    ui.nav_panel(
+        "Map",
+        head_includes(),
+        # Stat chips row
         ui.div(
-            ui.input_action_button(
-                "help_btn", "",
-                icon=ui.tags.i(class_="bi bi-question-circle-fill"),
-                class_="btn btn-sm btn-outline-secondary p-1",
-                style="font-size:16px; line-height:1;",
-                **{"aria-label": "Help"},
+            ui.div(
+                ui.span("Variable ", class_="stat-label"),
+                ui.span(ui.output_text("stat_var_name", inline=True), class_="stat-val"),
+                class_="stat-chip stat-var",
             ),
-            ui.h5("TELEMAC Viewer", style="display:inline; margin:0 8px;"),
-            ui.input_dark_mode(id="dark_mode", mode="light"),
-            class_="d-flex justify-content-between align-items-center mb-2",
+            ui.div(
+                ui.span("Time ", class_="stat-label"),
+                ui.span(ui.output_text("stat_time", inline=True), class_="stat-val"),
+                class_="stat-chip stat-time",
+            ),
+            ui.div(
+                ui.span("Nodes ", class_="stat-label"),
+                ui.span(ui.output_text("stat_nodes", inline=True), class_="stat-val"),
+                class_="stat-chip stat-nodes",
+            ),
+            ui.div(
+                ui.span("Range ", class_="stat-label"),
+                ui.span(ui.output_text("stat_range", inline=True), class_="stat-val"),
+                class_="stat-chip stat-range",
+            ),
+            class_="stat-row",
         ),
+        # Map card — explicit height like cenjas dashboard
+        ui.div(
+            ui.card(
+                map_widget.ui(width="100%", height="calc(100vh - 200px)"),
+                ui.output_ui("analysis_panel_ui"),
+                ui.output_ui("coord_readout_ui"),
+                full_screen=True,
+                class_="ocean-card",
+            ),
+            id="map-container",
+        ),
+    ),
+    # ── Tab 2: Statistics ──────────────────────────────────────────────
+    ui.nav_panel(
+        "Statistics",
+        ui.layout_columns(
+            ui.card(
+                ui.card_header("Current Timestep Stats"),
+                ui.output_ui("stats_ui"),
+                ui.output_ui("hover_info_ui"),
+                class_="ocean-card",
+            ),
+            ui.card(
+                ui.card_header("Node Inspector"),
+                ui.output_ui("node_inspector_ui"),
+                class_="ocean-card",
+            ),
+            col_widths=[6, 6],
+        ),
+        ui.layout_columns(
+            ui.card(
+                ui.card_header("Analysis Tools"),
+                ui.input_file("obs_upload", "Upload observations (.csv)", accept=[".csv"]),
+                ui.div(
+                    ui.input_action_button("show_multivar", "All Vars Time Series",
+                                           class_="btn-sm btn-outline-primary mb-1"),
+                    ui.input_action_button("show_histogram", "Value Histogram",
+                                           class_="btn-sm btn-outline-primary mb-1"),
+                    ui.input_action_button("compute_integral", "Compute Integral",
+                                           class_="btn-sm btn-outline-info mb-1"),
+                    ui.input_action_button("compute_temporal", "Temporal Stats",
+                                           class_="btn-sm btn-outline-info mb-1"),
+                    ui.input_action_button("compute_volume", "Volume over time",
+                                           class_="btn-sm btn-outline-info mb-1"),
+                    class_="d-flex flex-wrap gap-2 mb-2",
+                ),
+                ui.output_ui("integral_ui"),
+                ui.output_ui("temporal_stats_ui"),
+                ui.output_ui("liq_display_ui"),
+            ),
+            col_widths=[12],
+        ),
+    ),
+    # ── Tab 3: File Info ───────────────────────────────────────────────
+    ui.nav_panel(
+        "File Info",
+        ui.card(
+            ui.card_header("SELAFIN File Metadata"),
+            ui.output_ui("file_info_ui"),
+            class_="ocean-card",
+        ),
+    ),
+    # ── Tab 4: Run Simulation ──────────────────────────────────────────
+    ui.nav_panel(
+        "Run",
+        ui.layout_columns(
+            ui.card(
+                ui.card_header("Simulation Setup"),
+                ui.output_ui("cas_select_ui"),
+                ui.input_numeric("ncores", "CPU cores", value=4, min=0, max=28, step=1),
+                ui.div(
+                    ui.input_action_button("run_sim", "Run",
+                                           class_="btn-sm btn-success me-2"),
+                    ui.input_action_button("stop_sim", "Stop",
+                                           class_="btn-sm btn-danger"),
+                    class_="d-flex gap-2 mb-2",
+                ),
+                ui.output_ui("sim_status_ui"),
+            ),
+            ui.card(
+                ui.card_header("Console Output"),
+                ui.tags.pre(
+                    ui.output_text_verbatim("sim_console"),
+                    class_="sim-console",
+                ),
+                class_="ocean-card",
+            ),
+            col_widths=[4, 8],
+        ),
+    ),
+    # ── Navbar extras ──────────────────────────────────────────────────
+    ui.nav_spacer(),
+    ui.nav_control(
+        ui.input_action_link("help_btn", "? Help", class_="nav-link"),
+    ),
+    # ── Sidebar ────────────────────────────────────────────────────────
+    sidebar=ui.sidebar(
+        ui.h6("TELEMAC Viewer", style="margin:0 0 8px; color: var(--coastal-text);"),
         ui.accordion(
             ui.accordion_panel(
                 "Data",
@@ -287,15 +651,14 @@ app_ui = ui.page_sidebar(
                 ui.output_ui("clear_upload_ui"),
                 ui.input_file("compare_upload", "Compare file (.slf)", accept=[".slf"]),
                 ui.input_select("basemap", "Background", choices={
+                    "dark": "Dark (ocean)",
                     "light": "Light (blank)",
-                    "dark": "Dark (blank)",
-                    "osm": "OpenStreetMap",
+                    "osm": "CartoDB Dark",
                     "satellite": "Satellite (ESRI)",
                 }),
             ),
             ui.accordion_panel(
                 "Visualization",
-                # -- Color & Variable --
                 ui.output_ui("var_select_ui"),
                 ui.input_select("palette", "Color palette", choices=list(PALETTES.keys())),
                 ui.input_switch("log_scale", "Log scale coloring", value=False),
@@ -304,20 +667,18 @@ app_ui = ui.page_sidebar(
                 ui.output_ui("ref_timestep_ui"),
                 ui.output_ui("color_range_ui"),
                 ui.output_ui("filter_ui"),
-                # -- Overlays --
                 ui.tags.details(
-                    ui.tags.summary("Overlays", style="font-size:12px; font-weight:600; cursor:pointer; margin:6px 0 4px;"),
+                    ui.tags.summary("Overlays"),
                     ui.input_switch("vectors", "Velocity vectors", value=False),
                     ui.input_switch("contours", "Contour lines", value=False),
                     ui.input_switch("wireframe", "Mesh wireframe", value=False),
-                    ui.input_switch("boundary_nodes", "Boundary nodes", value=False),
+                    ui.input_switch("boundary_nodes", "Boundary conditions", value=False),
                     ui.input_switch("show_extrema", "Min/max locations", value=False),
                     ui.output_ui("compare_var_ui"),
                     open=False,
                 ),
-                # -- Analysis Tools --
                 ui.tags.details(
-                    ui.tags.summary("Analysis tools", style="font-size:12px; font-weight:600; cursor:pointer; margin:6px 0 4px;"),
+                    ui.tags.summary("Analysis tools"),
                     ui.input_action_button("draw_xsec", "Draw Cross-Section",
                                            class_="btn-sm btn-outline-primary w-100 mb-1"),
                     ui.output_ui("clear_xsec_ui"),
@@ -371,116 +732,93 @@ app_ui = ui.page_sidebar(
                 ui.input_switch("loop", "Loop animation", value=True),
                 ui.output_ui("trail_length_ui"),
             ),
-            ui.accordion_panel(
-                "Statistics",
-                ui.output_ui("stats_ui"),
-                ui.output_ui("hover_info_ui"),
-                ui.input_file("obs_upload", "Upload observations (.csv)", accept=[".csv"]),
-                ui.input_action_button("show_multivar", "All Vars Time Series",
-                                       class_="btn-sm btn-outline-primary w-100 mb-1"),
-                ui.input_action_button("show_histogram", "Value Histogram",
-                                       class_="btn-sm btn-outline-primary w-100 mb-1"),
-                ui.input_action_button("compute_integral", "Compute Integral",
-                                       class_="btn-sm btn-outline-info w-100 mb-1"),
-                ui.output_ui("integral_ui"),
-                ui.input_action_button("compute_temporal", "Compute Temporal Stats",
-                                       class_="btn-sm btn-outline-info w-100 mb-1"),
-                ui.output_ui("temporal_stats_ui"),
-                ui.input_action_button("compute_volume", "Volume over time",
-                                       class_="btn-sm btn-outline-info w-100 mb-1"),
-                ui.output_ui("liq_display_ui"),
-                ui.output_ui("node_inspector_ui"),
-            ),
-            ui.accordion_panel(
-                "File Info",
-                ui.output_ui("file_info_ui"),
-            ),
-            ui.accordion_panel(
-                "Run Simulation",
-                ui.output_ui("cas_select_ui"),
-                ui.input_numeric("ncores", "CPU cores", value=4, min=0, max=28, step=1),
-                ui.input_action_button("run_sim", "Run", class_="btn-sm btn-success w-100 mb-1"),
-                ui.input_action_button("stop_sim", "Stop", class_="btn-sm btn-danger w-100 mb-1"),
-                ui.output_ui("sim_status_ui"),
-                ui.tags.pre(
-                    ui.output_text_verbatim("sim_console"),
-                    style="max-height:200px; overflow-y:auto; font-size:11px; background:#1a1a2e; color:#eee; padding:6px; margin-top:4px;",
-                ),
-            ),
             id="sidebar_accordion",
             open=["Data", "Visualization", "Playback"],
             multiple=True,
         ),
-        width="300px",
+        width="280px",
     ),
-    ui.card(
-        head_includes(),
+    title="TELEMAC Viewer",
+    fillable=True,
+    header=ui.TagList(
         ui.tags.link(
             rel="stylesheet",
             href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css",
         ),
+        ui.tags.style(CUSTOM_CSS),
         ui.busy_indicators.use(spinners=True, pulse=True),
-        ui.div(
-            map_widget.ui(height="100%"),
-            id="map-container",
-            style="flex:1; min-height:0;",
-        ),
-        ui.output_ui("analysis_panel_ui"),
-        ui.output_ui("coord_readout_ui"),
+        # Fallback: re-init deckgl maps if shiny:connected fired before CDN loaded
         ui.tags.script("""
-            document.addEventListener('keydown', function(e) {
-                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-                if (e.key === 'ArrowRight') {
-                    Shiny.setInputValue('kb_next', Math.random());
-                } else if (e.key === 'ArrowLeft') {
-                    Shiny.setInputValue('kb_prev', Math.random());
-                } else if (e.key === ' ') {
-                    e.preventDefault();
-                    Shiny.setInputValue('kb_play', Math.random());
-                } else if (e.key === 'PageUp') {
-                    e.preventDefault();
-                    Shiny.setInputValue('kb_var_prev', Math.random());
-                } else if (e.key === 'PageDown') {
-                    e.preventDefault();
-                    Shiny.setInputValue('kb_var_next', Math.random());
+        (function() {
+            var _retries = 0;
+            function ensureMaps() {
+                if (_retries > 50) return;
+                _retries++;
+                var inst = window.__deckgl_instances;
+                if (!inst) { setTimeout(ensureMaps, 200); return; }
+                var maps = document.querySelectorAll('.deckgl-map');
+                var uninit = [];
+                maps.forEach(function(el) { if (!inst[el.id]) uninit.push(el); });
+                if (uninit.length > 0 && typeof window.maplibregl !== 'undefined' && typeof window.deck !== 'undefined') {
+                    document.dispatchEvent(new Event('shiny:connected'));
+                } else if (uninit.length > 0) {
+                    setTimeout(ensureMaps, 200);
                 }
-            });
-
-            // Animation recording via MediaRecorder
-            let mediaRecorder = null;
-            let recordedChunks = [];
-            Shiny.addCustomMessageHandler('toggle_recording', function(data) {
-                if (data.start) {
-                    const canvas = document.querySelector('#map-container canvas');
-                    if (!canvas) { Shiny.setInputValue('record_error', 'No canvas found'); return; }
-                    try {
-                        const stream = canvas.captureStream(30);
-                        mediaRecorder = new MediaRecorder(stream, {mimeType: 'video/webm'});
-                        recordedChunks = [];
-                        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
-                        mediaRecorder.onstop = () => {
-                            const blob = new Blob(recordedChunks, {type: 'video/webm'});
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url; a.download = 'animation.webm'; a.click();
-                            URL.revokeObjectURL(url);
-                        };
-                        mediaRecorder.start();
-                        Shiny.setInputValue('recording_active', true);
-                    } catch(e) { Shiny.setInputValue('record_error', e.message); }
-                } else {
-                    if (mediaRecorder && mediaRecorder.state === 'recording') {
-                        mediaRecorder.stop();
-                        Shiny.setInputValue('recording_active', false);
-                    }
-                }
-            });
+            }
+            if (document.readyState === 'complete') ensureMaps();
+            else window.addEventListener('load', ensureMaps);
+        })();
         """),
-        full_screen=True,
-        style="display:flex; flex-direction:column;",
-    ),
-    title="TELEMAC Result Viewer",
-    fillable=True,
+        ui.tags.script("""
+        document.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            if (e.key === 'ArrowRight') {
+                Shiny.setInputValue('kb_next', Math.random());
+            } else if (e.key === 'ArrowLeft') {
+                Shiny.setInputValue('kb_prev', Math.random());
+            } else if (e.key === ' ') {
+                e.preventDefault();
+                Shiny.setInputValue('kb_play', Math.random());
+            } else if (e.key === 'PageUp') {
+                e.preventDefault();
+                Shiny.setInputValue('kb_var_prev', Math.random());
+            } else if (e.key === 'PageDown') {
+                e.preventDefault();
+                Shiny.setInputValue('kb_var_next', Math.random());
+            }
+        });
+
+        // Animation recording via MediaRecorder
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        Shiny.addCustomMessageHandler('toggle_recording', function(data) {
+            if (data.start) {
+                const canvas = document.querySelector('#map-container canvas');
+                if (!canvas) { Shiny.setInputValue('record_error', 'No canvas found'); return; }
+                try {
+                    const stream = canvas.captureStream(30);
+                    mediaRecorder = new MediaRecorder(stream, {mimeType: 'video/webm'});
+                    recordedChunks = [];
+                    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+                    mediaRecorder.onstop = () => {
+                        const blob = new Blob(recordedChunks, {type: 'video/webm'});
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url; a.download = 'animation.webm'; a.click();
+                        URL.revokeObjectURL(url);
+                    };
+                    mediaRecorder.start();
+                    Shiny.setInputValue('recording_active', true);
+                } catch(e) { Shiny.setInputValue('record_error', e.message); }
+            } else {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                    Shiny.setInputValue('recording_active', false);
+                }
+            }
+        });
+    """),
+    ),  # end TagList header
 )
 
 
@@ -542,6 +880,43 @@ def server(input, output, session):
     @reactive.event(input.help_btn)
     def _show_help():
         ui.modal_show(_HELP_MODAL)
+
+    # -- Stat chip outputs (Map tab header) --
+    @output
+    @render.text
+    def stat_var_name():
+        try:
+            return current_var()
+        except Exception:
+            return "—"
+
+    @output
+    @render.text
+    def stat_time():
+        try:
+            tf = tel_file()
+            tidx = current_tidx()
+            return format_time(tf.times[tidx])
+        except Exception:
+            return "—"
+
+    @output
+    @render.text
+    def stat_nodes():
+        try:
+            tf = tel_file()
+            return f"{tf.npoin2:,}"
+        except Exception:
+            return "—"
+
+    @output
+    @render.text
+    def stat_range():
+        try:
+            vals = effective_values()
+            return f"{vals.min():.3g} – {vals.max():.3g}"
+        except Exception:
+            return "—"
 
     # -- Upload management --
 
@@ -632,7 +1007,7 @@ def server(input, output, session):
         if is_3d_mode.get() and tf.nplan > 1:
             try:
                 z_scale = input.z_scale() if input.z_scale() is not None else 10
-            except (AttributeError, KeyError):
+            except Exception:
                 z_scale = 10
             try:
                 z_name = tf.get_z_name()
@@ -648,7 +1023,10 @@ def server(input, output, session):
     @reactive.calc
     def current_var():
         tf = tel_file()
-        var = input.variable() if input.variable() else None
+        try:
+            var = input.variable()
+        except Exception:
+            var = None
         if var and var in tf.varnames:
             return var
         return tf.varnames[0]
@@ -656,7 +1034,12 @@ def server(input, output, session):
     @reactive.calc
     def current_tidx():
         tf = tel_file()
-        tidx = input.time_idx() if input.time_idx() is not None else 0
+        try:
+            tidx = input.time_idx()
+        except Exception:
+            tidx = 0
+        if tidx is None:
+            tidx = 0
         return min(tidx, len(tf.times) - 1)
 
     @reactive.calc
@@ -676,7 +1059,7 @@ def server(input, output, session):
                 nplan = getattr(tf, 'nplan', 0)
                 if nplan > 1:
                     return extract_layer_2d(vals, tf.npoin2, int(layer))
-        except (AttributeError, KeyError):
+        except Exception:
             pass
         return vals
 
@@ -876,7 +1259,7 @@ def server(input, output, session):
         subtitle = f" ({n_pts} point{'s' if n_pts != 1 else ''})" if n_pts else ""
         return ui.div(
             ui.div(
-                ui.strong(title + subtitle),
+                ui.strong(title + subtitle, style="color: #00b4d8;"),
                 ui.download_button("download_csv", "CSV",
                                    class_="btn-sm btn-outline-success ms-2"),
                 ui.download_button("download_all_vars", "All Vars",
@@ -885,10 +1268,11 @@ def server(input, output, session):
                                        class_="btn-sm btn-outline-warning ms-1"),
                 ui.input_action_button("close_analysis", "Close",
                                        class_="btn-sm btn-outline-secondary ms-1"),
-                class_="d-flex align-items-center p-2 border-top",
+                class_="d-flex align-items-center p-2",
+                style="background: rgba(15, 25, 35, 0.92); border-top: 1px solid rgba(13, 115, 119, 0.3);",
             ),
             output_widget("analysis_chart"),
-            style="height:250px; overflow:hidden;",
+            style="height:250px; overflow:hidden; background: rgba(15, 25, 35, 0.85);",
         )
 
     @output
@@ -1546,17 +1930,34 @@ def server(input, output, session):
     @render.ui
     def coord_readout_ui():
         hover = input.map_hover()
+        _style = (
+            "font-size:11px; padding:4px 10px; "
+            "background: rgba(15, 25, 35, 0.85); color: #c8dce8; "
+            "border-top: 1px solid rgba(13, 115, 119, 0.3); "
+            "font-family: monospace;"
+        )
         if not hover or "coordinate" not in hover:
             return ui.div(
-                ui.span("Move cursor over mesh", class_="text-muted"),
-                style="font-size:11px; padding:2px 8px; border-top:1px solid var(--bs-border-color); background:var(--bs-body-bg);",
+                ui.span("Move cursor over mesh", style="opacity:0.5;"),
+                style=_style,
             )
         coord = hover["coordinate"]
         geom = mesh_geom()
         x_m, y_m = coord_to_meters(coord[0], coord[1], geom["x_off"], geom["y_off"])
+        # Show value at nearest node if available
+        try:
+            tf = tel_file()
+            var = current_var()
+            tidx = current_tidx()
+            node = nearest_node(tf, x_m, y_m)
+            val = tf.get_data_value(var, tidx)[node]
+            val_str = f"  {var}: {val:.4g}"
+        except Exception:
+            val_str = ""
         return ui.div(
-            ui.span(f"X: {x_m:.2f} m  Y: {y_m:.2f} m", style="font-family:monospace;"),
-            style="font-size:11px; padding:2px 8px; border-top:1px solid var(--bs-border-color); background:var(--bs-body-bg);",
+            ui.span(f"X: {x_m:.1f}   Y: {y_m:.1f}", style="color: #00b4d8;"),
+            ui.span(val_str, style="color: #48c78e; margin-left: 12px;"),
+            style=_style,
         )
 
     # -- Undo last point --
@@ -1860,7 +2261,7 @@ def server(input, output, session):
         stats = temporal_stats_cache.get()
         try:
             td = input.temporal_display() or "none"
-        except (AttributeError, KeyError):
+        except Exception:
             td = "none"
         if stats is not None and td != "none":
             return stats[td]
@@ -1870,7 +2271,7 @@ def server(input, output, session):
             tidx = current_tidx()
             try:
                 ref = input.ref_tidx() if input.ref_tidx() is not None else 0
-            except (AttributeError, KeyError):
+            except Exception:
                 ref = 0
             return compute_difference(tf, var, tidx, ref)
         return current_values()
@@ -1919,7 +2320,7 @@ def server(input, output, session):
         cas_files = find_cas_files(path)
         try:
             cas_name = input.cas_file() if input.cas_file() else None
-        except (AttributeError, KeyError):
+        except Exception:
             cas_name = None
         if not cas_name or cas_name not in cas_files:
             ui.notification_show("No .cas file selected", type="warning", duration=3)
@@ -2006,7 +2407,7 @@ def server(input, output, session):
         # Display variable label
         try:
             td = input.temporal_display() or "none"
-        except (AttributeError, KeyError):
+        except Exception:
             td = "none"
         if expr_result.get() is not None:
             display_var = f"EXPR: {input.expr_input()}"
@@ -2023,7 +2424,7 @@ def server(input, output, session):
         elif input.diff_mode():
             try:
                 ref = input.ref_tidx() if input.ref_tidx() is not None else 0
-            except (AttributeError, KeyError):
+            except Exception:
                 ref = 0
             display_var = f"Δ {var} (t{tidx}-t{ref})"
         else:
@@ -2032,20 +2433,35 @@ def server(input, output, session):
         # Custom color range
         crange = None
         use_diverging = palette_id == "_diverging"
-        if use_diverging and not input.custom_range():
-            # Auto-symmetric range for diverging/bipolar variables
+        try:
+            custom_range = input.custom_range()
+        except Exception:
+            custom_range = False
+        if use_diverging and not custom_range:
             abs_max = max(abs(float(values.min())), abs(float(values.max())))
             if abs_max > 0:
                 crange = (-abs_max, abs_max)
-        elif input.custom_range():
-            cmin = input.color_min() if input.color_min() is not None else None
-            cmax = input.color_max() if input.color_max() is not None else None
+        elif custom_range:
+            try:
+                cmin = input.color_min()
+                cmax = input.color_max()
+            except Exception:
+                cmin, cmax = None, None
             if cmin is not None and cmax is not None:
                 crange = (cmin, cmax)
 
-        filt = input.filter_range() if input.filter_range() is not None else None
-        use_log = input.log_scale() if input.log_scale() else False
-        reverse = input.reverse_palette() if input.reverse_palette() else False
+        try:
+            filt = input.filter_range()
+        except Exception:
+            filt = None
+        try:
+            use_log = input.log_scale()
+        except Exception:
+            use_log = False
+        try:
+            reverse = input.reverse_palette()
+        except Exception:
+            reverse = False
         lyr, vmin, vmax, log_applied = build_mesh_layer(geom, values, palette_id,
                                            filter_range=filt,
                                            color_range_override=crange,
@@ -2061,9 +2477,9 @@ def server(input, output, session):
         if input.wireframe():
             layers.append(build_wireframe_layer(tf, geom))
 
-        # Boundary nodes
+        # Boundary edges (color-coded by hydrodynamic type)
         if input.boundary_nodes():
-            layers.append(build_boundary_layer(tf, geom, boundary_nodes_cached(), bc_types=cli_data()))
+            layers.extend(build_boundary_layer(tf, geom, boundary_nodes_cached(), bc_types=cli_data()))
 
         # Min/max location markers
         if input.show_extrema():
@@ -2081,7 +2497,10 @@ def server(input, output, session):
                 layers.append(clyr)
 
         # Comparison variable contour overlay
-        compare = input.compare_var() if input.compare_var() else ""
+        try:
+            compare = input.compare_var() or ""
+        except Exception:
+            compare = ""
         compare_vals = None
         if compare.startswith("(2) ") and compare_tf.get() is not None:
             real_name = compare[4:]
@@ -2121,14 +2540,22 @@ def server(input, output, session):
             layers.extend(build_measurement_layer(mpts_centered))
 
         gradient_colors = cached_gradient_colors(palette_id, reverse=reverse)
-        legend = deck_legend_control(
-            entries=[{
-                "layer_id": "mesh",
-                "label": f"{display_var}  [{vmin:.3g} - {vmax:.3g}]",
-                "colors": gradient_colors,
-                "shape": "gradient",
-            }],
-            position="bottom-right",
+        legend_entries = [{
+            "layer_id": "mesh",
+            "label": f"{display_var}  [{vmin:.3g} - {vmax:.3g}]",
+            "colors": gradient_colors,
+            "shape": "gradient",
+        }]
+        # Add boundary type entries to legend
+        if input.boundary_nodes():
+            legend_entries.extend([
+                {"layer_id": "boundary-wall", "label": "Wall", "color": [160, 160, 170], "shape": "line"},
+                {"layer_id": "boundary-free", "label": "Free (Neumann)", "color": [0, 200, 80], "shape": "line"},
+                {"layer_id": "boundary-prescribed", "label": "Prescribed (H/Q)", "color": [40, 120, 255], "shape": "line"},
+            ])
+        legend = layer_legend_widget(
+            entries=legend_entries,
+            placement="bottom-right",
             show_checkbox=False,
             title="Legend",
         )
@@ -2147,33 +2574,43 @@ def server(input, output, session):
 
         # Build widgets list
         widgets = [
-            zoom_widget(),
-            fullscreen_widget(),
-            scale_widget(),
-            screenshot_widget(),
-            compass_widget(),
-            reset_view_widget(),
-            loading_widget(),
+            zoom_widget(placement="top-right"),
+            fullscreen_widget(placement="top-right"),
+            screenshot_widget(placement="top-right"),
+            compass_widget(placement="top-right"),
+            reset_view_widget(placement="top-right"),
+            scale_widget(placement="bottom-left"),
+            loading_widget(placement="top-left"),
             legend,
         ]
 
         # Map background / basemap
-        basemap = input.basemap() if input.basemap() else "light"
+        _DARK_BG = "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%230f1923%22%7D%7D%5D%7D"
+        _LIGHT_BG = "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%23f0f4f8%22%7D%7D%5D%7D"
+        try:
+            basemap = input.basemap() or "dark"
+        except Exception:
+            basemap = "dark"
         _BASEMAP_STYLES = {
-            "light": "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%23f8f9fa%22%7D%7D%5D%7D",
-            "dark": "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%231a1a2e%22%7D%7D%5D%7D",
-            "osm": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+            "light": _LIGHT_BG,
+            "dark": _DARK_BG,
+            "osm": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
             "satellite": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         }
-        if basemap != "light":
-            kwargs["style"] = _BASEMAP_STYLES.get(basemap, _BASEMAP_STYLES["light"])
+        if basemap != "dark":
+            kwargs["style"] = _BASEMAP_STYLES.get(basemap, _DARK_BG)
 
-        # 3D mode: add gimbal widget and first-person view
+        # 3D mode: add gimbal widget, first-person view, and lighting
         if is_3d_mode.get():
             widgets.append(gimbal_widget())
             kwargs["views"] = [first_person_view(
                 focalDistance=10,
                 maxPitchAngle=80,
+            )]
+            kwargs["effects"] = [lighting_effect(
+                ambient_light(intensity=0.6),
+                directional_light(direction=[-1, -3, -1], intensity=0.8),
+                directional_light(direction=[1, 2, -0.5], intensity=0.3),
             )]
 
         await map_widget.update(
