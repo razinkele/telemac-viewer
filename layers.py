@@ -1,14 +1,16 @@
 # layers.py
 import numpy as np
 from shiny_deckgl import (
-    simple_mesh_layer,
+    layer,
     line_layer,
     contour_layer,
     scatterplot_layer,
     path_layer,
     trips_layer,
-    COORDINATE_SYSTEM,
 )
+
+# deck.gl _COORD_METER_OFFSETS = 2
+_COORD_METER_OFFSETS = 2
 from constants import cached_palette_arr
 
 _GRAY = np.array([0.85, 0.85, 0.85], dtype=np.float32)
@@ -20,7 +22,9 @@ def build_mesh_layer(geom, values, palette_id, filter_range=None,
     """Build SimpleMeshLayer with per-vertex coloring and optional value filter."""
     npoin = geom["npoin"]
 
-    vmin, vmax = float(values[:npoin].min()), float(values[:npoin].max())
+    vmin, vmax = float(np.nanmin(values[:npoin])), float(np.nanmax(values[:npoin]))
+    if np.isnan(vmin):
+        vmin, vmax = 0.0, 1.0
     if color_range_override is not None:
         cmin, cmax = color_range_override
         if cmin is not None and cmax is not None and cmax > cmin:
@@ -29,13 +33,16 @@ def build_mesh_layer(geom, values, palette_id, filter_range=None,
         vmax = vmin + 1.0
 
     palette_arr = cached_palette_arr(palette_id, reverse=reverse_palette)
+    log_applied = False
     if log_scale and vmin > 0:
         log_vals = np.log10(np.maximum(values[:npoin], vmin))
         log_min, log_max = np.log10(vmin), np.log10(vmax)
         normalized = np.clip((log_vals - log_min) / (log_max - log_min), 0, 1)
+        log_applied = True
     else:
         normalized = np.clip((values[:npoin] - vmin) / (vmax - vmin), 0, 1)
-    idx = (normalized * 255).astype(int)
+    idx = np.nan_to_num(normalized * 255, nan=0.0).astype(int)
+    np.clip(idx, 0, 255, out=idx)
     vertex_colors_u8 = palette_arr[idx]
     colors_f32 = vertex_colors_u8[:, :3].astype(np.float32) / 255.0
 
@@ -45,7 +52,7 @@ def build_mesh_layer(geom, values, palette_id, filter_range=None,
         mask = (values[:npoin] < lo) | (values[:npoin] > hi)
         colors_f32[mask] = _GRAY
 
-    lyr = simple_mesh_layer(
+    lyr = layer("SimpleMeshLayer",
         "mesh",
         data=[{"position": [0, 0, 0]}],
         mesh="@@CustomGeometry",
@@ -53,14 +60,14 @@ def build_mesh_layer(geom, values, palette_id, filter_range=None,
         _meshNormals=[],
         _meshColors=colors_f32.flatten().tolist(),
         _meshIndices=geom["indices"],
-        coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+        coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=[0, 0],
         sizeScale=1,
         getPosition="@@=d.position",
         getColor=[255, 255, 255, 255],
         pickable=True,
     )
-    return lyr, vmin, vmax
+    return lyr, vmin, vmax, log_applied
 
 
 def build_velocity_layer(tf, time_idx, geom):
@@ -110,7 +117,7 @@ def build_velocity_layer(tf, time_idx, geom):
         widthMinPixels=1,
         widthMaxPixels=3,
         pickable=False,
-        coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+        coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=[0, 0],
     )
 
@@ -121,13 +128,16 @@ def build_contour_layer_fn(tf, values, geom, n_contours=6, layer_id="contours",
     x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
     x_off, y_off = geom["x_off"], geom["y_off"]
-    vmin, vmax = float(values[:npoin].min()), float(values[:npoin].max())
+    vmin, vmax = float(np.nanmin(values[:npoin])), float(np.nanmax(values[:npoin]))
     if vmax == vmin:
         return None
 
+    # Subsample if too many nodes (ContourLayer uses KDE, doesn't need all points)
+    step = max(1, npoin // 5000)
+    indices = np.arange(0, npoin, step)
     points = [{"position": [float(x[i] - x_off), float(y[i] - y_off)],
                "weight": float(values[i])}
-              for i in range(npoin)]
+              for i in indices]
 
     c_color = contour_color or [0, 0, 0]
     step = (vmax - vmin) / (n_contours + 1)
@@ -145,10 +155,10 @@ def build_contour_layer_fn(tf, values, geom, n_contours=6, layer_id="contours",
         points,
         contours=contours,
         cellSize=cell_size,
-        getPosition="@@d.position",
+        getPosition="@@=d.position",
         getWeight="@@d.weight",
         pickable=False,
-        coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+        coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=[0, 0],
     )
 
@@ -164,7 +174,7 @@ def build_marker_layer(x_m, y_m, layer_id="marker"):
         radiusMinPixels=6,
         radiusMaxPixels=12,
         pickable=False,
-        coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+        coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=[0, 0],
     )
 
@@ -183,7 +193,7 @@ def build_cross_section_layer(points_m):
         widthMinPixels=2,
         widthMaxPixels=5,
         pickable=False,
-        coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+        coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=[0, 0],
     )
 
@@ -202,7 +212,7 @@ def build_particle_layer(paths, current_time, trail_length):
         currentTime=current_time,
         trailLength=trail_length,
         widthMinPixels=2,
-        coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+        coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=[0, 0],
     )
 
@@ -210,28 +220,32 @@ def build_particle_layer(paths, current_time, trail_length):
 def build_wireframe_layer(tf, geom):
     """Build mesh wireframe as line segments (triangle edges)."""
     x, y = tf.meshx, tf.meshy
-    npoin = tf.npoin2
     ikle = tf.ikle2
     x_off, y_off = geom["x_off"], geom["y_off"]
 
-    # Collect unique edges using a set
-    edges = set()
-    for e in range(tf.nelem2):
-        i0, i1, i2 = ikle[e]
-        for a, b in [(i0, i1), (i1, i2), (i2, i0)]:
-            edge = (min(a, b), max(a, b))
-            edges.add(edge)
+    # Extract unique edges using integer key encoding (faster than np.unique with axis=0)
+    e0 = np.column_stack([ikle[:, 0], ikle[:, 1]])
+    e1 = np.column_stack([ikle[:, 1], ikle[:, 2]])
+    e2 = np.column_stack([ikle[:, 2], ikle[:, 0]])
+    all_edges = np.vstack([e0, e1, e2])
+    all_edges.sort(axis=1)
+    max_node = int(all_edges.max()) + 1
+    edge_keys = all_edges[:, 0].astype(np.int64) * max_node + all_edges[:, 1].astype(np.int64)
+    unique_keys = np.unique(edge_keys)
 
     # Subsample if too many edges (>50k)
-    edge_list = list(edges)
-    step = max(1, len(edge_list) // 50000)
-    lines = []
-    for i in range(0, len(edge_list), step):
-        a, b = edge_list[i]
-        lines.append({
-            "sourcePosition": [float(x[a] - x_off), float(y[a] - y_off)],
-            "targetPosition": [float(x[b] - x_off), float(y[b] - y_off)],
-        })
+    step = max(1, len(unique_keys) // 50000)
+    sampled_keys = unique_keys[::step]
+
+    # Decode back to node pairs
+    a_idx = (sampled_keys // max_node).astype(np.int32)
+    b_idx = (sampled_keys % max_node).astype(np.int32)
+    src_x = (x[a_idx] - x_off).tolist()
+    src_y = (y[a_idx] - y_off).tolist()
+    tgt_x = (x[b_idx] - x_off).tolist()
+    tgt_y = (y[b_idx] - y_off).tolist()
+    lines = [{"sourcePosition": [sx, sy], "targetPosition": [tx, ty]}
+             for sx, sy, tx, ty in zip(src_x, src_y, tgt_x, tgt_y)]
 
     return line_layer(
         "wireframe",
@@ -241,23 +255,18 @@ def build_wireframe_layer(tf, geom):
         widthMinPixels=1,
         widthMaxPixels=1,
         pickable=False,
-        coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+        coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=[0, 0],
     )
 
 
 def build_extrema_markers(extrema, x_off, y_off):
     """Build scatterplot markers for min/max value locations."""
-    data = []
-    colors = []
-    for key in ("min", "max"):
-        _, x_m, y_m, _ = extrema[key]
-        data.append({"position": [float(x_m - x_off), float(y_m - y_off)]})
-        colors.append([0, 100, 255, 220] if key == "min" else [255, 50, 0, 220])
-
+    _colors = {"min": [0, 100, 255, 220], "max": [255, 50, 0, 220]}
     layers = []
-    for i, (key, color) in enumerate(zip(("min", "max"), colors)):
+    for key in ("min", "max"):
         _, x_m, y_m, val = extrema[key]
+        color = _colors[key]
         layers.append(scatterplot_layer(
             f"extrema-{key}",
             [{"position": [float(x_m - x_off), float(y_m - y_off)]}],
@@ -268,10 +277,10 @@ def build_extrema_markers(extrema, x_off, y_off):
             radiusMaxPixels=16,
             stroked=True,
             lineWidthMinPixels=2,
-            getFillColor=[255, 255, 255, 180] if key == "min" else [255, 255, 255, 180],
+            getFillColor=[255, 255, 255, 180],
             getLineColor=color,
             pickable=False,
-            coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+            coordinateSystem=_COORD_METER_OFFSETS,
             coordinateOrigin=[0, 0],
         ))
     return layers
@@ -289,7 +298,7 @@ def build_measurement_layer(points_m):
             widthMinPixels=2,
             widthMaxPixels=4,
             pickable=False,
-            coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+            coordinateSystem=_COORD_METER_OFFSETS,
             coordinateOrigin=[0, 0],
         ))
     for i, pt in enumerate(points_m):
@@ -302,7 +311,7 @@ def build_measurement_layer(points_m):
             radiusMinPixels=5,
             radiusMaxPixels=10,
             pickable=False,
-            coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+            coordinateSystem=_COORD_METER_OFFSETS,
             coordinateOrigin=[0, 0],
         ))
     return layers
@@ -323,6 +332,6 @@ def build_boundary_layer(tf, geom, boundary_nodes):
         radiusMinPixels=2,
         radiusMaxPixels=6,
         pickable=False,
-        coordinateSystem=COORDINATE_SYSTEM.METER_OFFSETS,
+        coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=[0, 0],
     )

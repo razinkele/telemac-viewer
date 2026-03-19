@@ -15,15 +15,12 @@ from shiny_deckgl import (
     deck_legend_control,
     reset_view_widget,
     loading_widget,
-    orbit_view,
     gimbal_widget,
-    lighting_effect,
-    ambient_light,
-    directional_light,
+    first_person_view,
 )
 
 from constants import (
-    EXAMPLES, EXAMPLE_CHOICES, PALETTES, _M2D,
+    EXAMPLES, EXAMPLE_CHOICES, PALETTES,
     cached_gradient_colors, format_time,
 )
 from geometry import build_mesh_geometry, build_mesh_geometry_3d
@@ -39,17 +36,20 @@ from layers import (
     build_measurement_layer,
     build_boundary_layer,
 )
-import subprocess
+import asyncio
+import shlex
+import threading
 import os as _os
 from analysis import (
     coord_to_meters,
+    nearest_node,
     time_series_at_point,
     cross_section_profile,
     compute_particle_paths,
     generate_seed_grid,
+    distribute_seeds_along_line,
     get_available_derived,
     compute_derived,
-    export_timeseries_csv,
     export_crosssection_csv,
     compute_mesh_quality,
     find_cas_files,
@@ -88,10 +88,179 @@ map_widget = MapWidget(
 # UI
 # ---------------------------------------------------------------------------
 
+_HELP_MODAL = ui.modal(
+    ui.navset_tab(
+        ui.nav_panel(
+            "About TELEMAC",
+            ui.div(
+                ui.h5("What is TELEMAC?"),
+                ui.p(
+                    "TELEMAC-MASCARET is an open-source suite of solvers for free-surface flow, "
+                    "wave propagation, sediment transport, and water quality modelling. "
+                    "Developed since the 1980s by EDF R&D (France) and the TELEMAC-MASCARET Consortium, "
+                    "it is widely used in hydraulic engineering, coastal and river studies, flood risk analysis, "
+                    "and environmental impact assessment."
+                ),
+                ui.h6("Modules"),
+                ui.tags.dl(
+                    ui.tags.dt("TELEMAC-2D"),
+                    ui.tags.dd("Depth-averaged shallow water equations — river flows, dam breaks, flood propagation."),
+                    ui.tags.dt("TELEMAC-3D"),
+                    ui.tags.dd("Three-dimensional hydrodynamics — estuaries, stratified flows, thermal plumes."),
+                    ui.tags.dt("TOMAWAC"),
+                    ui.tags.dd("Spectral wave modelling — nearshore wave transformation, refraction, breaking."),
+                    ui.tags.dt("ARTEMIS"),
+                    ui.tags.dd("Harbour wave agitation — short-wave diffraction and reflection in port areas."),
+                    ui.tags.dt("SISYPHE / GAIA"),
+                    ui.tags.dd("Sediment transport and morphodynamics — bedload, suspended load, bed evolution."),
+                    ui.tags.dt("WAQTEL"),
+                    ui.tags.dd("Water quality — pollutant dispersion, dissolved oxygen, thermal modelling."),
+                ),
+                ui.h6("SELAFIN format"),
+                ui.p(
+                    "TELEMAC stores results in the SELAFIN (.slf) binary format. "
+                    "Each file contains an unstructured triangular mesh, a list of variables "
+                    "(e.g. WATER DEPTH, VELOCITY U/V, FREE SURFACE, BOTTOM), "
+                    "and time-varying solution data at each node. "
+                    "This viewer reads SELAFIN files directly using the TelemacFile Python API."
+                ),
+                ui.h6("Finite Element Mesh"),
+                ui.p(
+                    "TELEMAC uses unstructured triangular finite element meshes. "
+                    "Nodes carry the solution values; elements (triangles) connect the nodes. "
+                    "Mesh density varies: finer in areas of interest (channels, structures), "
+                    "coarser in calm zones, allowing efficient computation over large domains."
+                ),
+                ui.h6("Typical workflow"),
+                ui.tags.ol(
+                    ui.tags.li("Create geometry and mesh (BlueKenue, SALOME, or QGIS)"),
+                    ui.tags.li("Write a steering file (.cas) with parameters and boundary conditions"),
+                    ui.tags.li("Run the simulation (e.g. telemac2d.py case.cas --ncsize=4)"),
+                    ui.tags.li("Visualize results in this viewer or ParaView/BlueKenue"),
+                ),
+                ui.h6("Learn more"),
+                ui.p(
+                    ui.a("opentelemac.org", href="https://www.opentelemac.org", target="_blank"),
+                    " — Official documentation, tutorials, and source code.",
+                ),
+                style="padding:8px 4px; font-size:13px;",
+            ),
+        ),
+        ui.nav_panel(
+            "Viewer Guide",
+            ui.div(
+                ui.h5("Viewer Interface Guide"),
+                ui.h6("Data Panel"),
+                ui.tags.ul(
+                    ui.tags.li(ui.tags.b("Example case"), " — Load a built-in example from TELEMAC-2D, 3D, TOMAWAC, ARTEMIS, SISYPHE, or GAIA."),
+                    ui.tags.li(ui.tags.b("Upload .slf"), " — Load your own SELAFIN result file."),
+                    ui.tags.li(ui.tags.b("Dark map background"), " — Toggle between light and dark map canvas."),
+                ),
+                ui.h6("Visualization Panel"),
+                ui.tags.ul(
+                    ui.tags.li(ui.tags.b("Variable"), " — Select which result variable to display (e.g. WATER DEPTH, VELOCITY U)."),
+                    ui.tags.li(ui.tags.b("Color palette"), " — Choose from Viridis, Plasma, Ocean, Thermal, or Chlorophyll color maps."),
+                    ui.tags.li(ui.tags.b("Velocity vectors"), " — Overlay arrow glyphs showing flow direction and magnitude."),
+                    ui.tags.li(ui.tags.b("Contour lines"), " — Show iso-value contour lines on the mesh."),
+                    ui.tags.li(ui.tags.b("Mesh wireframe"), " — Display the triangular mesh edges."),
+                    ui.tags.li(ui.tags.b("Boundary nodes"), " — Highlight nodes on the domain boundary."),
+                    ui.tags.li(ui.tags.b("Min/Max locations"), " — Mark the locations of extreme values on the mesh."),
+                    ui.tags.li(ui.tags.b("Log scale"), " — Apply logarithmic color scaling for variables with large ranges."),
+                    ui.tags.li(ui.tags.b("Reverse palette"), " — Invert the color ramp direction."),
+                    ui.tags.li(ui.tags.b("Difference mode"), " — Show the difference between the current timestep and a reference."),
+                    ui.tags.li(ui.tags.b("Color range"), " — Manually set min/max values for the color scale."),
+                    ui.tags.li(ui.tags.b("Filter range"), " — Gray out values outside a specified range."),
+                    ui.tags.li(ui.tags.b("Cross-Section"), " — Click two points to create a profile line; view elevation/value cross-section plots."),
+                    ui.tags.li(ui.tags.b("Discharge"), " — Compute volumetric flow rate across the cross-section line."),
+                    ui.tags.li(ui.tags.b("Particle traces"), " — Animate flow pathlines from a seed grid."),
+                    ui.tags.li(ui.tags.b("Mesh quality"), " — Color the mesh by element quality (aspect ratio)."),
+                    ui.tags.li(ui.tags.b("Slope/gradient"), " — Visualize the spatial gradient magnitude of the selected variable."),
+                    ui.tags.li(ui.tags.b("Courant number"), " — Display the local CFL condition number."),
+                    ui.tags.li(ui.tags.b("Element area"), " — Color-code triangles by their area."),
+                    ui.tags.li(ui.tags.b("Measure Distance"), " — Click two points to measure Euclidean distance."),
+                    ui.tags.li(ui.tags.b("Custom expression"), " — Compute derived fields using math expressions (e.g. ", ui.tags.code("VELOCITY_U**2 + VELOCITY_V**2"), ")."),
+                    ui.tags.li(ui.tags.b("3D mode"), " — Switch to 3D perspective view for multi-layer (3D) result files."),
+                ),
+                ui.h6("Playback Panel"),
+                ui.tags.ul(
+                    ui.tags.li(ui.tags.b("Time slider"), " — Scrub through simulation timesteps."),
+                    ui.tags.li(ui.tags.b("Play/Pause"), " — Animate through timesteps automatically."),
+                    ui.tags.li(ui.tags.b("Go to time"), " — Jump to a specific simulation time in seconds."),
+                    ui.tags.li(ui.tags.b("Speed"), " — Control animation speed (seconds per frame)."),
+                    ui.tags.li(ui.tags.b("Loop"), " — Restart animation from the beginning when it reaches the end."),
+                ),
+                ui.h6("Statistics Panel"),
+                ui.tags.ul(
+                    ui.tags.li(ui.tags.b("Stats"), " — Current timestep statistics: min, max, mean, std dev."),
+                    ui.tags.li(ui.tags.b("All Vars Time Series"), " — Plot all variables over time at a clicked node."),
+                    ui.tags.li(ui.tags.b("Value Histogram"), " — Distribution histogram of the current variable."),
+                    ui.tags.li(ui.tags.b("Compute Integral"), " — Area-weighted integral of the variable over the domain."),
+                    ui.tags.li(ui.tags.b("Temporal Stats"), " — Compute min/max/mean over all timesteps."),
+                ),
+                ui.h6("File Info Panel"),
+                ui.tags.ul(
+                    ui.tags.li("View metadata: mesh size, variable count, time range, precision, module type."),
+                ),
+                ui.h6("Run Simulation Panel"),
+                ui.tags.ul(
+                    ui.tags.li("Select a .cas steering file and run TELEMAC directly from the viewer."),
+                    ui.tags.li("Monitor console output in real time."),
+                ),
+                style="padding:8px 4px; font-size:13px;",
+            ),
+        ),
+        ui.nav_panel(
+            "Keyboard Shortcuts",
+            ui.div(
+                ui.h5("Keyboard Shortcuts"),
+                ui.tags.table(
+                    ui.tags.thead(
+                        ui.tags.tr(ui.tags.th("Key", style="width:140px"), ui.tags.th("Action")),
+                    ),
+                    ui.tags.tbody(
+                        ui.tags.tr(ui.tags.td(ui.tags.kbd("Space")), ui.tags.td("Play / Pause animation")),
+                        ui.tags.tr(ui.tags.td(ui.tags.kbd("\u2192 Right Arrow")), ui.tags.td("Next timestep")),
+                        ui.tags.tr(ui.tags.td(ui.tags.kbd("\u2190 Left Arrow")), ui.tags.td("Previous timestep")),
+                        ui.tags.tr(ui.tags.td(ui.tags.kbd("Page Down")), ui.tags.td("Next variable")),
+                        ui.tags.tr(ui.tags.td(ui.tags.kbd("Page Up")), ui.tags.td("Previous variable")),
+                    ),
+                    class_="table table-sm table-striped",
+                    style="max-width:400px;",
+                ),
+                ui.h6("Map controls"),
+                ui.tags.table(
+                    ui.tags.thead(
+                        ui.tags.tr(ui.tags.th("Action", style="width:180px"), ui.tags.th("How")),
+                    ),
+                    ui.tags.tbody(
+                        ui.tags.tr(ui.tags.td("Pan"), ui.tags.td("Click and drag")),
+                        ui.tags.tr(ui.tags.td("Zoom"), ui.tags.td("Scroll wheel or +/- buttons")),
+                        ui.tags.tr(ui.tags.td("Reset view"), ui.tags.td("Reset View widget button")),
+                        ui.tags.tr(ui.tags.td("Screenshot"), ui.tags.td("Screenshot widget button")),
+                        ui.tags.tr(ui.tags.td("Fullscreen"), ui.tags.td("Fullscreen widget button")),
+                    ),
+                    class_="table table-sm table-striped",
+                    style="max-width:400px;",
+                ),
+                style="padding:8px 4px; font-size:13px;",
+            ),
+        ),
+    ),
+    title="Help — TELEMAC Viewer",
+    size="xl",
+    easy_close=True,
+)
+
 app_ui = ui.page_sidebar(
     ui.sidebar(
         ui.div(
-            ui.h5("TELEMAC Viewer", style="display:inline"),
+            ui.input_action_button(
+                "help_btn", "",
+                icon=ui.tags.i(class_="bi bi-question-circle-fill"),
+                class_="btn btn-sm btn-outline-secondary p-1",
+                style="font-size:16px; line-height:1;",
+            ),
+            ui.h5("TELEMAC Viewer", style="display:inline; margin:0 8px;"),
             ui.input_dark_mode(id="dark_mode", mode="light"),
             class_="d-flex justify-content-between align-items-center mb-2",
         ),
@@ -201,6 +370,10 @@ app_ui = ui.page_sidebar(
     ),
     ui.card(
         head_includes(),
+        ui.tags.link(
+            rel="stylesheet",
+            href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css",
+        ),
         ui.div(
             map_widget.ui(height="100%"),
             id="map-container",
@@ -241,6 +414,32 @@ app_ui = ui.page_sidebar(
 
 
 def server(input, output, session):
+    _tf_lock = threading.Lock()
+
+    def _run_with_lock(fn, *args):
+        """Run fn(*args) while holding the TelemacFile lock."""
+        with _tf_lock:
+            return fn(*args)
+
+    # -----------------------------------------------------------------------
+    # Reactive dependency chain:
+    #   tel_file() -> mesh_geom(), current_var(), current_tidx()
+    #   current_var() + current_tidx() -> current_values()
+    #   effective_values() wraps current_values() with override cascade:
+    #     expression > mesh quality > slope > Courant > elem area >
+    #     temporal stats > difference mode > current values
+    #   update_map() is the terminal leaf consuming all of the above.
+    #
+    # Topology-only calcs (mesh_quality_values, elem_area_values,
+    # boundary_nodes_cached) depend only on tel_file(), not timestep.
+    #
+    # Coordinate systems (see geometry.py docstring for details):
+    #   - Mesh meters: original TELEMAC CRS (x_off/y_off = bounding box center)
+    #   - Centered meters: mesh meters minus x_off/y_off (used by all layers)
+    #   - Pseudo-degrees: centered meters as interpreted by deck.gl's
+    #     METER_OFFSETS mode; map clicks return these, converted via
+    #     coord_to_meters() back to mesh meters.
+    # -----------------------------------------------------------------------
     playing = reactive.value(False)
     last_file_path = reactive.value("")
     analysis_mode = reactive.value("none")
@@ -248,33 +447,71 @@ def server(input, output, session):
     cross_section_points = reactive.value(None)  # [[x_m, y_m], ...] or None
     particle_paths = reactive.value(None)  # list of paths or None
     is_3d_mode = reactive.value(False)
-    sim_process = reactive.value(None)  # subprocess.Popen or None
+    sim_process = reactive.value(None)  # asyncio.Process or None
     sim_output = reactive.value("")  # accumulated console output
     sim_running = reactive.value(False)
     temporal_stats_cache = reactive.value(None)  # dict with min/max/mean arrays
-    measure_points = reactive.value([])  # list of [x_centered, y_centered] (max 2)
+    measure_points = reactive.value([])  # list of [x_mesh_m, y_mesh_m] (max 2)
     measure_mode = reactive.value(False)  # True when waiting for measurement clicks
+
+    # -- Help modal --
+    @reactive.effect
+    @reactive.event(input.help_btn)
+    def _show_help():
+        ui.modal_show(_HELP_MODAL)
 
     # -- Core reactive calcs --
 
+    _prev_tel_file = [None]  # plain list to avoid reactive dependency
+
     @reactive.calc
     def tel_file():
+        # Close previous file to avoid leaking file descriptors
+        if _prev_tel_file[0] is not None:
+            with _tf_lock:
+                try:
+                    _prev_tel_file[0].close()
+                except Exception:
+                    pass
         uploaded = input.upload()
         if uploaded:
             path = uploaded[0]["datapath"]
         else:
             path = EXAMPLES[input.example()]
-        return TelemacFile(path)
+        try:
+            tf = TelemacFile(path)
+        except Exception as e:
+            ui.notification_show(f"Failed to open file: {e}", type="error", duration=8)
+            # Re-raise to halt reactive chain — Shiny shows error state
+            raise
+        _prev_tel_file[0] = tf
+        # Clear transient state from previous file
+        particle_paths.set(None)
+        cross_section_points.set(None)
+        clicked_points.set([])
+        temporal_stats_cache.set(None)
+        integral_result.set(None)
+        expr_result.set(None)
+        measure_points.set([])
+        measure_mode.set(False)
+        analysis_mode.set("none")
+        return tf
 
     @reactive.calc
     def mesh_geom():
         tf = tel_file()
         if is_3d_mode.get() and tf.nplan > 1:
-            z_scale = input.z_scale() if input.z_scale() is not None else 10
+            try:
+                z_scale = input.z_scale() if input.z_scale() is not None else 10
+            except (AttributeError, KeyError):
+                z_scale = 10
             try:
                 z_name = tf.get_z_name()
                 z_vals = tf.get_data_value(z_name, current_tidx())
-            except Exception:
+            except Exception as e:
+                ui.notification_show(
+                    f"Cannot read Z elevation: {e}. Showing flat mesh.",
+                    type="warning", duration=8, id="z_warn")
                 z_vals = np.zeros(tf.npoin2, dtype=np.float32)
             return build_mesh_geometry_3d(tf, z_vals, z_scale)
         return build_mesh_geometry(tf)
@@ -302,6 +539,20 @@ def server(input, output, session):
         if var in derived:
             return compute_derived(tf, var, tidx)
         return tf.get_data_value(var, tidx)
+
+    # -- Topology-only reactive calcs (independent of timestep) --
+
+    @reactive.calc
+    def mesh_quality_values():
+        return compute_mesh_quality(tel_file())
+
+    @reactive.calc
+    def elem_area_values():
+        return compute_element_area(tel_file())
+
+    @reactive.calc
+    def boundary_nodes_cached():
+        return find_boundary_nodes(tel_file())
 
     # -- Dynamic UI --
 
@@ -367,7 +618,9 @@ def server(input, output, session):
     @render.ui
     def filter_ui():
         vals = current_values()
-        vmin, vmax = float(vals.min()), float(vals.max())
+        vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
+        if np.isnan(vmin) or vmax <= vmin:
+            vmin, vmax = 0.0, 1.0
         step = round((vmax - vmin) / 100, 4) if vmax > vmin else 0.01
         return ui.input_slider(
             "filter_range", "Value filter",
@@ -428,8 +681,10 @@ def server(input, output, session):
             z_name = tf.get_z_name()
             z_vals = tf.get_data_value(z_name, 0)
             depth_range = float(z_vals.max() - z_vals.min())
-        except Exception:
-            depth_range = 1.0
+        except Exception as e:
+            ui.notification_show(
+                f"Cannot determine depth range: {e}", type="warning", duration=5, id="zscale_warn")
+            depth_range = 0.0
         default_scale = min(50, int(geom["extent_m"] / depth_range)) if depth_range > 0 else 10
         return ui.input_slider(
             "z_scale", "Z Scale",
@@ -513,14 +768,14 @@ def server(input, output, session):
                 return go.Figure()
             fig = go.Figure()
             for i, pt in enumerate(pts):
-                elevations, values = vertical_profile_at_point(tf, var, tidx, pt[0], pt[1])
+                elevations, values, elev_label = vertical_profile_at_point(tf, var, tidx, pt[0], pt[1])
                 if len(elevations) > 0:
                     fig.add_trace(go.Scatter(
                         x=values, y=elevations, mode="lines+markers",
                         name=f"Pt {i+1} ({pt[0]:.0f}, {pt[1]:.0f})",
                     ))
             fig.update_layout(
-                xaxis_title=var, yaxis_title="Elevation (m)",
+                xaxis_title=var, yaxis_title=elev_label,
                 margin=dict(l=50, r=20, t=10, b=40), height=220,
             )
             return fig
@@ -572,9 +827,7 @@ def server(input, output, session):
         # Measurement mode intercepts clicks
         if measure_mode.get():
             pts = measure_points.get().copy()
-            # Store centered coordinates for layer rendering
-            x_c, y_c = float(x_m - geom["x_off"]), float(y_m - geom["y_off"])
-            pts.append([x_c, y_c])
+            pts.append([x_m, y_m])
             measure_points.set(pts)
             if len(pts) >= 2:
                 measure_mode.set(False)
@@ -614,43 +867,18 @@ def server(input, output, session):
                 continue
             coords = feat["geometry"]["coordinates"]
             geom = mesh_geom()
-            poly_m = []
-            for c in coords:
-                x_m = float(c[0]) * _M2D + geom["x_off"]
-                y_m = float(c[1]) * _M2D + geom["y_off"]
-                poly_m.append([x_m, y_m])
+            poly_m = [list(coord_to_meters(c[0], c[1], geom["x_off"], geom["y_off"]))
+                      for c in coords]
 
             if input.particles():
-                # Seed line mode: distribute ~100 particles along drawn line
-                n_seeds = 100
-                seeds = []
-                total_len = sum(
-                    np.sqrt((poly_m[i+1][0]-poly_m[i][0])**2 + (poly_m[i+1][1]-poly_m[i][1])**2)
-                    for i in range(len(poly_m)-1)
-                )
-                step_dist = total_len / n_seeds if total_len > 0 else 1
-                dist = 0
-                seg = 0
-                for s in range(n_seeds):
-                    target = s * step_dist
-                    while seg < len(poly_m) - 1:
-                        seg_len = np.sqrt(
-                            (poly_m[seg+1][0]-poly_m[seg][0])**2 +
-                            (poly_m[seg+1][1]-poly_m[seg][1])**2
-                        )
-                        if dist + seg_len >= target:
-                            t = (target - dist) / seg_len if seg_len > 0 else 0
-                            x = poly_m[seg][0] + t * (poly_m[seg+1][0] - poly_m[seg][0])
-                            y = poly_m[seg][1] + t * (poly_m[seg+1][1] - poly_m[seg][1])
-                            seeds.append([x, y])
-                            break
-                        dist += seg_len
-                        seg += 1
-
+                seeds = distribute_seeds_along_line(poly_m, n_seeds=100)
                 tf = tel_file()
                 ui.notification_show("Computing particle paths from seed line...",
                                      duration=None, id="particle_notif")
-                paths = compute_particle_paths(tf, seeds, geom["x_off"], geom["y_off"])
+                loop = asyncio.get_running_loop()
+                x_off, y_off = geom["x_off"], geom["y_off"]
+                paths = await loop.run_in_executor(
+                    None, _run_with_lock, compute_particle_paths, tf, seeds, x_off, y_off)
                 particle_paths.set(paths)
                 ui.notification_remove("particle_notif")
                 ui.notification_show(f"Computed {len(paths)} particle paths", duration=3)
@@ -674,14 +902,17 @@ def server(input, output, session):
 
     @reactive.effect
     @reactive.event(input.particles)
-    def handle_particles_toggle():
+    async def handle_particles_toggle():
         if input.particles():
             tf = tel_file()
             geom = mesh_geom()
             ui.notification_show("Computing particle trajectories...",
                                  duration=None, id="particle_notif")
             seeds = generate_seed_grid(tf, n_target=500)
-            paths = compute_particle_paths(tf, seeds, geom["x_off"], geom["y_off"])
+            x_off, y_off = geom["x_off"], geom["y_off"]
+            loop = asyncio.get_running_loop()
+            paths = await loop.run_in_executor(
+                None, _run_with_lock, compute_particle_paths, tf, seeds, x_off, y_off)
             particle_paths.set(paths)
             ui.notification_remove("particle_notif")
             ui.notification_show(f"Computed {len(paths)} particle paths", duration=3)
@@ -719,10 +950,12 @@ def server(input, output, session):
         reactive.invalidate_later(speed)
         tf = tel_file()
         n = len(tf.times)
-        current = input.time_idx() if input.time_idx() is not None else 0
+        with reactive.isolate():
+            current = input.time_idx() if input.time_idx() is not None else 0
+            loop = input.loop()
         next_idx = current + 1
         if next_idx >= n:
-            if input.loop():
+            if loop:
                 next_idx = 0
             else:
                 playing.set(False)
@@ -732,19 +965,32 @@ def server(input, output, session):
 
     # -- Discharge computation --
 
+    @reactive.calc
+    def discharge_result():
+        xsec = cross_section_points.get()
+        if xsec is None:
+            return None
+        return compute_discharge(tel_file(), current_tidx(), xsec)
+
     @output
     @render.ui
     def discharge_ui():
-        xsec = cross_section_points.get()
-        if xsec is None:
+        result = discharge_result()
+        if result is None:
             return ui.div()
-        tf = tel_file()
-        tidx = current_tidx()
-        result = compute_discharge(tf, tidx, xsec)
+        if result["total_q"] is None:
+            return ui.div(
+                ui.span(result.get("error", "Cannot compute discharge"),
+                        class_="text-warning small"),
+                class_="mb-1",
+            )
         q = result["total_q"]
+        skipped = result.get("skipped", 0)
+        skip_text = f", {skipped} skipped" if skipped else ""
         return ui.div(
-            ui.strong(f"Q = {q:.4f} m³/s", class_="small"),
-            ui.span(f" ({len(result['segments'])} segments)", class_="text-muted small"),
+            ui.strong(f"Q = {q:.4f} m\u00b3/s", class_="small"),
+            ui.span(f" ({len(result['segments'])} segments{skip_text})",
+                    class_="text-muted small"),
             class_="mb-1",
         )
 
@@ -804,19 +1050,15 @@ def server(input, output, session):
         coord = hover["coordinate"]
         tf = tel_file()
         geom = mesh_geom()
-        x, y = tf.meshx, tf.meshy
-        npoin = tf.npoin2
-        px = float(coord[0]) * _M2D + geom["x_off"]
-        py = float(coord[1]) * _M2D + geom["y_off"]
-        dists = (x[:npoin] - px)**2 + (y[:npoin] - py)**2
-        nearest = int(np.argmin(dists))
+        px, py = coord_to_meters(coord[0], coord[1], geom["x_off"], geom["y_off"])
+        idx, nx, ny = nearest_node(tf, px, py)
         vals = current_values()
         var = current_var()
-        val = float(vals[nearest])
+        val = float(vals[idx])
         return ui.div(
             ui.strong(f"{var}: {val:.4f}"),
             ui.br(),
-            ui.span(f"Node {nearest} ({x[nearest]:.1f}, {y[nearest]:.1f})",
+            ui.span(f"Node {idx} ({nx:.1f}, {ny:.1f})",
                      class_="text-muted small"),
         )
 
@@ -824,12 +1066,13 @@ def server(input, output, session):
 
     @reactive.effect
     @reactive.event(input.compute_temporal)
-    def handle_compute_temporal():
+    async def handle_compute_temporal():
         tf = tel_file()
         var = current_var()
         ui.notification_show(f"Computing temporal stats for {var}...",
                              duration=None, id="temporal_notif")
-        stats = compute_temporal_stats(tf, var)
+        loop = asyncio.get_running_loop()
+        stats = await loop.run_in_executor(None, _run_with_lock, compute_temporal_stats, tf, var)
         temporal_stats_cache.set(stats)
         ui.notification_remove("temporal_notif")
         ui.notification_show("Temporal statistics computed", duration=3)
@@ -869,23 +1112,20 @@ def server(input, output, session):
             return ui.div()
         tf = tel_file()
         tidx = current_tidx()
-        x, y = tf.meshx, tf.meshy
-        npoin = tf.npoin2
         # Show info for the last clicked point
         px, py = pts[-1]
-        dists = (x[:npoin] - px)**2 + (y[:npoin] - py)**2
-        nearest = int(np.argmin(dists))
+        idx, nx, ny = nearest_node(tf, px, py)
         rows = []
         for vname in tf.varnames:
-            val = float(tf.get_data_value(vname, tidx)[nearest])
+            val = float(tf.get_data_value(vname, tidx)[idx])
             rows.append(ui.div(
                 ui.span(vname, class_="text-muted", style="width:140px;display:inline-block;font-size:11px;"),
                 ui.strong(f"{val:.4f}", style="font-size:11px;"),
                 class_="mb-0",
             ))
         return ui.div(
-            ui.strong(f"Node {nearest}", class_="small"),
-            ui.span(f" ({x[nearest]:.1f}, {y[nearest]:.1f})", class_="text-muted small"),
+            ui.strong(f"Node {idx}", class_="small"),
+            ui.span(f" ({nx:.1f}, {ny:.1f})", class_="text-muted small"),
             ui.div(*rows, style="max-height:120px; overflow-y:auto; margin-top:4px;"),
             class_="mt-2 border-top pt-2",
         )
@@ -950,8 +1190,7 @@ def server(input, output, session):
             )
         coord = hover["coordinate"]
         geom = mesh_geom()
-        x_m = float(coord[0]) * _M2D + geom["x_off"]
-        y_m = float(coord[1]) * _M2D + geom["y_off"]
+        x_m, y_m = coord_to_meters(coord[0], coord[1], geom["x_off"], geom["y_off"])
         return ui.div(
             ui.span(f"X: {x_m:.2f} m  Y: {y_m:.2f} m", style="font-family:monospace;"),
             style="font-size:11px; padding:2px 8px; border-top:1px solid #ddd; background:#f8f9fa;",
@@ -1078,8 +1317,12 @@ def server(input, output, session):
         nplan = getattr(tf, 'nplan', 0)
         dim = "3D" if nplan > 1 else "2D"
         date_info = ""
-        if hasattr(tf, 'datetime') and tf.datetime:
-            date_info = str(tf.datetime[0]) if isinstance(tf.datetime, (list, tuple)) else str(tf.datetime)
+        if hasattr(tf, 'datetime') and tf.datetime is not None:
+            dt_val = tf.datetime
+            if hasattr(dt_val, '__len__') and len(dt_val) > 0:
+                date_info = str(dt_val[0])
+            else:
+                date_info = str(dt_val)
 
         rows = [
             ("Type", f"{dim} ({nplan} planes)" if nplan > 1 else dim),
@@ -1168,30 +1411,33 @@ def server(input, output, session):
         if er is not None:
             return er
         if input.mesh_quality():
-            tf = tel_file()
-            return compute_mesh_quality(tf)
+            return mesh_quality_values()
         if input.show_slope():
-            tf = tel_file()
-            return compute_slope(tf, current_values())
+            return compute_slope(tel_file(), current_values())
         if input.show_courant():
-            tf = tel_file()
-            tidx = current_tidx()
-            cfl = compute_courant_number(tf, tidx)
+            cfl = compute_courant_number(tel_file(), current_tidx())
             if cfl is not None:
                 return cfl
+            ui.notification_show("Courant number requires VELOCITY U/V variables",
+                                 type="warning", duration=4, id="cfl_warn")
         if input.show_elem_area():
-            tf = tel_file()
-            return compute_element_area(tf)
+            return elem_area_values()
         # Temporal stats display
         stats = temporal_stats_cache.get()
-        td = input.temporal_display() if input.temporal_display() else "none"
+        try:
+            td = input.temporal_display() or "none"
+        except (AttributeError, KeyError):
+            td = "none"
         if stats is not None and td != "none":
             return stats[td]
         if input.diff_mode():
             tf = tel_file()
             var = current_var()
             tidx = current_tidx()
-            ref = input.ref_tidx() if input.ref_tidx() is not None else 0
+            try:
+                ref = input.ref_tidx() if input.ref_tidx() is not None else 0
+            except (AttributeError, KeyError):
+                ref = 0
             return compute_difference(tf, var, tidx, ref)
         return current_values()
 
@@ -1237,7 +1483,10 @@ def server(input, output, session):
             return
         path = EXAMPLES.get(input.example(), "")
         cas_files = find_cas_files(path)
-        cas_name = input.cas_file() if input.cas_file() else None
+        try:
+            cas_name = input.cas_file() if input.cas_file() else None
+        except (AttributeError, KeyError):
+            cas_name = None
         if not cas_name or cas_name not in cas_files:
             ui.notification_show("No .cas file selected", type="warning", duration=3)
             return
@@ -1248,32 +1497,42 @@ def server(input, output, session):
 
         # Build command
         runner = f"{module}.py"
-        cmd = [runner, cas_name, f"--ncsize={ncores}"]
+        cmd_display = f"{runner} {cas_name} --ncsize={ncores}"
 
-        sim_output.set(f"$ cd {cas_dir}\n$ {' '.join(cmd)}\n\n")
+        sim_output.set(f"$ cd {cas_dir}\n$ {cmd_display}\n\n")
         sim_running.set(True)
 
         try:
-            # Source TELEMAC env and run
+            # Source TELEMAC env and run (quote all paths for shell safety)
             env_script = "/home/razinka/telemac/telemac-v8p5r1/configs/pysource.local.sh"
-            shell_cmd = f"source {env_script} && cd {cas_dir} && {' '.join(cmd)} 2>&1"
-            proc = subprocess.Popen(
-                ["bash", "-c", shell_cmd],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
+            shell_cmd = (f"source {shlex.quote(env_script)} && "
+                         f"cd {shlex.quote(cas_dir)} && "
+                         f"{shlex.quote(runner)} {shlex.quote(cas_name)} "
+                         f"--ncsize={int(ncores)} 2>&1")
+            proc = await asyncio.create_subprocess_shell(
+                shell_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
             )
             sim_process.set(proc)
 
-            # Read output incrementally
-            buf = sim_output.get()
-            for line in iter(proc.stdout.readline, ""):
-                buf += line
-                sim_output.set(buf)
-                await reactive.flush()
-            proc.wait()
-            buf += f"\n--- Process exited with code {proc.returncode} ---\n"
-            sim_output.set(buf)
+            # Read output incrementally, capped at 500 lines
+            lines_buf = [sim_output.get()]
+            line_count = 0
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                lines_buf.append(line.decode())
+                line_count += 1
+                if len(lines_buf) > 500:
+                    lines_buf = lines_buf[-500:]
+                if line_count % 10 == 0:
+                    sim_output.set("".join(lines_buf))
+                    await reactive.flush()
+            await proc.wait()
+            lines_buf.append(f"\n--- Process exited with code {proc.returncode} ---\n")
+            sim_output.set("".join(lines_buf))
         except Exception as e:
             sim_output.set(sim_output.get() + f"\nERROR: {e}\n")
         finally:
@@ -1284,7 +1543,7 @@ def server(input, output, session):
     @reactive.event(input.stop_sim)
     def handle_stop_sim():
         proc = sim_process.get()
-        if proc and proc.poll() is None:
+        if proc and proc.returncode is None:
             proc.terminate()
             sim_output.set(sim_output.get() + "\n--- Terminated by user ---\n")
             sim_running.set(False)
@@ -1309,7 +1568,10 @@ def server(input, output, session):
             palette_id = "_diverging"
 
         # Display variable label
-        td = input.temporal_display() if input.temporal_display() else "none"
+        try:
+            td = input.temporal_display() or "none"
+        except (AttributeError, KeyError):
+            td = "none"
         if expr_result.get() is not None:
             display_var = f"EXPR: {input.expr_input()}"
         elif input.mesh_quality():
@@ -1323,7 +1585,10 @@ def server(input, output, session):
         elif td != "none" and temporal_stats_cache.get() is not None:
             display_var = f"{var} (temporal {td})"
         elif input.diff_mode():
-            ref = input.ref_tidx() if input.ref_tidx() is not None else 0
+            try:
+                ref = input.ref_tidx() if input.ref_tidx() is not None else 0
+            except (AttributeError, KeyError):
+                ref = 0
             display_var = f"Δ {var} (t{tidx}-t{ref})"
         else:
             display_var = var
@@ -1341,15 +1606,18 @@ def server(input, output, session):
             if cmin is not None and cmax is not None:
                 crange = (cmin, cmax)
 
-        # Feature 1: pass filter_range to layer builder
         filt = input.filter_range() if input.filter_range() is not None else None
         use_log = input.log_scale() if input.log_scale() else False
         reverse = input.reverse_palette() if input.reverse_palette() else False
-        lyr, vmin, vmax = build_mesh_layer(geom, values, palette_id,
+        lyr, vmin, vmax, log_applied = build_mesh_layer(geom, values, palette_id,
                                            filter_range=filt,
                                            color_range_override=crange,
                                            log_scale=use_log,
                                            reverse_palette=reverse)
+        if use_log and not log_applied:
+            ui.notification_show(
+                "Log scale requires positive values — using linear scale",
+                type="warning", duration=3, id="log_warn")
 
         layers = [lyr]
 
@@ -1358,8 +1626,7 @@ def server(input, output, session):
 
         # Boundary nodes
         if input.boundary_nodes():
-            bnodes = find_boundary_nodes(tf)
-            layers.append(build_boundary_layer(tf, geom, bnodes))
+            layers.append(build_boundary_layer(tf, geom, boundary_nodes_cached()))
 
         # Min/max location markers
         if input.show_extrema():
@@ -1405,10 +1672,11 @@ def server(input, output, session):
             trail = input.trail_length() if input.trail_length() is not None else 1.0
             layers.append(build_particle_layer(paths, current_time, trail))
 
-        # Measurement line
+        # Measurement line (convert mesh-meter coords to centered for layer)
         mpts = measure_points.get()
         if mpts:
-            layers.extend(build_measurement_layer(mpts))
+            mpts_centered = [[p[0] - geom["x_off"], p[1] - geom["y_off"]] for p in mpts]
+            layers.extend(build_measurement_layer(mpts_centered))
 
         gradient_colors = cached_gradient_colors(palette_id, reverse=reverse)
         legend = deck_legend_control(
@@ -1451,18 +1719,12 @@ def server(input, output, session):
         if input.dark_bg():
             kwargs["style"] = "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%231a1a2e%22%7D%7D%5D%7D"
 
-        # 3D mode: add gimbal, orbit view, lighting
+        # 3D mode: add gimbal widget and first-person view
         if is_3d_mode.get():
             widgets.append(gimbal_widget())
-            kwargs["views"] = [orbit_view(
-                target=[0, 0, 0],
-                rotationX=-30,
-                rotationOrbit=-30,
-                zoom=geom["zoom"],
-            )]
-            kwargs["effects"] = [lighting_effect(
-                ambient_light(intensity=0.4),
-                directional_light(direction=[-1, -3, -1], intensity=0.8),
+            kwargs["views"] = [first_person_view(
+                focalDistance=10,
+                maxPitchAngle=80,
             )]
 
         await map_widget.update(

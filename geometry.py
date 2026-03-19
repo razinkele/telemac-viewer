@@ -5,7 +5,16 @@ from constants import _M2D
 
 
 def build_mesh_geometry(tf):
-    """Build static mesh geometry arrays for SimpleMeshLayer."""
+    """Build mesh geometry for SimpleMeshLayer.
+
+    Transforms TELEMAC mesh coordinates (arbitrary metric CRS) into
+    centered-meter coordinates by subtracting the bounding box center
+    (x_off, y_off). All layer rendering uses these centered coordinates
+    via deck.gl's METER_OFFSETS coordinate system.
+
+    Returns dict with positions (flat float32 list), indices (flat int32
+    list), x_off/y_off (mesh center for round-trip), extent_m, zoom.
+    """
     x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
     ikle = tf.ikle2

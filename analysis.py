@@ -1,6 +1,8 @@
 # analysis.py
 import io
 import os
+import ast
+import operator
 import numpy as np
 from constants import _M2D
 
@@ -21,7 +23,7 @@ DERIVED_VARIABLES = {
     },
     "VORTICITY": {
         "requires": ["VELOCITY U", "VELOCITY V"],
-        "compute": None,  # needs mesh info, computed separately
+        "compute": "vorticity",  # special: uses mesh gradient, handled in compute_derived
     },
 }
 
@@ -31,8 +33,6 @@ def get_available_derived(tf):
     varnames = [v.strip() for v in tf.varnames]
     available = []
     for name, spec in DERIVED_VARIABLES.items():
-        if name == "VORTICITY":
-            continue  # skip for now — needs gradient computation
         if all(r in varnames for r in spec["requires"]):
             available.append(name)
     return available
@@ -41,7 +41,34 @@ def get_available_derived(tf):
 def compute_derived(tf, varname, tidx):
     """Compute a derived variable. Returns numpy array."""
     spec = DERIVED_VARIABLES[varname]
+    if spec["compute"] == "vorticity":
+        return _compute_vorticity(tf, tidx)
     return spec["compute"](tf, tidx)
+
+
+def _compute_vorticity(tf, tidx):
+    """Compute vorticity (dv/dx - du/dy) on the mesh using per-element gradients."""
+    x, y = tf.meshx, tf.meshy
+    npoin = tf.npoin2
+    ikle = tf.ikle2
+    i0, i1, i2 = ikle[:, 0], ikle[:, 1], ikle[:, 2]
+
+    u = tf.get_data_value("VELOCITY U", tidx)
+    v = tf.get_data_value("VELOCITY V", tidx)
+
+    # Area * 2 for each element
+    area2 = (x[i1] - x[i0]) * (y[i2] - y[i0]) - (x[i2] - x[i0]) * (y[i1] - y[i0])
+    safe_area2 = np.where(np.abs(area2) < 1e-30, 1.0, area2)
+
+    # dv/dx
+    dv_dx = (v[i0] * (y[i1] - y[i2]) + v[i1] * (y[i2] - y[i0]) + v[i2] * (y[i0] - y[i1])) / safe_area2
+    # du/dy
+    du_dy = (u[i0] * (x[i2] - x[i1]) + u[i1] * (x[i0] - x[i2]) + u[i2] * (x[i1] - x[i0])) / safe_area2
+
+    elem_vort = dv_dx - du_dy
+    elem_vort[np.abs(area2) < 1e-30] = 0.0
+
+    return _sanitize_result(_scatter_to_vertices(ikle, elem_vort, npoin).astype(np.float32))
 
 
 def export_timeseries_csv(times, values, varname):
@@ -70,12 +97,13 @@ def compute_discharge(tf, tidx, polyline_m):
     """
     varnames = [v.strip() for v in tf.varnames]
     if "VELOCITY U" not in varnames or "VELOCITY V" not in varnames:
-        return {"total_q": 0.0, "segments": []}
+        return {"total_q": None, "segments": [], "error": "Missing VELOCITY U/V variables"}
     if "WATER DEPTH" not in varnames:
-        return {"total_q": 0.0, "segments": []}
+        return {"total_q": None, "segments": [], "error": "Missing WATER DEPTH variable"}
 
     total_q = 0.0
     segments = []
+    skipped = 0
 
     for i in range(len(polyline_m) - 1):
         x1, y1 = polyline_m[i]
@@ -94,6 +122,7 @@ def compute_discharge(tf, tidx, polyline_m):
             v = float(tf.get_data_on_points("VELOCITY V", tidx, [[mx, my]])[0])
             h = float(tf.get_data_on_points("WATER DEPTH", tidx, [[mx, my]])[0])
         except Exception:
+            skipped += 1
             continue
 
         # Q = (V · n) * h * length
@@ -102,63 +131,75 @@ def compute_discharge(tf, tidx, polyline_m):
         total_q += q
         segments.append({"length": seg_len, "q": q, "depth": h, "velocity_n": vn})
 
-    return {"total_q": total_q, "segments": segments}
+    return {"total_q": total_q, "segments": segments, "skipped": skipped}
+
+
+def _element_areas(tf):
+    """Vectorized element area computation. Returns (nelem,) float64 array."""
+    x, y = tf.meshx, tf.meshy
+    ikle = tf.ikle2
+    i0, i1, i2 = ikle[:, 0], ikle[:, 1], ikle[:, 2]
+    return np.abs((x[i1] - x[i0]) * (y[i2] - y[i0]) -
+                  (x[i2] - x[i0]) * (y[i1] - y[i0])) / 2.0
+
+
+def _scatter_to_vertices(ikle, elem_values, npoin):
+    """Scatter per-element values to vertices (average). Returns (npoin,) float64."""
+    nodes = ikle.ravel()
+    weights = np.repeat(elem_values, 3)
+    vertex_sum = np.bincount(nodes, weights=weights, minlength=npoin).astype(np.float64)
+    vertex_count = np.bincount(nodes, minlength=npoin).astype(np.float64)
+    mask = vertex_count > 0
+    vertex_sum[mask] /= vertex_count[mask]
+    return vertex_sum
+
+
+def _sanitize_result(arr):
+    """Replace NaN/Inf with 0 in computed field results."""
+    if not np.all(np.isfinite(arr)):
+        return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    return arr
 
 
 def compute_courant_number(tf, tidx):
     """Compute Courant number (CFL) per vertex: CFL = V * dt / dx.
 
-    dx is estimated as sqrt(min element area around each vertex).
+    dx is estimated as sqrt(average element area around each vertex).
+
+    Note: dt is the output file interval between saved timesteps, not the
+    solver's internal computational timestep. The true CFL governing
+    numerical stability may be much smaller. This metric is useful for
+    comparing relative flow intensity across the domain.
     """
     varnames = [v.strip() for v in tf.varnames]
     if "VELOCITY U" not in varnames or "VELOCITY V" not in varnames:
         return None
 
-    x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
-    ikle = tf.ikle2
-    nelem = tf.nelem2
 
-    dt = float(tf.times[1] - tf.times[0]) if len(tf.times) > 1 else 1.0
+    # Use interval around current timestep for variable output frequency
+    if tidx > 0:
+        dt = float(tf.times[tidx] - tf.times[tidx - 1])
+    elif len(tf.times) > 1:
+        dt = float(tf.times[1] - tf.times[0])
+    else:
+        dt = 1.0
 
     u = tf.get_data_value("VELOCITY U", tidx)[:npoin]
     v = tf.get_data_value("VELOCITY V", tidx)[:npoin]
     speed = np.sqrt(u**2 + v**2)
 
-    # Estimate dx per vertex as sqrt of minimum adjacent element area
-    min_area = np.full(npoin, 1e30, dtype=np.float64)
-    for e in range(nelem):
-        i0, i1, i2 = ikle[e]
-        area = abs((x[i1]-x[i0])*(y[i2]-y[i0]) - (x[i2]-x[i0])*(y[i1]-y[i0])) / 2.0
-        for node in (i0, i1, i2):
-            if area < min_area[node]:
-                min_area[node] = area
-
-    dx = np.sqrt(np.maximum(min_area, 1e-20))
+    areas = _element_areas(tf)
+    avg_area = _scatter_to_vertices(tf.ikle2, areas, npoin)
+    dx = np.sqrt(np.maximum(avg_area, 1e-20))
     cfl = speed * dt / dx
-    return cfl.astype(np.float32)
+    return _sanitize_result(cfl.astype(np.float32))
 
 
 def compute_element_area(tf):
     """Compute per-vertex element area (average of adjacent element areas)."""
-    x, y = tf.meshx, tf.meshy
-    npoin = tf.npoin2
-    ikle = tf.ikle2
-    nelem = tf.nelem2
-
-    vertex_area = np.zeros(npoin, dtype=np.float64)
-    vertex_count = np.zeros(npoin, dtype=np.int32)
-
-    for e in range(nelem):
-        i0, i1, i2 = ikle[e]
-        area = abs((x[i1]-x[i0])*(y[i2]-y[i0]) - (x[i2]-x[i0])*(y[i1]-y[i0])) / 2.0
-        for node in (i0, i1, i2):
-            vertex_area[node] += area
-            vertex_count[node] += 1
-
-    mask = vertex_count > 0
-    vertex_area[mask] /= vertex_count[mask]
-    return vertex_area.astype(np.float32)
+    areas = _element_areas(tf)
+    return _scatter_to_vertices(tf.ikle2, areas, tf.npoin2).astype(np.float32)
 
 
 def compute_mesh_integral(tf, values, threshold=None):
@@ -167,31 +208,19 @@ def compute_mesh_integral(tf, values, threshold=None):
     If threshold is set, only elements where all vertices exceed it are included.
     Returns dict with total_area, integral, mean, wetted_area, wetted_fraction.
     """
-    x, y = tf.meshx, tf.meshy
-    npoin = tf.npoin2
     ikle = tf.ikle2
-    nelem = tf.nelem2
+    i0, i1, i2 = ikle[:, 0], ikle[:, 1], ikle[:, 2]
+    areas = _element_areas(tf)
+    tri_avg = (values[i0] + values[i1] + values[i2]) / 3.0
 
-    total_area = 0.0
-    integral = 0.0
-    wetted_area = 0.0
+    total_area = float(areas.sum())
+    integral = float((tri_avg * areas).sum())
 
-    for e in range(nelem):
-        i0, i1, i2 = ikle[e]
-        x0, y0 = x[i0], y[i0]
-        x1, y1 = x[i1], y[i1]
-        x2, y2 = x[i2], y[i2]
-        area = abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)) / 2.0
-
-        total_area += area
-        v_avg = (float(values[i0]) + float(values[i1]) + float(values[i2])) / 3.0
-        integral += v_avg * area
-
-        if threshold is not None:
-            if values[i0] > threshold and values[i1] > threshold and values[i2] > threshold:
-                wetted_area += area
-        else:
-            wetted_area += area
+    if threshold is not None:
+        wetted_mask = (values[i0] > threshold) & (values[i1] > threshold) & (values[i2] > threshold)
+        wetted_area = float(areas[wetted_mask].sum())
+    else:
+        wetted_area = total_area
 
     mean = integral / total_area if total_area > 0 else 0.0
     return {
@@ -203,39 +232,110 @@ def compute_mesh_integral(tf, values, threshold=None):
     }
 
 
-def evaluate_expression(tf, tidx, expression):
-    """Evaluate a user-defined expression using variable names.
+_SAFE_MATH = {
+    "sqrt": np.sqrt, "abs": np.abs, "log": np.log,
+    "log10": np.log10, "exp": np.exp, "sin": np.sin,
+    "cos": np.cos, "tan": np.tan, "pi": np.pi,
+    "maximum": np.maximum, "minimum": np.minimum,
+    "where": np.where,
+}
 
-    Variables are referenced by name (e.g., "VELOCITY_U**2 + VELOCITY_V**2").
-    Spaces in variable names are replaced with underscores.
+_SAFE_OPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub,
+    ast.Mult: operator.mul, ast.Div: operator.truediv,
+    ast.Pow: operator.pow, ast.USub: operator.neg,
+    ast.Mod: operator.mod, ast.FloorDiv: operator.floordiv,
+}
+
+_SAFE_COMPARE = {
+    ast.Gt: operator.gt, ast.Lt: operator.lt,
+    ast.GtE: operator.ge, ast.LtE: operator.le,
+    ast.Eq: operator.eq, ast.NotEq: operator.ne,
+}
+
+
+def evaluate_expression(tf, tidx, expression):
+    """Evaluate a user-defined math expression safely using AST parsing.
+
+    Variables are referenced by name with spaces replaced by underscores
+    (e.g., "VELOCITY_U**2 + VELOCITY_V**2").
+    Available functions: sqrt, abs, log, log10, exp, sin, cos, tan,
+    maximum, minimum, where, pi.
     Returns numpy array or raises ValueError.
-    This is a local desktop app — eval with restricted builtins is acceptable.
     """
     npoin = tf.npoin2
-    # Build namespace with all variables (spaces -> underscores)
-    namespace = {"np": np}
+    namespace = {}
     for vname in tf.varnames:
         safe_name = vname.strip().replace(" ", "_")
         namespace[safe_name] = tf.get_data_value(vname, tidx)[:npoin].astype(np.float64)
+    namespace.update(_SAFE_MATH)
 
-    # Provide common math functions
-    namespace["sqrt"] = np.sqrt
-    namespace["abs"] = np.abs
-    namespace["log"] = np.log
-    namespace["log10"] = np.log10
-    namespace["exp"] = np.exp
-    namespace["sin"] = np.sin
-    namespace["cos"] = np.cos
-
-    # Replace variable names with safe names in expression
+    # Replace variable names in expression for parsing
     safe_expr = expression
     for vname in sorted(tf.varnames, key=len, reverse=True):
         safe_name = vname.strip().replace(" ", "_")
         safe_expr = safe_expr.replace(vname.strip(), safe_name)
 
-    # eval with restricted builtins — local desktop app only  # noqa: S307
-    result = eval(safe_expr, {"__builtins__": {}}, namespace)  # noqa: S307
+    try:
+        tree = ast.parse(safe_expr, mode='eval')
+    except SyntaxError as e:
+        raise ValueError(f"Syntax error in expression: {e}") from e
+
+    result = _ast_eval(tree.body, namespace)
     return np.asarray(result, dtype=np.float32)[:npoin]
+
+
+def _ast_eval(node, ns):
+    """Recursively evaluate an AST node against a safe namespace."""
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, (int, float)):
+            return node.value
+        raise ValueError(f"Unsupported constant type: {type(node.value).__name__}")
+
+    if isinstance(node, ast.Name):
+        if node.id in ns:
+            return ns[node.id]
+        raise ValueError(f"Unknown variable or function: '{node.id}'")
+
+    if isinstance(node, ast.BinOp):
+        op = _SAFE_OPS.get(type(node.op))
+        if op is None:
+            raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
+        return op(_ast_eval(node.left, ns), _ast_eval(node.right, ns))
+
+    if isinstance(node, ast.UnaryOp):
+        op = _SAFE_OPS.get(type(node.op))
+        if op is None:
+            raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
+        return op(_ast_eval(node.operand, ns))
+
+    if isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name):
+            raise ValueError("Only simple function calls allowed (no methods or chaining)")
+        if node.keywords:
+            raise ValueError("Keyword arguments are not supported in expressions")
+        fname = node.func.id
+        if fname not in ns or not callable(ns[fname]):
+            raise ValueError(f"Unknown function: '{fname}'")
+        args = [_ast_eval(a, ns) for a in node.args]
+        return ns[fname](*args)
+
+    if isinstance(node, ast.Compare):
+        left = _ast_eval(node.left, ns)
+        for op_node, comparator in zip(node.ops, node.comparators):
+            op = _SAFE_COMPARE.get(type(op_node))
+            if op is None:
+                raise ValueError(f"Unsupported comparison: {type(op_node).__name__}")
+            left = op(left, _ast_eval(comparator, ns))
+        return left
+
+    if isinstance(node, ast.IfExp):
+        test = _ast_eval(node.test, ns)
+        body = _ast_eval(node.body, ns)
+        orelse = _ast_eval(node.orelse, ns)
+        return np.where(test, body, orelse)
+
+    raise ValueError(f"Unsupported expression element: {type(node).__name__}")
 
 
 def compute_slope(tf, values):
@@ -246,44 +346,26 @@ def compute_slope(tf, values):
     x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
     ikle = tf.ikle2
-    nelem = tf.nelem2
+    i0, i1, i2 = ikle[:, 0], ikle[:, 1], ikle[:, 2]
 
-    vertex_slope = np.zeros(npoin, dtype=np.float64)
-    vertex_count = np.zeros(npoin, dtype=np.int32)
+    # Vectorized area * 2
+    area2 = (x[i1] - x[i0]) * (y[i2] - y[i0]) - (x[i2] - x[i0]) * (y[i1] - y[i0])
+    # Avoid division by zero for degenerate triangles
+    safe_area2 = np.where(np.abs(area2) < 1e-30, 1.0, area2)
 
-    for e in range(nelem):
-        i0, i1, i2 = ikle[e]
-        # Triangle vertex coordinates
-        x0, y0 = x[i0], y[i0]
-        x1, y1 = x[i1], y[i1]
-        x2, y2 = x[i2], y[i2]
-        v0, v1, v2 = float(values[i0]), float(values[i1]), float(values[i2])
+    v0, v1, v2 = values[i0], values[i1], values[i2]
+    dv_dx = (v0 * (y[i1] - y[i2]) + v1 * (y[i2] - y[i0]) + v2 * (y[i0] - y[i1])) / safe_area2
+    dv_dy = (v0 * (x[i2] - x[i1]) + v1 * (x[i0] - x[i2]) + v2 * (x[i1] - x[i0])) / safe_area2
+    elem_slope = np.sqrt(dv_dx**2 + dv_dy**2)
+    # Zero out degenerate elements
+    elem_slope[np.abs(area2) < 1e-30] = 0.0
 
-        # Area * 2
-        area2 = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
-        if abs(area2) < 1e-30:
-            continue
-
-        # Gradient components
-        dv_dx = (v0 * (y1 - y2) + v1 * (y2 - y0) + v2 * (y0 - y1)) / area2
-        dv_dy = (v0 * (x2 - x1) + v1 * (x0 - x2) + v2 * (x1 - x0)) / area2
-        slope = np.sqrt(dv_dx**2 + dv_dy**2)
-
-        for node in (i0, i1, i2):
-            vertex_slope[node] += slope
-            vertex_count[node] += 1
-
-    mask = vertex_count > 0
-    vertex_slope[mask] /= vertex_count[mask]
-    return vertex_slope.astype(np.float32)
+    return _sanitize_result(_scatter_to_vertices(ikle, elem_slope, npoin).astype(np.float32))
 
 
 def export_all_variables_csv(tf, tidx, x_m, y_m):
     """Export all variable values at a point for a given timestep as CSV string."""
-    npoin = tf.npoin2
-    x, y = tf.meshx, tf.meshy
-    dists = (x[:npoin] - x_m)**2 + (y[:npoin] - y_m)**2
-    nearest = int(np.argmin(dists))
+    nearest, _, _ = nearest_node(tf, x_m, y_m)
 
     buf = io.StringIO()
     buf.write(f"Variable,Value\n")
@@ -298,36 +380,47 @@ def find_boundary_nodes(tf):
 
     Boundary edges appear in only one triangle. Returns list of node indices.
     """
-    npoin = tf.npoin2
     ikle = tf.ikle2
-    nelem = tf.nelem2
+    # Build all edges as sorted pairs: (min_node, max_node)
+    e0 = np.column_stack([ikle[:, 0], ikle[:, 1]])
+    e1 = np.column_stack([ikle[:, 1], ikle[:, 2]])
+    e2 = np.column_stack([ikle[:, 2], ikle[:, 0]])
+    all_edges = np.vstack([e0, e1, e2])
+    all_edges.sort(axis=1)
 
-    # Count how many triangles share each edge
-    edge_count = {}
-    for e in range(nelem):
-        i0, i1, i2 = ikle[e]
-        for a, b in [(i0, i1), (i1, i2), (i2, i0)]:
-            edge = (min(a, b), max(a, b))
-            edge_count[edge] = edge_count.get(edge, 0) + 1
+    # Find edges that appear exactly once (boundary)
+    # Encode as single int for fast counting
+    max_node = int(all_edges.max()) + 1
+    edge_keys = all_edges[:, 0].astype(np.int64) * max_node + all_edges[:, 1].astype(np.int64)
+    unique_keys, counts = np.unique(edge_keys, return_counts=True)
+    boundary_keys = unique_keys[counts == 1]
 
-    # Boundary edges are shared by exactly 1 triangle
-    boundary_nodes = set()
-    for (a, b), count in edge_count.items():
-        if count == 1:
-            boundary_nodes.add(a)
-            boundary_nodes.add(b)
-
-    return sorted(boundary_nodes)
+    # Decode back to node pairs
+    b_nodes_a = (boundary_keys // max_node).astype(np.int32)
+    b_nodes_b = (boundary_keys % max_node).astype(np.int32)
+    return sorted(set(b_nodes_a.tolist() + b_nodes_b.tolist()))
 
 
 def coord_to_meters(lon, lat, x_off, y_off):
-    """Convert pseudo-degree coordinate back to mesh meters."""
+    """Convert map click coordinate (pseudo lon/lat from deck.gl) to mesh meters.
+
+    deck.gl reports click/hover coordinates as lon/lat even in METER_OFFSETS
+    mode. Multiply by _M2D to recover centered meters, then add the mesh
+    center offset to get original TELEMAC mesh coordinates.
+    """
     return float(lon) * _M2D + x_off, float(lat) * _M2D + y_off
 
 
-def meters_to_coord(x_m, y_m, x_off, y_off):
-    """Convert mesh meters to centered coordinates (for layers)."""
-    return float(x_m - x_off), float(y_m - y_off)
+def nearest_node(tf, x_m, y_m):
+    """Find the nearest 2D mesh node to a point in mesh meters.
+
+    Returns (node_index, node_x, node_y).
+    """
+    x, y = tf.meshx, tf.meshy
+    npoin = tf.npoin2
+    dists = (x[:npoin] - x_m)**2 + (y[:npoin] - y_m)**2
+    idx = int(np.argmin(dists))
+    return idx, float(x[idx]), float(y[idx])
 
 
 def time_series_at_point(tf, varname, x_m, y_m):
@@ -411,10 +504,45 @@ def generate_seed_grid(tf, n_target=500):
     points = np.column_stack([grid_x.ravel(), grid_y.ravel()])
 
     # Filter to points inside mesh using matplotlib triangulation
-    tri = tf.tri
-    finder = tri.get_trifinder()
-    inside = finder(points[:, 0], points[:, 1]) >= 0
-    return points[inside].tolist()
+    try:
+        tri = tf.tri
+        finder = tri.get_trifinder()
+        inside = finder(points[:, 0], points[:, 1]) >= 0
+        return points[inside].tolist()
+    except Exception:
+        # Fallback: return all grid points if triangulation is unavailable
+        return points.tolist()
+
+
+def distribute_seeds_along_line(polyline_m, n_seeds=100):
+    """Distribute seed points evenly along a polyline.
+
+    polyline_m: list of [x, y] in mesh meters.
+    Returns list of [x, y] seed points.
+    """
+    if len(polyline_m) < 2:
+        return polyline_m
+    segments = np.array(polyline_m)
+    diffs = np.diff(segments, axis=0)
+    seg_lengths = np.sqrt((diffs**2).sum(axis=1))
+    total_len = seg_lengths.sum()
+    if total_len <= 0:
+        return [polyline_m[0]]
+
+    # Cumulative distances at each polyline vertex
+    cum_dist = np.concatenate([[0], np.cumsum(seg_lengths)])
+    targets = np.linspace(0, total_len, n_seeds, endpoint=False)
+
+    # Find which segment each target falls in
+    seg_idx = np.searchsorted(cum_dist[1:], targets, side='right')
+    seg_idx = np.clip(seg_idx, 0, len(seg_lengths) - 1)
+
+    # Interpolate within each segment
+    t = np.where(seg_lengths[seg_idx] > 0,
+                 (targets - cum_dist[seg_idx]) / seg_lengths[seg_idx], 0.0)
+    seeds_x = segments[seg_idx, 0] + t * diffs[seg_idx, 0]
+    seeds_y = segments[seg_idx, 1] + t * diffs[seg_idx, 1]
+    return np.column_stack([seeds_x, seeds_y]).tolist()
 
 
 def compute_mesh_quality(tf):
@@ -426,36 +554,25 @@ def compute_mesh_quality(tf):
     x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
     ikle = tf.ikle2
-    nelem = tf.nelem2
+    i0, i1, i2 = ikle[:, 0], ikle[:, 1], ikle[:, 2]
 
-    # Compute per-element quality
-    elem_quality = np.zeros(nelem, dtype=np.float64)
-    for e in range(nelem):
-        i0, i1, i2 = ikle[e]
-        ax, ay = x[i0], y[i0]
-        bx, by = x[i1], y[i1]
-        cx, cy = x[i2], y[i2]
-        a = np.sqrt((bx-cx)**2 + (by-cy)**2)
-        b = np.sqrt((ax-cx)**2 + (ay-cy)**2)
-        c = np.sqrt((ax-bx)**2 + (ay-by)**2)
-        s = (a + b + c) / 2.0
-        area = np.sqrt(max(s * (s-a) * (s-b) * (s-c), 0.0))
-        if area > 0 and (a*b*c) > 0:
-            # 2 * inradius / circumradius, normalized so equilateral = 1
-            inradius = area / s
-            circumradius = (a * b * c) / (4.0 * area)
-            elem_quality[e] = min(2.0 * inradius / circumradius, 1.0)
+    # Edge lengths
+    a = np.sqrt((x[i1] - x[i2])**2 + (y[i1] - y[i2])**2)
+    b = np.sqrt((x[i0] - x[i2])**2 + (y[i0] - y[i2])**2)
+    c = np.sqrt((x[i0] - x[i1])**2 + (y[i0] - y[i1])**2)
 
-    # Average to vertices
-    vertex_quality = np.zeros(npoin, dtype=np.float64)
-    vertex_count = np.zeros(npoin, dtype=np.int32)
-    for e in range(nelem):
-        for node in ikle[e]:
-            vertex_quality[node] += elem_quality[e]
-            vertex_count[node] += 1
-    mask = vertex_count > 0
-    vertex_quality[mask] /= vertex_count[mask]
-    return vertex_quality
+    s = (a + b + c) / 2.0
+    # Heron's formula (clamp to zero for degenerate triangles)
+    area = np.sqrt(np.maximum(s * (s - a) * (s - b) * (s - c), 0.0))
+
+    # Quality = 2 * inradius / circumradius, equilateral = 1.0
+    valid = (area > 0) & (a * b * c > 0)
+    elem_quality = np.zeros(len(ikle), dtype=np.float64)
+    inradius = np.where(valid, area / s, 0.0)
+    circumradius = np.where(valid, (a * b * c) / (4.0 * area + 1e-30), 1.0)
+    elem_quality[valid] = np.minimum(2.0 * inradius[valid] / circumradius[valid], 1.0)
+
+    return _sanitize_result(_scatter_to_vertices(ikle, elem_quality, npoin))
 
 
 def vertical_profile_at_point(tf, varname, tidx, x_m, y_m):
@@ -465,7 +582,7 @@ def vertical_profile_at_point(tf, varname, tidx, x_m, y_m):
     """
     nplan = getattr(tf, 'nplan', 0)
     if nplan <= 1:
-        return np.array([]), np.array([])
+        return np.array([]), np.array([]), "Elevation (m)"
 
     npoin2 = tf.npoin2
     x, y = tf.meshx, tf.meshy
@@ -477,14 +594,16 @@ def vertical_profile_at_point(tf, varname, tidx, x_m, y_m):
     values = np.array([float(vals_3d[nearest_2d + k * npoin2]) for k in range(nplan)])
 
     # Get elevations from Z coordinate
+    elevation_label = "Elevation (m)"
     try:
         z_name = tf.get_z_name()
         z_3d = tf.get_data_value(z_name, tidx)
         elevations = np.array([float(z_3d[nearest_2d + k * npoin2]) for k in range(nplan)])
     except Exception:
         elevations = np.arange(nplan, dtype=np.float64)
+        elevation_label = "Layer index (elevation unavailable)"
 
-    return elevations, values
+    return elevations, values, elevation_label
 
 
 def find_extrema(tf, values):
@@ -494,8 +613,8 @@ def find_extrema(tf, values):
     """
     npoin = tf.npoin2
     v = values[:npoin]
-    imin = int(np.argmin(v))
-    imax = int(np.argmax(v))
+    imin = int(np.nanargmin(v))
+    imax = int(np.nanargmax(v))
     x, y = tf.meshx, tf.meshy
     return {
         "min": (imin, float(x[imin]), float(y[imin]), float(v[imin])),
@@ -509,6 +628,8 @@ def compute_temporal_stats(tf, varname):
     Returns dict with 'min', 'max', 'mean' arrays (per-node).
     """
     ntimes = len(tf.times)
+    if ntimes == 0:
+        return None
     npoin = tf.npoin2
     first = tf.get_data_value(varname, 0)[:npoin]
     running_min = first.copy()

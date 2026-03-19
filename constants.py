@@ -1,5 +1,4 @@
 # constants.py
-import math
 import os
 import functools
 import numpy as np
@@ -102,7 +101,10 @@ PALETTE_DIVERGING = [
     [165, 0, 38, 255],
 ]
 
-_M2D = 111320.0  # meters per degree at equator
+# Meters per degree of longitude at the equator. Used to compute map zoom
+# level from mesh extent. TELEMAC meshes use metric CRS, not geographic —
+# this constant is only for the deck.gl zoom calculation in geometry.py.
+_M2D = 111320.0
 
 
 @functools.lru_cache(maxsize=16)
@@ -128,8 +130,6 @@ def cached_gradient_colors(palette_id, reverse=False):
     if reverse:
         colors = colors[::-1]
     return colors
-    full = color_range(256, palette)
-    return [full[i] for i in range(0, 256, 32)]
 
 
 def format_time(seconds):
