@@ -721,6 +721,62 @@ def compute_temporal_stats(tf: Any, varname: str) -> dict[str, np.ndarray] | Non
     }
 
 
+def compute_flood_envelope(tf, varname, threshold=0.01):
+    """Compute maximum value over all timesteps per node.
+
+    Returns per-node array of the peak value across the entire simulation.
+    Nodes where the peak is below threshold are set to 0.
+    """
+    npoin = tf.npoin2
+    ntimes = len(tf.times)
+    if ntimes == 0:
+        return np.zeros(npoin, dtype=np.float32)
+    peak = tf.get_data_value(varname, 0)[:npoin].copy()
+    for t in range(1, ntimes):
+        vals = tf.get_data_value(varname, t)[:npoin]
+        peak = np.maximum(peak, vals)
+    peak[peak < threshold] = 0.0
+    return peak.astype(np.float32)
+
+
+def compute_flood_arrival(tf, varname="WATER DEPTH", threshold=0.01):
+    """Compute flood arrival time per node.
+
+    Returns per-node array of the simulation time (seconds) when the value
+    first exceeds the threshold. Nodes never exceeding threshold get NaN.
+    """
+    npoin = tf.npoin2
+    ntimes = len(tf.times)
+    arrival = np.full(npoin, np.nan, dtype=np.float32)
+    for t in range(ntimes):
+        vals = tf.get_data_value(varname, t)[:npoin]
+        newly_wet = np.isnan(arrival) & (vals > threshold)
+        arrival[newly_wet] = float(tf.times[t])
+    return arrival
+
+
+def compute_flood_duration(tf, varname="WATER DEPTH", threshold=0.01):
+    """Compute total flood duration per node.
+
+    Returns per-node array of total time (seconds) spent above threshold.
+    Uses the output interval as the time weight for each timestep.
+    """
+    npoin = tf.npoin2
+    ntimes = len(tf.times)
+    duration = np.zeros(npoin, dtype=np.float32)
+    for t in range(ntimes):
+        vals = tf.get_data_value(varname, t)[:npoin]
+        wet = vals > threshold
+        if t < ntimes - 1:
+            dt = float(tf.times[t + 1] - tf.times[t])
+        elif t > 0:
+            dt = float(tf.times[t] - tf.times[t - 1])
+        else:
+            dt = 1.0
+        duration[wet] += dt
+    return duration
+
+
 def compute_difference(tf: Any, varname: str, tidx: int, ref_tidx: int) -> np.ndarray:
     """Compute difference between current and reference timestep."""
     current = tf.get_data_value(varname, tidx)

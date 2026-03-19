@@ -66,6 +66,9 @@ from analysis import (
     compute_discharge,
     compute_courant_number,
     compute_element_area,
+    compute_flood_envelope,
+    compute_flood_arrival,
+    compute_flood_duration,
 )
 from data_manip.extraction.telemac_file import TelemacFile
 
@@ -297,6 +300,7 @@ app_ui = ui.page_sidebar(
                                        class_="btn-sm btn-outline-primary w-100 mb-1"),
                 ui.output_ui("clear_xsec_ui"),
                 ui.output_ui("discharge_ui"),
+                ui.output_ui("rating_curve_ui"),
                 ui.input_switch("particles", "Show particle traces", value=False),
                 ui.output_ui("particle_seed_ui"),
                 ui.input_select("diagnostic", "Mesh diagnostic", choices={
@@ -734,7 +738,7 @@ def server(input, output, session):
             return ui.div()
         titles = {"timeseries": "Time Series", "crosssection": "Cross-Section",
                   "vertprofile": "Vertical Profile", "histogram": "Value Histogram",
-                  "multivar": "All Variables"}
+                  "multivar": "All Variables", "rating": "Rating Curve (h-Q)"}
         title = titles.get(mode, mode)
         n_pts = len(clicked_points.get()) if mode == "timeseries" else 0
         subtitle = f" ({n_pts} point{'s' if n_pts != 1 else ''})" if n_pts else ""
@@ -839,6 +843,40 @@ def server(input, output, session):
                 fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
             fig.update_layout(
                 xaxis_title="Time (s)", yaxis_title="Value",
+                margin=dict(l=50, r=20, t=10, b=40), height=220,
+            )
+            return fig
+
+        if mode == "rating":
+            xsec = cross_section_points.get()
+            if xsec is None:
+                return go.Figure()
+            tf = tel_file()
+            # Compute discharge and avg water level at cross-section for each timestep
+            h_values = []
+            q_values = []
+            for t in range(len(tf.times)):
+                result = compute_discharge(tf, t, xsec)
+                if result["total_q"] is not None:
+                    q_values.append(result["total_q"])
+                    # Average water level along the cross-section
+                    try:
+                        _, wl_vals = cross_section_profile(tf, "FREE SURFACE", t, xsec)
+                        h_values.append(float(np.mean(wl_vals)))
+                    except Exception:
+                        try:
+                            _, wd_vals = cross_section_profile(tf, "WATER DEPTH", t, xsec)
+                            h_values.append(float(np.mean(wd_vals)))
+                        except Exception:
+                            h_values.append(0.0)
+            fig = go.Figure()
+            if h_values and q_values:
+                fig.add_trace(go.Scatter(
+                    x=h_values, y=q_values, mode="lines+markers",
+                    name="h-Q", marker=dict(size=4),
+                ))
+            fig.update_layout(
+                xaxis_title="Water level (m)", yaxis_title="Discharge (m\u00b3/s)",
                 margin=dict(l=50, r=20, t=10, b=40), height=220,
             )
             return fig
@@ -1027,6 +1065,22 @@ def server(input, output, session):
             class_="mb-1",
         )
 
+    # -- Rating curve --
+
+    @output
+    @render.ui
+    def rating_curve_ui():
+        xsec = cross_section_points.get()
+        if xsec is None:
+            return ui.div()
+        return ui.input_action_button("show_rating", "Rating Curve (h-Q)",
+                                      class_="btn-sm btn-outline-info w-100 mb-1")
+
+    @reactive.effect
+    @reactive.event(input.show_rating)
+    def handle_show_rating():
+        analysis_mode.set("rating")
+
     # -- Multi-variable time series --
 
     @reactive.effect
@@ -1105,7 +1159,14 @@ def server(input, output, session):
         ui.notification_show(f"Computing temporal stats for {var}...",
                              duration=None, id="temporal_notif")
         loop = asyncio.get_running_loop()
-        stats = await loop.run_in_executor(None, _run_with_lock, compute_temporal_stats, tf, var)
+        def _compute_all_temporal(tf, var):
+            stats = compute_temporal_stats(tf, var)
+            if stats is not None:
+                stats["envelope"] = compute_flood_envelope(tf, var)
+                stats["arrival"] = compute_flood_arrival(tf, var)
+                stats["duration"] = compute_flood_duration(tf, var)
+            return stats
+        stats = await loop.run_in_executor(None, _run_with_lock, _compute_all_temporal, tf, var)
         temporal_stats_cache.set(stats)
         ui.notification_remove("temporal_notif")
         ui.notification_show("Temporal statistics computed", duration=3)
@@ -1131,6 +1192,9 @@ def server(input, output, session):
                 "min": "Temporal min",
                 "max": "Temporal max",
                 "mean": "Temporal mean",
+                "envelope": "Flood envelope (max depth)",
+                "arrival": "Flood arrival time (s)",
+                "duration": "Flood duration (s)",
             }, selected="none"),
             class_="mt-2",
         )
@@ -1145,21 +1209,39 @@ def server(input, output, session):
             return ui.div()
         tf = tel_file()
         tidx = current_tidx()
-        # Show info for the last clicked point
-        px, py = pts[-1]
-        idx, nx, ny = nearest_node(tf, px, py)
+        var = current_var()
+        npoin = tf.npoin2
+        x, y = tf.meshx, tf.meshy
+
         rows = []
-        for vname in tf.varnames:
-            val = float(tf.get_data_value(vname, tidx)[idx])
-            rows.append(ui.div(
-                ui.span(vname, class_="text-muted", style="width:140px;display:inline-block;font-size:11px;"),
-                ui.strong(f"{val:.4f}", style="font-size:11px;"),
-                class_="mb-0",
-            ))
+        for i, (px, py) in enumerate(pts):
+            idx, nx, ny = nearest_node(tf, px, py)
+            val = float(tf.get_data_value(var, tidx)[idx])
+            rows.append(
+                ui.tags.tr(
+                    ui.tags.td(f"P{i+1}", style="font-weight:bold;"),
+                    ui.tags.td(f"{nx:.0f}", class_="text-muted"),
+                    ui.tags.td(f"{ny:.0f}", class_="text-muted"),
+                    ui.tags.td(f"{val:.4f}"),
+                )
+            )
+
         return ui.div(
-            ui.strong(f"Node {idx}", class_="small"),
-            ui.span(f" ({nx:.1f}, {ny:.1f})", class_="text-muted small"),
-            ui.div(*rows, style="max-height:120px; overflow-y:auto; margin-top:4px;"),
+            ui.strong(f"Probe points ({var})", class_="small"),
+            ui.tags.table(
+                ui.tags.thead(
+                    ui.tags.tr(
+                        ui.tags.th("#", style="width:30px;"),
+                        ui.tags.th("X", style="width:60px;"),
+                        ui.tags.th("Y", style="width:60px;"),
+                        ui.tags.th("Value"),
+                    ),
+                ),
+                ui.tags.tbody(*rows),
+                class_="table table-sm table-striped mb-0",
+                style="font-size:11px;",
+            ),
+            style="max-height:150px; overflow-y:auto;",
             class_="mt-2 border-top pt-2",
         )
 
@@ -1422,6 +1504,8 @@ def server(input, output, session):
                 return
             abscissa, values = cross_section_profile(tf, var, tidx, xsec_pts)
             yield export_crosssection_csv(abscissa, values, var)
+        elif mode == "rating":
+            yield ""
         else:
             yield ""
 
