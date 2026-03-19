@@ -1,17 +1,19 @@
 # constants.py
+from __future__ import annotations
 import os
 import functools
 import numpy as np
 
-os.environ.setdefault("HOMETEL", "/home/razinka/telemac/telemac-v8p5r1")
+_HOMETEL = os.environ.get("HOMETEL", "/home/razinka/telemac/telemac-v8p5r1")
+os.environ.setdefault("HOMETEL", _HOMETEL)
 os.environ.setdefault(
     "SYSTELCFG",
-    os.path.join(os.environ["HOMETEL"], "configs/systel.local.cfg"),
+    os.path.join(_HOMETEL, "configs/systel.local.cfg"),
 )
 os.environ.setdefault("USETELCFG", "gfortran.intelmpi")
 
 import sys
-sys.path.insert(0, os.path.join(os.environ["HOMETEL"], "scripts/python3"))
+sys.path.insert(0, os.path.join(_HOMETEL, "scripts/python3"))
 
 from shiny_deckgl import (
     color_range,
@@ -108,7 +110,7 @@ _M2D = 111320.0
 
 
 @functools.lru_cache(maxsize=16)
-def cached_palette_arr(palette_id, reverse=False):
+def cached_palette_arr(palette_id: str, reverse: bool = False) -> np.ndarray:
     if palette_id == "_diverging":
         arr = np.array(color_range(256, PALETTE_DIVERGING), dtype=np.uint8)
     else:
@@ -120,7 +122,7 @@ def cached_palette_arr(palette_id, reverse=False):
 
 
 @functools.lru_cache(maxsize=16)
-def cached_gradient_colors(palette_id, reverse=False):
+def cached_gradient_colors(palette_id: str, reverse: bool = False) -> list[list[int]]:
     if palette_id == "_diverging":
         full = color_range(256, PALETTE_DIVERGING)
     else:
@@ -132,7 +134,7 @@ def cached_gradient_colors(palette_id, reverse=False):
     return colors
 
 
-def format_time(seconds):
+def format_time(seconds: float) -> str:
     if seconds < 60:
         return f"{seconds:.1f} s"
     minutes = int(seconds // 60)

@@ -1,9 +1,10 @@
 # layers.py
+from __future__ import annotations
 import numpy as np
+from typing import Any
 from shiny_deckgl import (
     layer,
     line_layer,
-    contour_layer,
     scatterplot_layer,
     path_layer,
     trips_layer,
@@ -17,8 +18,11 @@ _GRAY = np.array([0.85, 0.85, 0.85], dtype=np.float32)
 _WIRE_COLOR = [100, 100, 100, 80]
 
 
-def build_mesh_layer(geom, values, palette_id, filter_range=None,
-                     color_range_override=None, log_scale=False, reverse_palette=False):
+def build_mesh_layer(geom: dict[str, Any], values: np.ndarray, palette_id: str,
+                     filter_range: tuple[float, float] | None = None,
+                     color_range_override: tuple[float, float] | None = None,
+                     log_scale: bool = False,
+                     reverse_palette: bool = False) -> tuple[dict, float, float, bool]:
     """Build SimpleMeshLayer with per-vertex coloring and optional value filter."""
     npoin = geom["npoin"]
 
@@ -70,7 +74,7 @@ def build_mesh_layer(geom, values, palette_id, filter_range=None,
     return lyr, vmin, vmax, log_applied
 
 
-def build_velocity_layer(tf, time_idx, geom):
+def build_velocity_layer(tf: Any, time_idx: int, geom: dict[str, Any]) -> dict | None:
     """Build velocity arrow layer from U/V components."""
     varnames = [v.strip() for v in tf.varnames]
     if "VELOCITY U" not in varnames or "VELOCITY V" not in varnames:
@@ -122,48 +126,108 @@ def build_velocity_layer(tf, time_idx, geom):
     )
 
 
-def build_contour_layer_fn(tf, values, geom, n_contours=6, layer_id="contours",
-                           contour_color=None):
-    """Build a ContourLayer from mesh node positions and values."""
-    x, y = tf.meshx, tf.meshy
+def build_contour_layer_fn(tf: Any, values: np.ndarray, geom: dict[str, Any],
+                           n_contours: int = 6, layer_id: str = "contours",
+                           contour_color: list[int] | None = None) -> dict | None:
+    """Build FEM-exact contour lines using marching triangles.
+
+    Walks each triangle to find edges where the field value crosses
+    contour thresholds, interpolates the exact crossing point, and
+    builds line segments. Much more accurate than grid-based KDE
+    contouring for unstructured meshes.
+    """
     npoin = tf.npoin2
+    ikle = tf.ikle2
+    x, y = tf.meshx, tf.meshy
     x_off, y_off = geom["x_off"], geom["y_off"]
     vmin, vmax = float(np.nanmin(values[:npoin])), float(np.nanmax(values[:npoin]))
     if vmax == vmin:
         return None
 
-    # Subsample if too many nodes (ContourLayer uses KDE, doesn't need all points)
-    step = max(1, npoin // 5000)
-    indices = np.arange(0, npoin, step)
-    points = [{"position": [float(x[i] - x_off), float(y[i] - y_off)],
-               "weight": float(values[i])}
-              for i in indices]
-
     c_color = contour_color or [0, 0, 0]
     step = (vmax - vmin) / (n_contours + 1)
-    contours = [
-        {"threshold": vmin + step * (i + 1), "color": c_color, "strokeWidth": 1}
-        for i in range(n_contours)
-    ]
+    # Slight perturbation avoids gaps when threshold lands exactly on a node value
+    eps = (vmax - vmin) * 1e-10
+    thresholds = [vmin + step * (i + 1) + eps for i in range(n_contours)]
 
-    dx = float(x[:npoin].max() - x[:npoin].min())
-    dy = float(y[:npoin].max() - y[:npoin].min())
-    cell_size = max(dx, dy) / 100
+    # Pre-compute centered coordinates
+    cx = (x[:npoin] - x_off).astype(np.float64)
+    cy = (y[:npoin] - y_off).astype(np.float64)
+    v = values[:npoin].astype(np.float64)
+    i0, i1, i2 = ikle[:, 0], ikle[:, 1], ikle[:, 2]
 
-    return contour_layer(
+    # Helper: find edge crossings for all elements (vectorized)
+    def _edge_crossings(da, db, ia, ib):
+        cross = (da * db) < 0  # different signs = crossing
+        t = np.where(cross, da / (da - db + 1e-30), 0.0)
+        px = np.where(cross, cx[ia] + t * (cx[ib] - cx[ia]), 0.0)
+        py = np.where(cross, cy[ia] + t * (cy[ib] - cy[ia]), 0.0)
+        return cross, px, py
+
+    all_src = []  # source positions for line segments
+    all_tgt = []  # target positions for line segments
+
+    for threshold in thresholds:
+        d0 = v[i0] - threshold
+        d1 = v[i1] - threshold
+        d2 = v[i2] - threshold
+
+        c01, px01, py01 = _edge_crossings(d0, d1, i0, i1)
+        c12, px12, py12 = _edge_crossings(d1, d2, i1, i2)
+        c20, px20, py20 = _edge_crossings(d2, d0, i2, i0)
+
+        # Each triangle with exactly 2 crossings produces one line segment
+        n_cross = c01.astype(int) + c12.astype(int) + c20.astype(int)
+        has_contour = n_cross == 2
+        if not has_contour.any():
+            continue
+
+        # Vectorized extraction of the two crossing points per triangle
+        # For triangles with 2 crossings, exactly 2 of (c01, c12, c20) are True
+        # Use conditional stacking to get the two points
+        idx = np.where(has_contour)[0]
+        # Collect crossing coordinates for each edge at contour triangles
+        pts_x = np.column_stack([px01[idx], px12[idx], px20[idx]])  # (n, 3)
+        pts_y = np.column_stack([py01[idx], py12[idx], py20[idx]])  # (n, 3)
+        mask = np.column_stack([c01[idx], c12[idx], c20[idx]])      # (n, 3) bool
+
+        # For each row, pick the 2 True columns
+        # Since exactly 2 are True, argmax on cumsum gives the first,
+        # and flip+argmax gives the second
+        first = np.argmax(mask, axis=1)
+        flipped = mask[:, ::-1]
+        last = 2 - np.argmax(flipped, axis=1)
+
+        n = len(idx)
+        rows = np.arange(n)
+        sx = pts_x[rows, first]
+        sy = pts_y[rows, first]
+        tx = pts_x[rows, last]
+        ty = pts_y[rows, last]
+
+        all_src.extend(zip(sx.tolist(), sy.tolist()))
+        all_tgt.extend(zip(tx.tolist(), ty.tolist()))
+
+    if not all_src:
+        return None
+
+    lines = [{"sourcePosition": list(s), "targetPosition": list(t)}
+             for s, t in zip(all_src, all_tgt)]
+
+    return line_layer(
         layer_id,
-        points,
-        contours=contours,
-        cellSize=cell_size,
-        getPosition="@@=d.position",
-        getWeight="@@d.weight",
+        lines,
+        getColor=c_color + [180] if len(c_color) == 3 else c_color,
+        getWidth=1,
+        widthMinPixels=1,
+        widthMaxPixels=2,
         pickable=False,
         coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=[0, 0],
     )
 
 
-def build_marker_layer(x_m, y_m, layer_id="marker"):
+def build_marker_layer(x_m: float, y_m: float, layer_id: str = "marker") -> dict:
     """Build a single-point scatterplot layer to mark clicked location."""
     return scatterplot_layer(
         layer_id,
@@ -179,7 +243,7 @@ def build_marker_layer(x_m, y_m, layer_id="marker"):
     )
 
 
-def build_cross_section_layer(points_m):
+def build_cross_section_layer(points_m: list[list[float]]) -> dict:
     """Build a path layer showing the cross-section polyline on the map.
 
     points_m: list of [x, y] in meters relative to mesh center.
@@ -198,7 +262,7 @@ def build_cross_section_layer(points_m):
     )
 
 
-def build_particle_layer(paths, current_time, trail_length):
+def build_particle_layer(paths: list[list[list[float]]], current_time: float, trail_length: float) -> dict:
     """Build a TripsLayer for particle trace animation.
 
     paths: list of particle trajectories, each is list of [x, y, timestamp].
@@ -217,7 +281,7 @@ def build_particle_layer(paths, current_time, trail_length):
     )
 
 
-def build_wireframe_layer(tf, geom):
+def build_wireframe_layer(tf: Any, geom: dict[str, Any]) -> dict:
     """Build mesh wireframe as line segments (triangle edges)."""
     x, y = tf.meshx, tf.meshy
     ikle = tf.ikle2
@@ -260,7 +324,7 @@ def build_wireframe_layer(tf, geom):
     )
 
 
-def build_extrema_markers(extrema, x_off, y_off):
+def build_extrema_markers(extrema: dict[str, tuple], x_off: float, y_off: float) -> list[dict]:
     """Build scatterplot markers for min/max value locations."""
     _colors = {"min": [0, 100, 255, 220], "max": [255, 50, 0, 220]}
     layers = []
@@ -286,7 +350,7 @@ def build_extrema_markers(extrema, x_off, y_off):
     return layers
 
 
-def build_measurement_layer(points_m):
+def build_measurement_layer(points_m: list[list[float]]) -> list[dict]:
     """Build a line + endpoint markers for distance measurement."""
     layers = []
     if len(points_m) >= 2:
@@ -317,7 +381,7 @@ def build_measurement_layer(points_m):
     return layers
 
 
-def build_boundary_layer(tf, geom, boundary_nodes):
+def build_boundary_layer(tf: Any, geom: dict[str, Any], boundary_nodes: list[int]) -> dict:
     """Build scatterplot layer highlighting boundary nodes."""
     x, y = tf.meshx, tf.meshy
     x_off, y_off = geom["x_off"], geom["y_off"]

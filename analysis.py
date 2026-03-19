@@ -1,9 +1,12 @@
 # analysis.py
+from __future__ import annotations
 import io
 import os
 import ast
 import operator
+import re
 import numpy as np
+from typing import Any
 from constants import _M2D
 
 # Derived variable definitions: name -> (required_vars, compute_fn)
@@ -28,7 +31,7 @@ DERIVED_VARIABLES = {
 }
 
 
-def get_available_derived(tf):
+def get_available_derived(tf: Any) -> list[str]:
     """Return list of derived variable names available for this file."""
     varnames = [v.strip() for v in tf.varnames]
     available = []
@@ -38,7 +41,7 @@ def get_available_derived(tf):
     return available
 
 
-def compute_derived(tf, varname, tidx):
+def compute_derived(tf: Any, varname: str, tidx: int) -> np.ndarray:
     """Compute a derived variable. Returns numpy array."""
     spec = DERIVED_VARIABLES[varname]
     if spec["compute"] == "vorticity":
@@ -71,7 +74,7 @@ def _compute_vorticity(tf, tidx):
     return _sanitize_result(_scatter_to_vertices(ikle, elem_vort, npoin).astype(np.float32))
 
 
-def export_timeseries_csv(times, values, varname):
+def export_timeseries_csv(times: np.ndarray, values: np.ndarray, varname: str) -> str:
     """Format time series data as CSV string."""
     buf = io.StringIO()
     buf.write(f"Time (s),{varname}\n")
@@ -80,7 +83,7 @@ def export_timeseries_csv(times, values, varname):
     return buf.getvalue()
 
 
-def export_crosssection_csv(abscissa, values, varname):
+def export_crosssection_csv(abscissa: np.ndarray, values: np.ndarray, varname: str) -> str:
     """Format cross-section data as CSV string."""
     buf = io.StringIO()
     buf.write(f"Distance (m),{varname}\n")
@@ -89,7 +92,7 @@ def export_crosssection_csv(abscissa, values, varname):
     return buf.getvalue()
 
 
-def compute_discharge(tf, tidx, polyline_m):
+def compute_discharge(tf: Any, tidx: int, polyline_m: list[list[float]]) -> dict[str, Any]:
     """Compute discharge (Q) through a cross-section polyline.
 
     Q = integral of (velocity · normal) * depth along the section.
@@ -134,7 +137,7 @@ def compute_discharge(tf, tidx, polyline_m):
     return {"total_q": total_q, "segments": segments, "skipped": skipped}
 
 
-def _element_areas(tf):
+def _element_areas(tf: Any) -> np.ndarray:
     """Vectorized element area computation. Returns (nelem,) float64 array."""
     x, y = tf.meshx, tf.meshy
     ikle = tf.ikle2
@@ -143,7 +146,7 @@ def _element_areas(tf):
                   (x[i2] - x[i0]) * (y[i1] - y[i0])) / 2.0
 
 
-def _scatter_to_vertices(ikle, elem_values, npoin):
+def _scatter_to_vertices(ikle: np.ndarray, elem_values: np.ndarray, npoin: int) -> np.ndarray:
     """Scatter per-element values to vertices (average). Returns (npoin,) float64."""
     nodes = ikle.ravel()
     weights = np.repeat(elem_values, 3)
@@ -154,14 +157,14 @@ def _scatter_to_vertices(ikle, elem_values, npoin):
     return vertex_sum
 
 
-def _sanitize_result(arr):
+def _sanitize_result(arr: np.ndarray) -> np.ndarray:
     """Replace NaN/Inf with 0 in computed field results."""
     if not np.all(np.isfinite(arr)):
         return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
     return arr
 
 
-def compute_courant_number(tf, tidx):
+def compute_courant_number(tf: Any, tidx: int) -> np.ndarray | None:
     """Compute Courant number (CFL) per vertex: CFL = V * dt / dx.
 
     dx is estimated as sqrt(average element area around each vertex).
@@ -196,13 +199,13 @@ def compute_courant_number(tf, tidx):
     return _sanitize_result(cfl.astype(np.float32))
 
 
-def compute_element_area(tf):
+def compute_element_area(tf: Any) -> np.ndarray:
     """Compute per-vertex element area (average of adjacent element areas)."""
     areas = _element_areas(tf)
     return _scatter_to_vertices(tf.ikle2, areas, tf.npoin2).astype(np.float32)
 
 
-def compute_mesh_integral(tf, values, threshold=None):
+def compute_mesh_integral(tf: Any, values: np.ndarray, threshold: float | None = None) -> dict[str, float]:
     """Compute area-weighted integral and statistics over the mesh.
 
     If threshold is set, only elements where all vertices exceed it are included.
@@ -254,7 +257,7 @@ _SAFE_COMPARE = {
 }
 
 
-def evaluate_expression(tf, tidx, expression):
+def evaluate_expression(tf: Any, tidx: int, expression: str) -> np.ndarray:
     """Evaluate a user-defined math expression safely using AST parsing.
 
     Variables are referenced by name with spaces replaced by underscores
@@ -270,11 +273,11 @@ def evaluate_expression(tf, tidx, expression):
         namespace[safe_name] = tf.get_data_value(vname, tidx)[:npoin].astype(np.float64)
     namespace.update(_SAFE_MATH)
 
-    # Replace variable names in expression for parsing
+    # Replace variable names in expression using word-boundary regex
     safe_expr = expression
     for vname in sorted(tf.varnames, key=len, reverse=True):
         safe_name = vname.strip().replace(" ", "_")
-        safe_expr = safe_expr.replace(vname.strip(), safe_name)
+        safe_expr = re.sub(r'\b' + re.escape(vname.strip()) + r'\b', safe_name, safe_expr)
 
     try:
         tree = ast.parse(safe_expr, mode='eval')
@@ -338,7 +341,7 @@ def _ast_eval(node, ns):
     raise ValueError(f"Unsupported expression element: {type(node).__name__}")
 
 
-def compute_slope(tf, values):
+def compute_slope(tf: Any, values: np.ndarray) -> np.ndarray:
     """Compute slope magnitude (gradient) of a scalar field on the mesh.
 
     Uses per-element gradient averaged to vertices. Returns per-vertex slope array.
@@ -363,7 +366,7 @@ def compute_slope(tf, values):
     return _sanitize_result(_scatter_to_vertices(ikle, elem_slope, npoin).astype(np.float32))
 
 
-def export_all_variables_csv(tf, tidx, x_m, y_m):
+def export_all_variables_csv(tf: Any, tidx: int, x_m: float, y_m: float) -> str:
     """Export all variable values at a point for a given timestep as CSV string."""
     nearest, _, _ = nearest_node(tf, x_m, y_m)
 
@@ -375,7 +378,7 @@ def export_all_variables_csv(tf, tidx, x_m, y_m):
     return buf.getvalue()
 
 
-def find_boundary_nodes(tf):
+def find_boundary_nodes(tf: Any) -> list[int]:
     """Find boundary nodes of the 2D mesh.
 
     Boundary edges appear in only one triangle. Returns list of node indices.
@@ -401,7 +404,7 @@ def find_boundary_nodes(tf):
     return sorted(set(b_nodes_a.tolist() + b_nodes_b.tolist()))
 
 
-def coord_to_meters(lon, lat, x_off, y_off):
+def coord_to_meters(lon: float, lat: float, x_off: float, y_off: float) -> tuple[float, float]:
     """Convert map click coordinate (pseudo lon/lat from deck.gl) to mesh meters.
 
     deck.gl reports click/hover coordinates as lon/lat even in METER_OFFSETS
@@ -411,7 +414,7 @@ def coord_to_meters(lon, lat, x_off, y_off):
     return float(lon) * _M2D + x_off, float(lat) * _M2D + y_off
 
 
-def nearest_node(tf, x_m, y_m):
+def nearest_node(tf: Any, x_m: float, y_m: float) -> tuple[int, float, float]:
     """Find the nearest 2D mesh node to a point in mesh meters.
 
     Returns (node_index, node_x, node_y).
@@ -423,7 +426,7 @@ def nearest_node(tf, x_m, y_m):
     return idx, float(x[idx]), float(y[idx])
 
 
-def time_series_at_point(tf, varname, x_m, y_m):
+def time_series_at_point(tf: Any, varname: str, x_m: float, y_m: float) -> tuple[np.ndarray, np.ndarray]:
     """Extract time series for a variable at a mesh point.
 
     Returns (times, values) arrays.
@@ -432,7 +435,7 @@ def time_series_at_point(tf, varname, x_m, y_m):
     return np.array(tf.times), ts[0]
 
 
-def cross_section_profile(tf, varname, record, polyline_m):
+def cross_section_profile(tf: Any, varname: str, record: int, polyline_m: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
     """Extract variable values along a polyline.
 
     polyline_m: list of [x, y] in mesh meters.
@@ -444,9 +447,11 @@ def cross_section_profile(tf, varname, record, polyline_m):
     return np.array(abscissa), np.array(values)
 
 
-def compute_particle_paths(tf, seed_points, x_off, y_off):
+def compute_particle_paths(tf: Any, seed_points: list[list[float]], x_off: float, y_off: float) -> list[list[list[float]]]:
     """Compute Lagrangian particle trajectories from velocity field.
 
+    Uses batched interpolation: fetches velocity field once per timestep,
+    interpolates all active particles simultaneously.
     seed_points: list of [x_m, y_m] in mesh meters.
     Returns list of paths, each path is [[x_centered, y_centered, time], ...].
     """
@@ -458,31 +463,98 @@ def compute_particle_paths(tf, seed_points, x_off, y_off):
     if ntimes < 2:
         return []
 
-    paths = []
-    for sx, sy in seed_points:
-        path = [[float(sx - x_off), float(sy - y_off), float(tf.times[0])]]
-        x, y = float(sx), float(sy)
-        for t in range(ntimes - 1):
-            dt = float(tf.times[t + 1] - tf.times[t])
-            if dt <= 0:
-                continue
-            try:
-                u_val = tf.get_data_on_points("VELOCITY U", t, [[x, y]])
-                v_val = tf.get_data_on_points("VELOCITY V", t, [[x, y]])
-            except Exception:
-                break
-            u, v = float(u_val[0]), float(v_val[0])
-            if np.isnan(u) or np.isnan(v):
-                break
-            x += u * dt
-            y += v * dt
-            path.append([float(x - x_off), float(y - y_off), float(tf.times[t + 1])])
-        if len(path) > 1:
-            paths.append(path)
-    return paths
+    n_seeds = len(seed_points)
+    if n_seeds == 0:
+        return []
+
+    # Initialize particle positions (mesh meters)
+    pos = np.array(seed_points, dtype=np.float64)  # (n_seeds, 2)
+    active = np.ones(n_seeds, dtype=bool)
+
+    # Build triangulation for interpolation
+    x_mesh, y_mesh = tf.meshx, tf.meshy
+    npoin = tf.npoin2
+    try:
+        tri = tf.tri
+    except Exception:
+        from matplotlib.tri import Triangulation
+        tri = Triangulation(x_mesh[:npoin], y_mesh[:npoin], tf.ikle2)
+    finder = tri.get_trifinder()
+
+    # Store paths as list of lists
+    all_paths = [[[float(pos[i, 0] - x_off), float(pos[i, 1] - y_off),
+                   float(tf.times[0])]] for i in range(n_seeds)]
+
+    for t in range(ntimes - 1):
+        if not active.any():
+            break
+        dt = float(tf.times[t + 1] - tf.times[t])
+        if dt <= 0:
+            continue
+
+        # Fetch velocity field once for this timestep
+        u_field = tf.get_data_value("VELOCITY U", t)[:npoin]
+        v_field = tf.get_data_value("VELOCITY V", t)[:npoin]
+
+        # Find which triangle each active particle is in
+        active_idx = np.where(active)[0]
+        tri_ids = finder(pos[active_idx, 0], pos[active_idx, 1])
+        outside = tri_ids < 0
+        # Deactivate particles outside the mesh
+        active[active_idx[outside]] = False
+        active_idx = active_idx[~outside]
+        tri_ids = tri_ids[~outside]
+
+        if len(active_idx) == 0:
+            continue
+
+        # Barycentric interpolation within each triangle
+        ikle = tf.ikle2
+        i0 = ikle[tri_ids, 0]
+        i1 = ikle[tri_ids, 1]
+        i2 = ikle[tri_ids, 2]
+
+        px = pos[active_idx, 0]
+        py = pos[active_idx, 1]
+
+        # Barycentric coordinates
+        x0, y0 = x_mesh[i0], y_mesh[i0]
+        x1, y1 = x_mesh[i1], y_mesh[i1]
+        x2, y2 = x_mesh[i2], y_mesh[i2]
+        denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+        denom = np.where(np.abs(denom) < 1e-30, 1.0, denom)
+        w0 = ((y1 - y2) * (px - x2) + (x2 - x1) * (py - y2)) / denom
+        w1 = ((y2 - y0) * (px - x2) + (x0 - x2) * (py - y2)) / denom
+        w2 = 1.0 - w0 - w1
+
+        # Interpolate velocity
+        u_interp = w0 * u_field[i0] + w1 * u_field[i1] + w2 * u_field[i2]
+        v_interp = w0 * v_field[i0] + w1 * v_field[i1] + w2 * v_field[i2]
+
+        # Check for NaN
+        nan_mask = np.isnan(u_interp) | np.isnan(v_interp)
+        active[active_idx[nan_mask]] = False
+        valid = ~nan_mask
+        valid_idx = active_idx[valid]
+
+        # Advance positions
+        pos[valid_idx, 0] += u_interp[valid] * dt
+        pos[valid_idx, 1] += v_interp[valid] * dt
+
+        # Record path points
+        time_val = float(tf.times[t + 1])
+        for j, idx in enumerate(valid_idx):
+            all_paths[idx].append([
+                float(pos[idx, 0] - x_off),
+                float(pos[idx, 1] - y_off),
+                time_val,
+            ])
+
+    # Filter to paths with >1 point
+    return [p for p in all_paths if len(p) > 1]
 
 
-def generate_seed_grid(tf, n_target=500):
+def generate_seed_grid(tf: Any, n_target: int = 500) -> list[list[float]]:
     """Generate a regular grid of seed points within the mesh bounding box.
 
     Returns list of [x_m, y_m] in mesh meters. Filters to points inside mesh.
@@ -514,7 +586,7 @@ def generate_seed_grid(tf, n_target=500):
         return points.tolist()
 
 
-def distribute_seeds_along_line(polyline_m, n_seeds=100):
+def distribute_seeds_along_line(polyline_m: list[list[float]], n_seeds: int = 100) -> list[list[float]]:
     """Distribute seed points evenly along a polyline.
 
     polyline_m: list of [x, y] in mesh meters.
@@ -545,7 +617,7 @@ def distribute_seeds_along_line(polyline_m, n_seeds=100):
     return np.column_stack([seeds_x, seeds_y]).tolist()
 
 
-def compute_mesh_quality(tf):
+def compute_mesh_quality(tf: Any) -> np.ndarray:
     """Compute per-vertex mesh quality (0=worst, 1=best).
 
     Uses element aspect ratio: ratio of inscribed to circumscribed circle
@@ -575,7 +647,7 @@ def compute_mesh_quality(tf):
     return _sanitize_result(_scatter_to_vertices(ikle, elem_quality, npoin))
 
 
-def vertical_profile_at_point(tf, varname, tidx, x_m, y_m):
+def vertical_profile_at_point(tf: Any, varname: str, tidx: int, x_m: float, y_m: float) -> tuple[np.ndarray, np.ndarray, str]:
     """Extract vertical profile at a point for 3D files.
 
     Returns (elevations, values) arrays for each vertical plane.
@@ -606,7 +678,7 @@ def vertical_profile_at_point(tf, varname, tidx, x_m, y_m):
     return elevations, values, elevation_label
 
 
-def find_extrema(tf, values):
+def find_extrema(tf: Any, values: np.ndarray) -> dict[str, tuple]:
     """Find locations of min and max values on the 2D mesh.
 
     Returns dict with 'min'/'max' keys, each containing (node_idx, x_m, y_m, value).
@@ -622,7 +694,7 @@ def find_extrema(tf, values):
     }
 
 
-def compute_temporal_stats(tf, varname):
+def compute_temporal_stats(tf: Any, varname: str) -> dict[str, np.ndarray] | None:
     """Compute min, max, mean across all timesteps for a variable.
 
     Returns dict with 'min', 'max', 'mean' arrays (per-node).
@@ -649,14 +721,14 @@ def compute_temporal_stats(tf, varname):
     }
 
 
-def compute_difference(tf, varname, tidx, ref_tidx):
+def compute_difference(tf: Any, varname: str, tidx: int, ref_tidx: int) -> np.ndarray:
     """Compute difference between current and reference timestep."""
     current = tf.get_data_value(varname, tidx)
     reference = tf.get_data_value(varname, ref_tidx)
     return current - reference
 
 
-def find_cas_files(example_path):
+def find_cas_files(example_path: str) -> dict[str, str]:
     """Find .cas steering files in the same directory as an example .slf file."""
     import glob
     directory = os.path.dirname(example_path)
@@ -664,7 +736,7 @@ def find_cas_files(example_path):
     return {os.path.basename(f): f for f in cas_files}
 
 
-def detect_module(cas_path):
+def detect_module(cas_path: str) -> str:
     """Detect which TELEMAC module a .cas file belongs to based on directory."""
     parts = cas_path.replace("\\", "/").split("/")
     for i, p in enumerate(parts):

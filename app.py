@@ -23,7 +23,7 @@ from constants import (
     EXAMPLES, EXAMPLE_CHOICES, PALETTES,
     cached_gradient_colors, format_time,
 )
-from geometry import build_mesh_geometry, build_mesh_geometry_3d
+from geometry import build_mesh_geometry
 from layers import (
     build_mesh_layer,
     build_velocity_layer,
@@ -269,6 +269,7 @@ app_ui = ui.page_sidebar(
                 "Data",
                 ui.input_select("example", "Example case", choices=EXAMPLE_CHOICES),
                 ui.input_file("upload", "Or upload .slf file", accept=[".slf"]),
+                ui.output_ui("clear_upload_ui"),
                 ui.input_switch("dark_bg", "Dark map background", value=False),
             ),
             ui.accordion_panel(
@@ -453,12 +454,34 @@ def server(input, output, session):
     temporal_stats_cache = reactive.value(None)  # dict with min/max/mean arrays
     measure_points = reactive.value([])  # list of [x_mesh_m, y_mesh_m] (max 2)
     measure_mode = reactive.value(False)  # True when waiting for measurement clicks
+    use_upload = reactive.value(False)  # True when uploaded file should be used
 
     # -- Help modal --
     @reactive.effect
     @reactive.event(input.help_btn)
     def _show_help():
         ui.modal_show(_HELP_MODAL)
+
+    # -- Upload management --
+
+    @reactive.effect
+    @reactive.event(input.upload)
+    def handle_upload_change():
+        if input.upload():
+            use_upload.set(True)
+
+    @output
+    @render.ui
+    def clear_upload_ui():
+        if not use_upload.get():
+            return ui.div()
+        return ui.input_action_button("clear_upload", "Clear upload (use examples)",
+                                      class_="btn-sm btn-outline-danger w-100 mb-1")
+
+    @reactive.effect
+    @reactive.event(input.clear_upload)
+    def handle_clear_upload():
+        use_upload.set(False)
 
     # -- Core reactive calcs --
 
@@ -474,7 +497,7 @@ def server(input, output, session):
                 except Exception:
                     pass
         uploaded = input.upload()
-        if uploaded:
+        if uploaded and use_upload.get():
             path = uploaded[0]["datapath"]
         else:
             path = EXAMPLES[input.example()]
@@ -513,7 +536,7 @@ def server(input, output, session):
                     f"Cannot read Z elevation: {e}. Showing flat mesh.",
                     type="warning", duration=8, id="z_warn")
                 z_vals = np.zeros(tf.npoin2, dtype=np.float32)
-            return build_mesh_geometry_3d(tf, z_vals, z_scale)
+            return build_mesh_geometry(tf, z_values=z_vals, z_scale=z_scale)
         return build_mesh_geometry(tf)
 
     @reactive.calc
@@ -1504,7 +1527,7 @@ def server(input, output, session):
 
         try:
             # Source TELEMAC env and run (quote all paths for shell safety)
-            env_script = "/home/razinka/telemac/telemac-v8p5r1/configs/pysource.local.sh"
+            env_script = _os.path.join(_os.environ.get("HOMETEL", ""), "configs/pysource.local.sh")
             shell_cmd = (f"source {shlex.quote(env_script)} && "
                          f"cd {shlex.quote(cas_dir)} && "
                          f"{shlex.quote(runner)} {shlex.quote(cas_name)} "
