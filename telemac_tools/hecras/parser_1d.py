@@ -99,23 +99,33 @@ def parse_hecras_1d(path: str) -> HecRasModel:
             rc_poly_info = rc["Polyline Info"][:]
             rc_poly_pts = rc["Polyline Points"][:]
 
+            # Detect field names: real files use "River Name"/"Reach Name",
+            # synthetic fixtures use "River"/"Reach"
+            field_names = rc_attrs.dtype.names
+            river_field = "River Name" if "River Name" in field_names else "River"
+            reach_field = "Reach Name" if "Reach Name" in field_names else "Reach"
+
             for i, row in enumerate(rc_attrs):
-                river = _decode(row["River"])
-                reach = _decode(row["Reach"])
+                river = _decode(row[river_field])
+                reach = _decode(row[reach_field])
                 name = f"{river}/{reach}"
                 offset, count = int(rc_poly_info[i, 0]), int(rc_poly_info[i, 1])
                 alignment = rc_poly_pts[offset : offset + count].copy()
                 reaches[name] = Reach(name=name, alignment=alignment)
 
         # --- Cross Sections ---
-        if "Cross Sections" in geo:
+        if "Cross Sections" in geo and "Attributes" in geo["Cross Sections"]:
             xs_grp = geo["Cross Sections"]
             xs_attrs = xs_grp["Attributes"][:]
             se_info = xs_grp["Station Elevation Info"][:]
             se_values = xs_grp["Station Elevation Values"][:]
             poly_info = xs_grp["Polyline Info"][:]
             poly_pts = xs_grp["Polyline Points"][:]
-            bank_stations_ds = xs_grp["Bank Stations"][:]
+
+            # Bank stations (optional — missing in some real files)
+            has_banks = "Bank Stations" in xs_grp
+            if has_banks:
+                bank_stations_ds = xs_grp["Bank Stations"][:]
 
             # Manning's n (optional)
             has_manning = "Manning's n Info" in xs_grp
@@ -123,10 +133,30 @@ def parse_hecras_1d(path: str) -> HecRasModel:
                 mann_info = xs_grp["Manning's n Info"][:]
                 mann_values = xs_grp["Manning's n Values"][:]
 
+            # Detect field names: real files may use "RS" instead of
+            # "Station", and field names vary across versions
+            attr_fields = xs_attrs.dtype.names
+            river_field = "River Name" if "River Name" in attr_fields else "River"
+            reach_field = "Reach Name" if "Reach Name" in attr_fields else "Reach"
+            # Station field: try "RS" (real files), then "Station" (synthetic)
+            if "RS" in attr_fields:
+                station_field = "RS"
+            elif "Station" in attr_fields:
+                station_field = "Station"
+            else:
+                station_field = None
+
             for i, row in enumerate(xs_attrs):
-                river = _decode(row["River"])
-                reach = _decode(row["Reach"])
-                station = float(row["Station"])
+                river = _decode(row[river_field])
+                reach = _decode(row[reach_field])
+
+                # Parse station value
+                if station_field is not None:
+                    raw_station = row[station_field]
+                    station = float(_decode(raw_station))
+                else:
+                    station = float(i)
+
                 name = f"{river}/{reach}"
 
                 # Station-elevation
@@ -149,9 +179,16 @@ def parse_hecras_1d(path: str) -> HecRasModel:
                 else:
                     mannings_n = [0.035, 0.035, 0.035]
 
-                # Bank stations
-                banks = bank_stations_ds[i]
-                bank_st = (float(banks[0]), float(banks[1]))
+                # Bank stations (use Left Bank / Right Bank from attrs
+                # if dedicated dataset is missing)
+                if has_banks:
+                    banks = bank_stations_ds[i]
+                    bank_st = (float(banks[0]), float(banks[1]))
+                elif "Left Bank" in attr_fields and "Right Bank" in attr_fields:
+                    bank_st = (float(row["Left Bank"]), float(row["Right Bank"]))
+                else:
+                    # Fallback: first and last station values
+                    bank_st = (float(sta_vals[0]), float(sta_vals[-1]))
 
                 # Bank world coordinates: interpolate bank station positions
                 bank_fracs = []

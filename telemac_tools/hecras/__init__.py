@@ -8,7 +8,13 @@ import h5py
 def parse_hecras(path: str) -> HecRasModel:
     """Auto-detect 1D/2D content and parse accordingly."""
     with h5py.File(path, "r") as f:
-        has_1d = "Geometry" in f and "Cross Sections" in f["Geometry"]
+        # Only consider 1D if Cross Sections has an "Attributes" dataset
+        # (some files have the group without usable attribute data)
+        has_1d = (
+            "Geometry" in f
+            and "Cross Sections" in f["Geometry"]
+            and "Attributes" in f["Geometry/Cross Sections"]
+        )
         has_2d = "Geometry" in f and "2D Flow Areas" in f["Geometry"]
 
     if not has_1d and not has_2d:

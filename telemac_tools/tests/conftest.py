@@ -128,16 +128,21 @@ def hdf_2d(tmp_path):
         ], dtype=np.float64)
         area.create_dataset("Cell Points", data=cc)
 
-        # Cell face point counts and indices
-        face_counts = np.array([4, 4, 4, 4])
-        face_values = np.array([
-            0, 1, 4, 3,
-            1, 2, 5, 4,
-            3, 4, 7, 6,
-            4, 5, 8, 7,
-        ])
-        area.create_dataset("Cells Face and Orientation Info", data=face_counts)
-        area.create_dataset("Faces FacePoint Indexes", data=face_values)
+        # Cell face point indices: padded 2D array (N_cells, max_faces)
+        # with -1 fill for unused slots (matches real HDF5 format)
+        cell_fp_idx = np.array([
+            [0, 1, 4, 3],
+            [1, 2, 5, 4],
+            [3, 4, 7, 6],
+            [4, 5, 8, 7],
+        ], dtype=np.int32)
+        area.create_dataset("Cells FacePoint Indexes", data=cell_fp_idx)
+
+        # Cells Face and Orientation Info: (N_cells, 2) with [offset, count]
+        face_info = np.array([
+            [0, 4], [4, 4], [8, 4], [12, 4],
+        ], dtype=np.int32)
+        area.create_dataset("Cells Face and Orientation Info", data=face_info)
 
         # Elevation per cell center
         area.create_dataset("Cells Minimum Elevation", data=np.array([

@@ -50,20 +50,81 @@ def parse_hecras_2d(path: str) -> HecRasModel:
             # Face points (F, 2)
             face_points = item["FacePoints Coordinate"][:].astype(np.float64)
 
-            # Cell centers (C, 2)
-            cell_centers = item["Cell Points"][:].astype(np.float64)
+            # Cell centers: try known name variants
+            if "Cells Center Coordinate" in item:
+                cell_centers = item["Cells Center Coordinate"][:].astype(np.float64)
+            elif "Cell Points" in item:
+                cell_centers = item["Cell Points"][:].astype(np.float64)
+            else:
+                # Synthesize cell centers from face geometry if missing
+                cell_centers = None
 
-            # Cell face counts and face point indices
-            face_counts = item["Cells Face and Orientation Info"][:].astype(int)
-            face_values = item["Faces FacePoint Indexes"][:].astype(int)
+            # Cell face point indices: may be a padded 2D array (N, max_faces)
+            # with -1 sentinels, or a flat 1D array read via offset/count.
+            if "Cells FacePoint Indexes" in item:
+                raw_cfpi = item["Cells FacePoint Indexes"][:].astype(int)
+            elif "Faces FacePoint Indexes" in item:
+                raw_cfpi = None  # will use face-based reconstruction below
+            else:
+                raw_cfpi = None
+
+            # Cell face counts from orientation info
+            if "Cells Face and Orientation Info" in item:
+                face_info = item["Cells Face and Orientation Info"][:].astype(int)
+            else:
+                face_info = None
 
             # Reconstruct cells
             cells: list[HecRasCell] = []
-            offset = 0
-            for count in face_counts:
-                indices = face_values[offset : offset + count].tolist()
-                cells.append(HecRasCell(face_point_indices=indices))
-                offset += count
+
+            if raw_cfpi is not None and raw_cfpi.ndim == 2:
+                # Padded 2D array: each row is face-point indices with -1 fill
+                for row in raw_cfpi:
+                    indices = row[row >= 0].tolist()
+                    cells.append(HecRasCell(face_point_indices=indices))
+            elif raw_cfpi is not None and raw_cfpi.ndim == 1 and face_info is not None:
+                # Flat 1D array with offset/count from face info
+                for off, cnt in face_info:
+                    indices = raw_cfpi[off : off + cnt].tolist()
+                    cells.append(HecRasCell(face_point_indices=indices))
+            elif face_info is not None:
+                # No cell-level face-point indices; build from face-level data
+                # Use Faces FacePoint Indexes to reconstruct per-cell polygons
+                face_orient_vals = None
+                if "Cells Face and Orientation Values" in item:
+                    face_orient_vals = item["Cells Face and Orientation Values"][:].astype(int)
+                faces_fp = None
+                if "Faces FacePoint Indexes" in item:
+                    faces_fp = item["Faces FacePoint Indexes"][:].astype(int)
+
+                if face_orient_vals is not None and faces_fp is not None:
+                    for off, cnt in face_info:
+                        fp_set: list[int] = []
+                        for j in range(off, off + cnt):
+                            face_idx = abs(face_orient_vals[j, 0])
+                            if face_idx < len(faces_fp):
+                                for fp in faces_fp[face_idx]:
+                                    if fp >= 0 and fp not in fp_set:
+                                        fp_set.append(int(fp))
+                        cells.append(HecRasCell(face_point_indices=fp_set))
+                else:
+                    # Last resort: create dummy cells
+                    n_cells = len(face_info)
+                    for _ in range(n_cells):
+                        cells.append(HecRasCell(face_point_indices=[]))
+
+            if cell_centers is None and cells:
+                # Synthesize cell centers as centroid of face points
+                centers = []
+                for cell in cells:
+                    if cell.face_point_indices:
+                        pts = face_points[cell.face_point_indices]
+                        centers.append(pts.mean(axis=0))
+                    else:
+                        centers.append(np.array([0.0, 0.0]))
+                cell_centers = np.array(centers)
+            elif cell_centers is None:
+                cell_centers = np.empty((0, 2))
 
             # Elevation per cell (optional)
             elevation = None
