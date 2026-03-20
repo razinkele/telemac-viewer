@@ -715,6 +715,11 @@ app_ui = ui.page_navbar(
                 ui.input_text("epsg_input", "CRS (EPSG)", placeholder="e.g. 3346"),
                 ui.input_switch("auto_crs", "Auto-detect CRS", value=True),
                 ui.output_ui("crs_status_ui"),
+                ui.tags.details(
+                    ui.tags.summary("CRS Origin Offset"),
+                    ui.input_numeric("crs_x_offset", "X offset (m)", value=0, step=1000),
+                    ui.input_numeric("crs_y_offset", "Y offset (m)", value=0, step=1000),
+                ),
             ),
             ui.accordion_panel(
                 "Visualization",
@@ -1117,6 +1122,9 @@ def server(input, output, session):
     def mesh_geom():
         tf = tel_file()
         crs = current_crs.get()
+        x_offset = input.crs_x_offset() if input.crs_x_offset() else 0
+        y_offset = input.crs_y_offset() if input.crs_y_offset() else 0
+        origin_offset = (x_offset, y_offset)
         if is_3d_mode.get() and tf.nplan > 1:
             try:
                 z_scale = input.z_scale() if input.z_scale() is not None else 10
@@ -1130,8 +1138,8 @@ def server(input, output, session):
                     f"Cannot read Z elevation: {e}. Showing flat mesh.",
                     type="warning", duration=8, id="z_warn")
                 z_vals = np.zeros(tf.npoin2, dtype=np.float32)
-            return build_mesh_geometry(tf, crs=crs, z_values=z_vals, z_scale=z_scale)
-        return build_mesh_geometry(tf, crs=crs)
+            return build_mesh_geometry(tf, crs=crs, z_values=z_vals, z_scale=z_scale, origin_offset=origin_offset)
+        return build_mesh_geometry(tf, crs=crs, origin_offset=origin_offset)
 
     @reactive.calc
     def current_var():

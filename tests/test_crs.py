@@ -220,3 +220,24 @@ class TestMetersToWgs84:
         geom = {"crs": None}
         result = meters_to_wgs84(100, 200, geom)
         assert result is None
+
+
+class TestOriginOffset:
+    def test_offset_shifts_lonlat(self):
+        from geometry import build_mesh_geometry
+        from tests.helpers import FakeTF
+        tf = FakeTF()
+        crs = crs_from_epsg(3346)
+        geom = build_mesh_geometry(tf, crs=crs, origin_offset=(309424, 6132619))
+        # Mesh center (0.5, 0.5) + offset -> (309424.5, 6132619.5) in LKS94
+        # Should map to approximately 20.9E, 55.3N (Curonian Lagoon)
+        assert 20.0 < geom["lon_off"] < 22.0
+        assert 54.5 < geom["lat_off"] < 56.0
+
+    def test_zero_offset_unchanged(self):
+        from geometry import build_mesh_geometry
+        from tests.helpers import FakeTF
+        geom_default = build_mesh_geometry(FakeTF())
+        geom_zero = build_mesh_geometry(FakeTF(), origin_offset=(0, 0))
+        assert geom_default["x_off"] == geom_zero["x_off"]
+        assert geom_default["y_off"] == geom_zero["y_off"]

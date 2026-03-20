@@ -10,7 +10,9 @@ from crs import CRS as CRSType, native_to_wgs84
 
 def build_mesh_geometry(tf: Any, crs: CRSType | None = None,
                         z_values: np.ndarray | None = None,
-                        z_scale: float = 1) -> dict[str, Any]:
+                        z_scale: float = 1,
+                        origin_offset: tuple[float, float] = (0, 0),
+                        ) -> dict[str, Any]:
     """Build mesh geometry for SimpleMeshLayer.
 
     Transforms TELEMAC mesh coordinates (arbitrary metric CRS) into
@@ -42,6 +44,10 @@ def build_mesh_geometry(tf: Any, crs: CRSType | None = None,
 
     x_off = float((x.min() + x.max()) / 2) + i_orig
     y_off = float((y.min() + y.max()) / 2) + j_orig
+
+    # Manual origin offset (for pre-centered meshes lacking absolute CRS origin)
+    x_off += origin_offset[0]
+    y_off += origin_offset[1]
 
     positions = np.zeros((npoin, 3), dtype=np.float32)
     positions[:, 0] = (x[:npoin] - x_off + i_orig).astype(np.float32)
