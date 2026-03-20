@@ -55,7 +55,9 @@ class TriangleBackend(MeshBackend):
         if domain.channel_points is not None and len(domain.channel_points) > 0:
             ch_pts = np.asarray(domain.channel_points, dtype=np.float64)
             offset = len(vertices)
-            vertices = np.vstack([vertices, ch_pts])
+            # Use only x,y for triangulation; z is applied later as elevation
+            ch_xy = ch_pts[:, :2] if ch_pts.ndim == 2 and ch_pts.shape[1] >= 3 else ch_pts
+            vertices = np.vstack([vertices, ch_xy])
 
             if domain.channel_segments is not None and len(domain.channel_segments) > 0:
                 ch_segs = np.asarray(domain.channel_segments, dtype=np.int32) + offset
@@ -109,6 +111,8 @@ class TriangleBackend(MeshBackend):
 
         # Apply per-region overrides if available
         for region in domain.mannings_regions:
+            if "polygon" not in region:
+                continue
             poly_r = np.asarray(region["polygon"], dtype=np.float64)
             value = float(region["n"])
             inside = _points_in_polygon(nodes, poly_r)
