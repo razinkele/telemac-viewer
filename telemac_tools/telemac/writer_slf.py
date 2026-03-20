@@ -7,7 +7,13 @@ from data_manip.formats.selafin import Selafin
 from telemac_tools.model import Mesh2D
 
 
-def write_slf(mesh: Mesh2D, path: str, *, init_depth: float = 0.1) -> None:
+def write_slf(
+    mesh: Mesh2D,
+    path: str,
+    *,
+    init_depth: float = 0.1,
+    boundary_nodes: list[int] | None = None,
+) -> None:
     """Create a .slf file with BOTTOM, FRICTION, WATER DEPTH, FREE SURFACE.
 
     Parameters
@@ -18,6 +24,10 @@ def write_slf(mesh: Mesh2D, path: str, *, init_depth: float = 0.1) -> None:
         Output file path.
     init_depth : float
         Initial water depth applied everywhere (default 0.1 m).
+    boundary_nodes : list[int] or None
+        Sorted list of node indices on the mesh boundary.  When provided,
+        the ``ipob2`` / ``ipob3`` arrays are populated so that TELEMAC can
+        link .cli entries to mesh nodes.
     """
     slf = Selafin("")
 
@@ -59,8 +69,12 @@ def write_slf(mesh: Mesh2D, path: str, *, init_depth: float = 0.1) -> None:
     slf.ikle2 = slf.ikle3
 
     # Boundary pointer (0 = interior, >0 = boundary node number)
-    slf.ipob2 = np.zeros(npoin, dtype=np.int32)
-    slf.ipob3 = slf.ipob2
+    ipob2 = np.zeros(npoin, dtype=np.int32)
+    if boundary_nodes:
+        for k, node in enumerate(boundary_nodes):
+            ipob2[node] = k + 1  # 1-based boundary pointer
+    slf.ipob2 = ipob2
+    slf.ipob3 = ipob2
 
     # Coordinates
     slf.meshx = mesh.nodes[:, 0].astype(np.float64)

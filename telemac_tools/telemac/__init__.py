@@ -24,8 +24,11 @@ def write_telemac(mesh, domain, output_dir, name="project",
         Extra .cas keywords.
     """
     import os
+    from telemac_tools.telemac.writer_cli import _find_boundary_nodes
     os.makedirs(output_dir, exist_ok=True)
-    write_slf(mesh, os.path.join(output_dir, f"{name}.slf"))
+    bnodes = _find_boundary_nodes(mesh.elements, mesh.nodes.shape[0])
+    write_slf(mesh, os.path.join(output_dir, f"{name}.slf"),
+              boundary_nodes=bnodes)
     write_cli(mesh, domain, os.path.join(output_dir, f"{name}.cli"))
     write_cas(os.path.join(output_dir, f"{name}.cas"), name=name,
               duration=duration, overrides=cas_overrides)
