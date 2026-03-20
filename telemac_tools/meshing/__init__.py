@@ -25,6 +25,7 @@ def generate_mesh(domain: TelemacDomain, backend: str = "triangle",
         from telemac_tools.meshing.triangle_mesh import TriangleBackend
         return TriangleBackend().generate(domain, min_angle, max_area)
     elif backend == "gmsh":
-        raise NotImplementedError("Gmsh backend not yet implemented")
+        from telemac_tools.meshing.gmsh_mesh import GmshBackend
+        return GmshBackend().generate(domain, min_angle, max_area)
     else:
         raise ValueError(f"Unknown backend: {backend}")
