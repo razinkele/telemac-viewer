@@ -159,16 +159,61 @@ class TestOtherLayers:
 
 
 class TestOriginParameter:
-    def test_mesh_layer_default_origin(self, fake_tf, fake_geom):
-        values = np.array([0.1, 0.5, 0.5, 1.0])
-        lyr, _, _, _ = build_mesh_layer(fake_geom, values, "Viridis")
-        assert lyr["coordinateOrigin"] == [0, 0]
+    """Verify all layer builders pass origin through to coordinateOrigin."""
 
-    def test_mesh_layer_custom_origin(self, fake_tf, fake_geom):
+    def test_mesh_layer(self, fake_geom):
         values = np.array([0.1, 0.5, 0.5, 1.0])
         lyr, _, _, _ = build_mesh_layer(fake_geom, values, "Viridis", origin=[24.0, 55.0])
         assert lyr["coordinateOrigin"] == [24.0, 55.0]
 
-    def test_marker_layer_custom_origin(self):
+    def test_velocity_layer(self, fake_tf, fake_geom):
+        lyr = build_velocity_layer(fake_tf, 0, fake_geom, origin=[24.0, 55.0])
+        if lyr is not None:
+            assert lyr["coordinateOrigin"] == [24.0, 55.0]
+
+    def test_contour_layer(self, fake_tf, fake_geom):
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        lyr = build_contour_layer_fn(fake_tf, values, fake_geom, origin=[24.0, 55.0])
+        if lyr is not None:
+            assert lyr["coordinateOrigin"] == [24.0, 55.0]
+
+    def test_marker_layer(self):
         lyr = build_marker_layer(0.0, 0.0, origin=[24.0, 55.0])
         assert lyr["coordinateOrigin"] == [24.0, 55.0]
+
+    def test_cross_section_layer(self):
+        lyr = build_cross_section_layer([[0, 0], [1, 1]], origin=[24.0, 55.0])
+        assert lyr["coordinateOrigin"] == [24.0, 55.0]
+
+    def test_particle_layer(self):
+        paths = [[[0, 0, 0], [1, 1, 1]]]
+        lyr = build_particle_layer(paths, 0.5, 1.0, origin=[24.0, 55.0])
+        assert lyr["coordinateOrigin"] == [24.0, 55.0]
+
+    def test_wireframe_layer(self, fake_tf, fake_geom):
+        lyr = build_wireframe_layer(fake_tf, fake_geom, origin=[24.0, 55.0])
+        assert lyr["coordinateOrigin"] == [24.0, 55.0]
+
+    def test_extrema_markers(self, fake_tf, fake_geom):
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        extrema = find_extrema(fake_tf, values)
+        layers = build_extrema_markers(extrema, fake_geom["x_off"], fake_geom["y_off"], origin=[24.0, 55.0])
+        for lyr in layers:
+            assert lyr["coordinateOrigin"] == [24.0, 55.0]
+
+    def test_measurement_layer(self):
+        pts = [[0, 0], [1, 1]]
+        layers = build_measurement_layer(pts, origin=[24.0, 55.0])
+        for lyr in layers:
+            assert lyr["coordinateOrigin"] == [24.0, 55.0]
+
+    def test_boundary_layer(self, fake_tf, fake_geom):
+        bnodes = find_boundary_nodes(fake_tf)
+        layers = build_boundary_layer(fake_tf, fake_geom, bnodes, origin=[24.0, 55.0])
+        for lyr in layers:
+            assert lyr["coordinateOrigin"] == [24.0, 55.0]
+
+    def test_default_origin_is_zero(self, fake_geom):
+        values = np.array([0.1, 0.5, 0.5, 1.0])
+        lyr, _, _, _ = build_mesh_layer(fake_geom, values, "Viridis")
+        assert lyr["coordinateOrigin"] == [0, 0]
