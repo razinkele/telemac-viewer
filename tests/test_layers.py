@@ -128,7 +128,9 @@ class TestOtherLayers:
     def test_boundary(self, fake_tf, fake_geom):
         bnodes = find_boundary_nodes(fake_tf)
         result = build_boundary_layer(fake_tf, fake_geom, bnodes)
-        assert isinstance(result, dict)
+        assert isinstance(result, list)
+        assert len(result) > 0
+        assert all(isinstance(r, dict) for r in result)
 
     def test_extrema_markers(self, fake_tf, fake_geom):
         values = fake_tf.get_data_value("WATER DEPTH", 0)

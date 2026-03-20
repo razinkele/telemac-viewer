@@ -37,7 +37,10 @@ def test_load_file(tf):
 
 def test_geometry(tf, geom):
     assert geom["npoin"] == tf.npoin2
-    assert len(geom["positions"]) == tf.npoin2 * 3
+    assert geom["positions"]["@@binary"] is True
+    import base64
+    raw = base64.b64decode(geom["positions"]["value"])
+    assert len(raw) == tf.npoin2 * 3 * 4  # float32
     assert geom["zoom"] > 0
 
 

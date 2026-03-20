@@ -1,10 +1,17 @@
 """Tests for geometry.py -- mesh geometry building."""
 from __future__ import annotations
+import base64
 import numpy as np
 import pytest
 from geometry import build_mesh_geometry
 from crs import crs_from_epsg
 from tests.helpers import FakeTF
+
+
+def _decode_binary(d):
+    """Decode shiny-deckgl binary-encoded attribute to numpy array."""
+    raw = base64.b64decode(d["value"])
+    return np.frombuffer(raw, dtype=d["dtype"])
 
 
 class TestBuildMeshGeometry2D:
@@ -19,11 +26,13 @@ class TestBuildMeshGeometry2D:
 
     def test_positions_length(self, fake_tf):
         geom = build_mesh_geometry(fake_tf)
-        assert len(geom["positions"]) == 4 * 3
+        pos = _decode_binary(geom["positions"])
+        assert len(pos) == 4 * 3
 
     def test_indices_length(self, fake_tf):
         geom = build_mesh_geometry(fake_tf)
-        assert len(geom["indices"]) == 2 * 3
+        idx = _decode_binary(geom["indices"])
+        assert len(idx) == 2 * 3
 
     def test_center_offsets(self, fake_tf):
         geom = build_mesh_geometry(fake_tf)
@@ -32,7 +41,7 @@ class TestBuildMeshGeometry2D:
 
     def test_positions_are_centered(self, fake_tf):
         geom = build_mesh_geometry(fake_tf)
-        pos = geom["positions"]
+        pos = _decode_binary(geom["positions"])
         # Node 0: (0-0.5, 0-0.5, 0) = (-0.5, -0.5, 0)
         assert pos[0] == pytest.approx(-0.5)
         assert pos[1] == pytest.approx(-0.5)
@@ -51,14 +60,14 @@ class TestBuildMeshGeometry3D:
     def test_z_values_applied(self, fake_tf):
         z = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
         geom = build_mesh_geometry(fake_tf, z_values=z, z_scale=10)
-        pos = geom["positions"]
+        pos = _decode_binary(geom["positions"])
         # Node 0 z = 0*10=0, Node 3 z = 3*10=30
         assert pos[2] == pytest.approx(0.0)
         assert pos[11] == pytest.approx(30.0)  # node3: index 3*3+2=11
 
     def test_z_none_is_flat(self, fake_tf):
         geom = build_mesh_geometry(fake_tf, z_values=None)
-        pos = geom["positions"]
+        pos = _decode_binary(geom["positions"])
         z_vals = [pos[i * 3 + 2] for i in range(4)]
         assert all(z == 0.0 for z in z_vals)
 
