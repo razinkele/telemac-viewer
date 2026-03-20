@@ -2766,6 +2766,7 @@ def server(input, output, session):
     import_model = reactive.value(None)     # parsed HecRasModel
 
     import_map_widget = MapWidget(
+        "import_map",
         view_state={"longitude": 0, "latitude": 0, "zoom": 0},
         style="data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%230f1923%22%7D%7D%5D%7D",
     )
