@@ -168,9 +168,9 @@ def fake_dem(tmp_path):
     import tifffile
     tifffile.imwrite(
         str(path), data,
-        metadata={
-            'ModelTiepointTag': (0, 0, 0, origin_x, origin_y, 0),
-            'ModelPixelScaleTag': (pixel_size, pixel_size, 0),
-        },
+        extratags=[
+            (33922, 12, 6, (0.0, 0.0, 0.0, origin_x, origin_y, 0.0)),  # ModelTiepointTag
+            (33550, 12, 3, (pixel_size, pixel_size, 0.0)),  # ModelPixelScaleTag
+        ],
     )
     return str(path)
