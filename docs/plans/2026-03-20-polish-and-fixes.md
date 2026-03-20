@@ -56,9 +56,45 @@ def test_positions_length(self, fake_tf):
     assert len(raw) == 4 * 3 * 4
 ```
 
-Similarly fix `test_indices_length`, `test_positions_are_centered`, `test_z_values_applied`, `test_z_none_is_flat`.
+Fix all 5 tests by decoding the base64 binary:
 
-For `test_positions_are_centered` and 3D tests: decode the base64, interpret as float32 numpy array, then check values.
+```python
+import base64
+
+def _decode_binary(d):
+    """Decode shiny-deckgl binary-encoded attribute to numpy array."""
+    raw = base64.b64decode(d["value"])
+    return np.frombuffer(raw, dtype=d["dtype"])
+
+def test_indices_length(self, fake_tf):
+    geom = build_mesh_geometry(fake_tf)
+    idx = _decode_binary(geom["indices"])
+    assert len(idx) == 2 * 3
+
+def test_positions_are_centered(self, fake_tf):
+    geom = build_mesh_geometry(fake_tf)
+    pos = _decode_binary(geom["positions"])
+    # Node 0: (0-0.5, 0-0.5, 0) = (-0.5, -0.5, 0)
+    assert pos[0] == pytest.approx(-0.5, abs=0.01)
+    assert pos[1] == pytest.approx(-0.5, abs=0.01)
+    assert pos[2] == pytest.approx(0.0, abs=0.01)
+```
+
+3D tests — same pattern:
+```python
+def test_z_values_applied(self, fake_tf):
+    z = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
+    geom = build_mesh_geometry(fake_tf, z_values=z, z_scale=10)
+    pos = _decode_binary(geom["positions"])
+    assert pos[2] == pytest.approx(0.0)      # node0 z
+    assert pos[11] == pytest.approx(30.0)     # node3 z = 3*10
+
+def test_z_none_is_flat(self, fake_tf):
+    geom = build_mesh_geometry(fake_tf, z_values=None)
+    pos = _decode_binary(geom["positions"])
+    z_vals = [pos[i * 3 + 2] for i in range(4)]
+    assert all(z == 0.0 for z in z_vals)
+```
 
 - [ ] **Step 2: Fix boundary layer test**
 
@@ -171,31 +207,174 @@ git add app.py geometry.py tests/test_crs.py && git commit -m "feat(crs): add ma
 **Problem:** The Import tab shows a text log but no map preview. The spec calls for river alignment, cross-sections, domain boundary, and BC segments rendered on a map.
 
 **Files:**
-- Modify: `app.py` — replace text preview with deck.gl map showing parsed geometry
+- Modify: `app.py` — add MapWidget to Import tab, build preview layers from HecRasModel
 
-- [ ] **Step 1: Replace preview_info output with a MapWidget**
+- [ ] **Step 1: Add MapWidget to Import tab UI**
 
-Add a second `MapWidget` for the import preview. After parsing, build layers from the model:
+In the Import tab's right panel card (currently shows "Preview" header + text log), replace the card content. The card should contain both a MapWidget and the text log below it.
 
-- River alignment → `path_layer` (cyan `[0, 200, 255, 200]`)
-- Cross-section lines → `line_layer` (yellow `[255, 220, 0, 180]`)
-- Domain boundary → `path_layer` (white dashed `[255, 255, 255, 150]`)
-- BC lines → `line_layer` (blue=inflow `[40, 120, 255]`, green=outflow `[0, 200, 80]`)
+Find the Import tab's right-panel card in `app.py` (around line 690):
+```python
+ui.card(
+    ui.card_header("Preview"),
+    ui.output_ui("import_preview_info"),
+    ui.tags.pre(
+        ui.output_text_verbatim("import_log"),
+        class_="sim-console",
+    ),
+    class_="ocean-card",
+),
+```
 
-After converting, add:
-- Generated mesh → wireframe `line_layer` (gray `[100, 100, 100, 80]`)
+Replace with:
+```python
+ui.card(
+    ui.card_header("Preview"),
+    output_widget("import_map", height="400px"),
+    ui.tags.pre(
+        ui.output_text_verbatim("import_log"),
+        class_="sim-console",
+        style="max-height: 200px; overflow-y: auto;",
+    ),
+    class_="ocean-card",
+),
+```
 
-- [ ] **Step 2: Build preview layers from HecRasModel**
+- [ ] **Step 2: Initialize import MapWidget in server**
 
-Create helper function `_build_import_preview_layers(model)` that converts model geometry to deck.gl layer dicts. All coordinates in METER_OFFSETS relative to the model's center.
+At the start of the Import server section (after `import_log_text = reactive.value("")`), add:
 
-- [ ] **Step 3: Wire into import handlers**
+```python
+import_map_widget = MapWidget(
+    view_state={"longitude": 0, "latitude": 0, "zoom": 0},
+    style="data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%230f1923%22%7D%7D%5D%7D",
+)
 
-In `handle_import_preview`: after parsing, compute center, build layers, update preview map.
-In `handle_import_convert`: after meshing, add wireframe layer.
+@render_widget
+def import_map():
+    return import_map_widget
+```
 
-- [ ] **Step 4: Test manually — verify preview renders**
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Create `_build_import_preview_layers` helper**
+
+Add this function in the Import server section (before the handlers):
+
+```python
+_COORD_METER_OFFSETS = 2  # deck.gl coordinate system constant
+
+def _build_import_preview_layers(model, x_off, y_off):
+    """Build deck.gl layers from parsed HecRasModel for preview."""
+    layers = []
+
+    # River alignment (cyan path)
+    for reach in model.rivers:
+        path = [[float(p[0] - x_off), float(p[1] - y_off)] for p in reach.alignment]
+        layers.append(path_layer(
+            f"alignment-{reach.name}",
+            [{"path": path}],
+            getPath="@@=d.path",
+            getColor=[0, 200, 255, 200],
+            getWidth=4,
+            widthMinPixels=2,
+            widthMaxPixels=6,
+            pickable=False,
+            coordinateSystem=_COORD_METER_OFFSETS,
+            coordinateOrigin=[0, 0],
+        ))
+
+        # Cross-section lines (yellow)
+        xs_lines = []
+        for xs in reach.cross_sections:
+            if xs.coords.shape[0] >= 2:
+                xs_lines.append({
+                    "sourcePosition": [float(xs.coords[0, 0] - x_off), float(xs.coords[0, 1] - y_off)],
+                    "targetPosition": [float(xs.coords[-1, 0] - x_off), float(xs.coords[-1, 1] - y_off)],
+                })
+        if xs_lines:
+            layers.append(line_layer(
+                "cross-sections",
+                xs_lines,
+                getColor=[255, 220, 0, 180],
+                getWidth=2,
+                widthMinPixels=1,
+                widthMaxPixels=3,
+                pickable=False,
+                coordinateSystem=_COORD_METER_OFFSETS,
+                coordinateOrigin=[0, 0],
+            ))
+
+    # BC lines (blue=inflow, green=outflow)
+    for i, bc in enumerate(model.boundaries):
+        if bc.line_coords is not None and len(bc.line_coords) >= 2:
+            color = [40, 120, 255, 220] if bc.location == "upstream" else [0, 200, 80, 220]
+            layers.append(line_layer(
+                f"bc-{i}",
+                [{"sourcePosition": [float(bc.line_coords[0, 0] - x_off), float(bc.line_coords[0, 1] - y_off)],
+                  "targetPosition": [float(bc.line_coords[-1, 0] - x_off), float(bc.line_coords[-1, 1] - y_off)]}],
+                getColor=color,
+                getWidth=4,
+                widthMinPixels=2,
+                widthMaxPixels=5,
+                pickable=False,
+                coordinateSystem=_COORD_METER_OFFSETS,
+                coordinateOrigin=[0, 0],
+            ))
+
+    # 2D area face points (scatter)
+    for area in model.areas_2d:
+        pts = [{"position": [float(p[0] - x_off), float(p[1] - y_off)]} for p in area.face_points[::max(1, len(area.face_points)//2000)]]
+        layers.append(scatterplot_layer(
+            f"2d-{area.name}",
+            pts,
+            getPosition="@@=d.position",
+            getColor=[0, 200, 255, 120],
+            getRadius=3,
+            radiusMinPixels=1,
+            radiusMaxPixels=4,
+            pickable=False,
+            coordinateSystem=_COORD_METER_OFFSETS,
+            coordinateOrigin=[0, 0],
+        ))
+
+    return layers
+```
+
+- [ ] **Step 4: Wire into `handle_import_preview`**
+
+After `import_model.set(model)` and the log messages, add:
+
+```python
+# Compute center for METER_OFFSETS
+all_x, all_y = [], []
+for r in model.rivers:
+    all_x.extend(r.alignment[:, 0].tolist())
+    all_y.extend(r.alignment[:, 1].tolist())
+for a in model.areas_2d:
+    all_x.extend(a.face_points[:, 0].tolist())
+    all_y.extend(a.face_points[:, 1].tolist())
+if all_x:
+    x_off = (min(all_x) + max(all_x)) / 2
+    y_off = (min(all_y) + max(all_y)) / 2
+    extent = max(max(all_x) - min(all_x), max(all_y) - min(all_y), 1.0)
+    import math
+    zoom = math.log2(600 * 360 / (256 * (extent / 111320))) if extent > 0 else 10
+
+    preview_layers = _build_import_preview_layers(model, x_off, y_off)
+    import asyncio
+    asyncio.ensure_future(import_map_widget.update(
+        session,
+        layers=preview_layers,
+        view_state={"longitude": 0, "latitude": 0, "zoom": zoom},
+    ))
+```
+
+- [ ] **Step 5: Verify imports are available**
+
+The Import tab server section needs `path_layer`, `line_layer`, `scatterplot_layer` — these are already imported at the top of app.py from `shiny_deckgl`. Verify they're in scope.
+
+- [ ] **Step 6: Run app, switch to Import tab, upload a file, click Preview — verify map renders**
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add app.py && git commit -m "feat(app): add preview map to Import tab with alignment/XS/boundary layers"
