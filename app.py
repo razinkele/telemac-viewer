@@ -681,10 +681,11 @@ app_ui = ui.page_navbar(
             ),
             ui.card(
                 ui.card_header("Preview"),
-                ui.output_ui("import_preview_info"),
+                output_widget("import_map", height="400px"),
                 ui.tags.pre(
                     ui.output_text_verbatim("import_log"),
                     class_="sim-console",
+                    style="max-height: 200px; overflow-y: auto;",
                 ),
                 class_="ocean-card",
             ),
@@ -2763,6 +2764,15 @@ def server(input, output, session):
     # ── Import tab server logic ─────────────────────────────────────────
 
     import_model = reactive.value(None)     # parsed HecRasModel
+
+    import_map_widget = MapWidget(
+        view_state={"longitude": 0, "latitude": 0, "zoom": 0},
+        style="data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%230f1923%22%7D%7D%5D%7D",
+    )
+
+    @render_widget
+    def import_map():
+        return import_map_widget
     import_output_dir = reactive.value(None)  # path to generated files
     import_log_text = reactive.value("")
 
@@ -2773,6 +2783,85 @@ def server(input, output, session):
     @render.text
     def import_log():
         return import_log_text.get()
+
+    _IMPORT_METER_OFFSETS = 2
+
+    def _build_import_preview_layers(model, x_off, y_off):
+        """Build deck.gl preview layers from parsed HecRasModel."""
+        layers = []
+
+        for reach in model.rivers:
+            # River alignment (cyan path)
+            path = [[float(p[0] - x_off), float(p[1] - y_off)] for p in reach.alignment]
+            layers.append(path_layer(
+                f"alignment-{reach.name}",
+                [{"path": path}],
+                getPath="@@=d.path",
+                getColor=[0, 200, 255, 200],
+                getWidth=4,
+                widthMinPixels=2,
+                widthMaxPixels=6,
+                pickable=False,
+                coordinateSystem=_IMPORT_METER_OFFSETS,
+                coordinateOrigin=[0, 0],
+            ))
+
+            # Cross-section lines (yellow)
+            xs_lines = []
+            for xs in reach.cross_sections:
+                if xs.coords.shape[0] >= 2:
+                    xs_lines.append({
+                        "sourcePosition": [float(xs.coords[0, 0] - x_off), float(xs.coords[0, 1] - y_off)],
+                        "targetPosition": [float(xs.coords[-1, 0] - x_off), float(xs.coords[-1, 1] - y_off)],
+                    })
+            if xs_lines:
+                layers.append(line_layer(
+                    "cross-sections",
+                    xs_lines,
+                    getColor=[255, 220, 0, 180],
+                    getWidth=2,
+                    widthMinPixels=1,
+                    widthMaxPixels=3,
+                    pickable=False,
+                    coordinateSystem=_IMPORT_METER_OFFSETS,
+                    coordinateOrigin=[0, 0],
+                ))
+
+        # BC lines
+        for i, bc in enumerate(model.boundaries):
+            if bc.line_coords is not None and len(bc.line_coords) >= 2:
+                color = [40, 120, 255, 220] if bc.location == "upstream" else [0, 200, 80, 220]
+                layers.append(line_layer(
+                    f"bc-{i}",
+                    [{"sourcePosition": [float(bc.line_coords[0, 0] - x_off), float(bc.line_coords[0, 1] - y_off)],
+                      "targetPosition": [float(bc.line_coords[-1, 0] - x_off), float(bc.line_coords[-1, 1] - y_off)]}],
+                    getColor=color,
+                    getWidth=4,
+                    widthMinPixels=2,
+                    widthMaxPixels=5,
+                    pickable=False,
+                    coordinateSystem=_IMPORT_METER_OFFSETS,
+                    coordinateOrigin=[0, 0],
+                ))
+
+        # 2D area face points (scatter, subsampled)
+        for area in model.areas_2d:
+            step = max(1, len(area.face_points) // 2000)
+            pts = [{"position": [float(p[0] - x_off), float(p[1] - y_off)]} for p in area.face_points[::step]]
+            layers.append(scatterplot_layer(
+                f"2d-{area.name}",
+                pts,
+                getPosition="@@=d.position",
+                getColor=[0, 200, 255, 120],
+                getRadius=3,
+                radiusMinPixels=1,
+                radiusMaxPixels=4,
+                pickable=False,
+                coordinateSystem=_IMPORT_METER_OFFSETS,
+                coordinateOrigin=[0, 0],
+            ))
+
+        return layers
 
     @reactive.effect
     @reactive.event(input.import_preview)
@@ -2809,6 +2898,29 @@ def server(input, output, session):
                 _append_log(f"  Boundary conditions: {len(model.boundaries)}")
                 for bc in model.boundaries:
                     _append_log(f"    {bc.location}: {bc.bc_type}")
+
+            # Compute center and zoom for preview map
+            all_x, all_y = [], []
+            for r in model.rivers:
+                all_x.extend(r.alignment[:, 0].tolist())
+                all_y.extend(r.alignment[:, 1].tolist())
+            for a in model.areas_2d:
+                all_x.extend(a.face_points[:, 0].tolist())
+                all_y.extend(a.face_points[:, 1].tolist())
+            if all_x:
+                x_off = (min(all_x) + max(all_x)) / 2
+                y_off = (min(all_y) + max(all_y)) / 2
+                extent = max(max(all_x) - min(all_x), max(all_y) - min(all_y), 1.0)
+                import math
+                zoom = math.log2(600 * 360 / (256 * (extent / 111320))) if extent > 0 else 10
+
+                preview_layers = _build_import_preview_layers(model, x_off, y_off)
+                import asyncio
+                asyncio.ensure_future(import_map_widget.update(
+                    session,
+                    layers=preview_layers,
+                    view_state={"longitude": 0, "latitude": 0, "zoom": zoom},
+                ))
 
             _append_log("\nReady to convert. Click 'Convert' to generate TELEMAC files.")
 
@@ -2896,11 +3008,6 @@ def server(input, output, session):
             total_cells = sum(len(a.cells) for a in model.areas_2d)
             parts.append(f"{n_areas} 2D area(s), {total_cells} cells")
         return ui.span(" | ".join(parts), class_="small text-success")
-
-    @output
-    @render.ui
-    def import_preview_info():
-        return ui.div()
 
     @output
     @render.ui
