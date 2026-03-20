@@ -109,11 +109,14 @@ These controls require `@render.ui` wrappers that return the control or `ui.div(
 | Palette | Visualization accordion | Display accordion |
 | Log/reverse/diff | Visualization accordion | Display accordion |
 | Color range | Visualization accordion | Display accordion |
-| Filter | Visualization accordion | Display accordion |
-| Overlay toggles | Visualization > Overlays details | Overlays & Analysis accordion |
-| Compare variable | Visualization > Overlays details | Overlays & Analysis accordion |
+| Filter (`filter_ui`) | Visualization accordion | Display accordion |
+| Ref timestep (`ref_timestep_ui`) | Visualization accordion | Display accordion (contextual) |
+| Overlay toggles (vectors, contours, wireframe, boundary, extrema, particles) | Visualization > Overlays/Analysis details | Overlays & Analysis accordion |
+| Compare variable (`compare_var_ui`) | Visualization > Overlays details | Overlays & Analysis accordion |
 | Draw XS / Measure / Polygon buttons | Visualization > Analysis details | Overlays & Analysis accordion |
-| Discharge / Rating / Polygon stats | Visualization > Analysis details | Overlays & Analysis accordion |
+| Clear XS (`clear_xsec_ui`) | Visualization > Analysis details | Overlays & Analysis accordion |
+| Discharge / Rating / Polygon stats (`discharge_ui`, `rating_curve_ui`, `polygon_stats_ui`) | Visualization > Analysis details | Overlays & Analysis accordion |
+| Measure info (`measure_info_ui`) | Visualization > Analysis details | Overlays & Analysis accordion |
 | Expression evaluator | Visualization > Analysis details | Overlays & Analysis accordion |
 | 3D mode toggle | Visualization > Analysis details | Overlays & Analysis accordion |
 | Particle seed config | Visualization > Analysis details | Overlays & Analysis accordion |
