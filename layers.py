@@ -25,7 +25,8 @@ def build_mesh_layer(geom: dict[str, Any], values: np.ndarray, palette_id: str,
                      filter_range: tuple[float, float] | None = None,
                      color_range_override: tuple[float, float] | None = None,
                      log_scale: bool = False,
-                     reverse_palette: bool = False) -> tuple[dict, float, float, bool]:
+                     reverse_palette: bool = False,
+                     origin: list[float] | None = None) -> tuple[dict, float, float, bool]:
     """Build SimpleMeshLayer with per-vertex coloring and optional value filter."""
     npoin = geom["npoin"]
 
@@ -68,7 +69,7 @@ def build_mesh_layer(geom: dict[str, Any], values: np.ndarray, palette_id: str,
         _meshColors=encode_binary_attribute(colors_f32.flatten()),
         _meshIndices=geom["indices"],
         coordinateSystem=_COORD_METER_OFFSETS,
-        coordinateOrigin=[0, 0],
+        coordinateOrigin=origin or [0, 0],
         sizeScale=1,
         getPosition="@@=d.position",
         getColor=[255, 255, 255, 255],
@@ -77,7 +78,8 @@ def build_mesh_layer(geom: dict[str, Any], values: np.ndarray, palette_id: str,
     return lyr, vmin, vmax, log_applied
 
 
-def build_velocity_layer(tf: Any, time_idx: int, geom: dict[str, Any]) -> dict | None:
+def build_velocity_layer(tf: Any, time_idx: int, geom: dict[str, Any],
+                         origin: list[float] | None = None) -> dict | None:
     """Build velocity arrow layer from U/V components."""
     pair = find_velocity_pair(tf.varnames)
     if pair is None:
@@ -125,13 +127,14 @@ def build_velocity_layer(tf: Any, time_idx: int, geom: dict[str, Any]) -> dict |
         widthMaxPixels=3,
         pickable=False,
         coordinateSystem=_COORD_METER_OFFSETS,
-        coordinateOrigin=[0, 0],
+        coordinateOrigin=origin or [0, 0],
     )
 
 
 def build_contour_layer_fn(tf: Any, values: np.ndarray, geom: dict[str, Any],
                            n_contours: int = 6, layer_id: str = "contours",
-                           contour_color: list[int] | None = None) -> dict | None:
+                           contour_color: list[int] | None = None,
+                           origin: list[float] | None = None) -> dict | None:
     """Build FEM-exact contour lines using marching triangles.
 
     Walks each triangle to find edges where the field value crosses
@@ -226,11 +229,12 @@ def build_contour_layer_fn(tf: Any, values: np.ndarray, geom: dict[str, Any],
         widthMaxPixels=2,
         pickable=False,
         coordinateSystem=_COORD_METER_OFFSETS,
-        coordinateOrigin=[0, 0],
+        coordinateOrigin=origin or [0, 0],
     )
 
 
-def build_marker_layer(x_m: float, y_m: float, layer_id: str = "marker") -> dict:
+def build_marker_layer(x_m: float, y_m: float, layer_id: str = "marker",
+                       origin: list[float] | None = None) -> dict:
     """Build a single-point scatterplot layer to mark clicked location."""
     return scatterplot_layer(
         layer_id,
@@ -242,11 +246,12 @@ def build_marker_layer(x_m: float, y_m: float, layer_id: str = "marker") -> dict
         radiusMaxPixels=12,
         pickable=False,
         coordinateSystem=_COORD_METER_OFFSETS,
-        coordinateOrigin=[0, 0],
+        coordinateOrigin=origin or [0, 0],
     )
 
 
-def build_cross_section_layer(points_m: list[list[float]]) -> dict:
+def build_cross_section_layer(points_m: list[list[float]],
+                              origin: list[float] | None = None) -> dict:
     """Build a path layer showing the cross-section polyline on the map.
 
     points_m: list of [x, y] in meters relative to mesh center.
@@ -261,11 +266,12 @@ def build_cross_section_layer(points_m: list[list[float]]) -> dict:
         widthMaxPixels=5,
         pickable=False,
         coordinateSystem=_COORD_METER_OFFSETS,
-        coordinateOrigin=[0, 0],
+        coordinateOrigin=origin or [0, 0],
     )
 
 
-def build_particle_layer(paths: list[list[list[float]]], current_time: float, trail_length: float) -> dict:
+def build_particle_layer(paths: list[list[list[float]]], current_time: float, trail_length: float,
+                         origin: list[float] | None = None) -> dict:
     """Build a TripsLayer for particle trace animation.
 
     paths: list of particle trajectories, each is list of [x, y, timestamp].
@@ -280,11 +286,12 @@ def build_particle_layer(paths: list[list[list[float]]], current_time: float, tr
         trailLength=trail_length,
         widthMinPixels=2,
         coordinateSystem=_COORD_METER_OFFSETS,
-        coordinateOrigin=[0, 0],
+        coordinateOrigin=origin or [0, 0],
     )
 
 
-def build_wireframe_layer(tf: Any, geom: dict[str, Any]) -> dict:
+def build_wireframe_layer(tf: Any, geom: dict[str, Any],
+                          origin: list[float] | None = None) -> dict:
     """Build mesh wireframe as line segments (triangle edges)."""
     x, y = tf.meshx, tf.meshy
     ikle = tf.ikle2
@@ -323,11 +330,12 @@ def build_wireframe_layer(tf: Any, geom: dict[str, Any]) -> dict:
         widthMaxPixels=1,
         pickable=False,
         coordinateSystem=_COORD_METER_OFFSETS,
-        coordinateOrigin=[0, 0],
+        coordinateOrigin=origin or [0, 0],
     )
 
 
-def build_extrema_markers(extrema: dict[str, tuple], x_off: float, y_off: float) -> list[dict]:
+def build_extrema_markers(extrema: dict[str, tuple], x_off: float, y_off: float,
+                          origin: list[float] | None = None) -> list[dict]:
     """Build scatterplot markers for min/max value locations."""
     _colors = {"min": [0, 100, 255, 220], "max": [255, 50, 0, 220]}
     layers = []
@@ -348,12 +356,13 @@ def build_extrema_markers(extrema: dict[str, tuple], x_off: float, y_off: float)
             getLineColor=color,
             pickable=False,
             coordinateSystem=_COORD_METER_OFFSETS,
-            coordinateOrigin=[0, 0],
+            coordinateOrigin=origin or [0, 0],
         ))
     return layers
 
 
-def build_measurement_layer(points_m: list[list[float]]) -> list[dict]:
+def build_measurement_layer(points_m: list[list[float]],
+                            origin: list[float] | None = None) -> list[dict]:
     """Build a line + endpoint markers for distance measurement."""
     layers = []
     if len(points_m) >= 2:
@@ -366,7 +375,7 @@ def build_measurement_layer(points_m: list[list[float]]) -> list[dict]:
             widthMaxPixels=4,
             pickable=False,
             coordinateSystem=_COORD_METER_OFFSETS,
-            coordinateOrigin=[0, 0],
+            coordinateOrigin=origin or [0, 0],
         ))
     for i, pt in enumerate(points_m):
         layers.append(scatterplot_layer(
@@ -379,14 +388,15 @@ def build_measurement_layer(points_m: list[list[float]]) -> list[dict]:
             radiusMaxPixels=10,
             pickable=False,
             coordinateSystem=_COORD_METER_OFFSETS,
-            coordinateOrigin=[0, 0],
+            coordinateOrigin=origin or [0, 0],
         ))
     return layers
 
 
 def build_boundary_layer(tf: Any, geom: dict[str, Any], boundary_nodes: list[int],
                          bc_types: dict[int, int] | None = None,
-                         boundary_edges: tuple | None = None) -> list[dict]:
+                         boundary_edges: tuple | None = None,
+                         origin: list[float] | None = None) -> list[dict]:
     """Build boundary edge lines color-coded by hydrodynamic type.
 
     Returns a list of layers: one line layer per boundary type plus
@@ -451,7 +461,7 @@ def build_boundary_layer(tf: Any, geom: dict[str, Any], boundary_nodes: list[int
             widthMaxPixels=5,
             pickable=False,
             coordinateSystem=_COORD_METER_OFFSETS,
-            coordinateOrigin=[0, 0],
+            coordinateOrigin=origin or [0, 0],
         ))
 
     # Add diamond markers at prescribed boundary nodes (inlets/outlets)
@@ -477,7 +487,7 @@ def build_boundary_layer(tf: Any, geom: dict[str, Any], boundary_nodes: list[int
             lineWidthMinPixels=1,
             pickable=False,
             coordinateSystem=_COORD_METER_OFFSETS,
-            coordinateOrigin=[0, 0],
+            coordinateOrigin=origin or [0, 0],
         ))
 
     return layers

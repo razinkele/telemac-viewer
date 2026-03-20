@@ -10,7 +10,7 @@ from analysis import (
     compute_element_area, compute_mesh_integral,
     get_available_derived, compute_derived, _compute_vorticity,
     evaluate_expression,
-    coord_to_meters, nearest_node, find_boundary_nodes, find_extrema,
+    nearest_node, find_boundary_nodes, find_extrema,
     vertical_profile_at_point, time_series_at_point, cross_section_profile,
     compute_temporal_stats, compute_difference,
     compute_discharge,
@@ -239,8 +239,9 @@ class TestExpressionParser:
 # ---------------------------------------------------------------------------
 
 class TestSpatialFunctions:
-    def test_coord_to_meters(self):
-        x, y = coord_to_meters(0.0, 0.0, 500.0, 300.0)
+    def test_click_to_native_no_crs(self):
+        from crs import click_to_native
+        x, y = click_to_native(0.0, 0.0, {"x_off": 500.0, "y_off": 300.0, "crs": None})
         assert x == pytest.approx(500.0)
         assert y == pytest.approx(300.0)
 

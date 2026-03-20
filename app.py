@@ -43,8 +43,11 @@ import asyncio
 import shlex
 import threading
 import os as _os
+from crs import (
+    crs_from_epsg, detect_crs_from_cas, guess_crs_from_coords,
+    click_to_native, meters_to_wgs84,
+)
 from analysis import (
-    coord_to_meters,
     nearest_node,
     time_series_at_point,
     cross_section_profile,
@@ -656,6 +659,9 @@ app_ui = ui.page_navbar(
                     "osm": "CartoDB Dark",
                     "satellite": "Satellite (ESRI)",
                 }),
+                ui.input_text("epsg_input", "CRS (EPSG)", placeholder="e.g. 3346"),
+                ui.input_switch("auto_crs", "Auto-detect CRS", value=True),
+                ui.output_ui("crs_status_ui"),
             ),
             ui.accordion_panel(
                 "Visualization",
@@ -852,7 +858,7 @@ def server(input, output, session):
     #   - Centered meters: mesh meters minus x_off/y_off (used by all layers)
     #   - Pseudo-degrees: centered meters as interpreted by deck.gl's
     #     METER_OFFSETS mode; map clicks return these, converted via
-    #     coord_to_meters() back to mesh meters.
+    #     click_to_native() back to mesh meters.
     # -----------------------------------------------------------------------
     playing = reactive.value(False)
     last_file_path = reactive.value("")
@@ -1001,9 +1007,63 @@ def server(input, output, session):
         polygon_stats_data.set(None)
         return tf
 
+    # --- CRS reactive ---
+    current_crs = reactive.value(None)
+
+    @reactive.effect
+    def resolve_crs():
+        """Auto-detect or manually set CRS when file or EPSG input changes."""
+        epsg_text = input.epsg_input() if input.epsg_input() else ""
+
+        # Manual EPSG overrides auto-detect
+        if epsg_text.strip():
+            try:
+                code = int(epsg_text.strip())
+                current_crs.set(crs_from_epsg(code))
+                return
+            except Exception:
+                current_crs.set(None)
+                return
+
+        # Auto-detect disabled
+        if not input.auto_crs():
+            current_crs.set(None)
+            return
+
+        # Try .cas file detection
+        uploaded = input.upload()
+        if not (uploaded and use_upload.get()):
+            path = EXAMPLES.get(input.example(), "")
+            cas_files = find_cas_files(path)
+            for cas_path in cas_files.values():
+                detected = detect_crs_from_cas(cas_path)
+                if detected:
+                    current_crs.set(detected)
+                    ui.update_text("epsg_input", value=str(detected.epsg))
+                    return
+
+        # Try coordinate heuristic
+        tf = tel_file()
+        detected = guess_crs_from_coords(tf.meshx, tf.meshy)
+        if detected:
+            current_crs.set(detected)
+            ui.update_text("epsg_input", value=str(detected.epsg))
+            return
+
+        current_crs.set(None)
+
+    @output
+    @render.ui
+    def crs_status_ui():
+        crs = current_crs.get()
+        if crs:
+            return ui.span(f"EPSG:{crs.epsg} — {crs.name}", class_="small text-success")
+        return ui.span("No CRS — basemap alignment disabled", class_="small text-muted")
+
     @reactive.calc
     def mesh_geom():
         tf = tel_file()
+        crs = current_crs.get()
         if is_3d_mode.get() and tf.nplan > 1:
             try:
                 z_scale = input.z_scale() if input.z_scale() is not None else 10
@@ -1017,8 +1077,8 @@ def server(input, output, session):
                     f"Cannot read Z elevation: {e}. Showing flat mesh.",
                     type="warning", duration=8, id="z_warn")
                 z_vals = np.zeros(tf.npoin2, dtype=np.float32)
-            return build_mesh_geometry(tf, z_values=z_vals, z_scale=z_scale)
-        return build_mesh_geometry(tf)
+            return build_mesh_geometry(tf, crs=crs, z_values=z_vals, z_scale=z_scale)
+        return build_mesh_geometry(tf, crs=crs)
 
     @reactive.calc
     def current_var():
@@ -1461,7 +1521,7 @@ def server(input, output, session):
             return
         coord = click["coordinate"]
         geom = mesh_geom()
-        x_m, y_m = coord_to_meters(coord[0], coord[1], geom["x_off"], geom["y_off"])
+        x_m, y_m = click_to_native(coord[0], coord[1], geom)
 
         # Measurement mode intercepts clicks
         if measure_mode.get():
@@ -1506,7 +1566,7 @@ def server(input, output, session):
             if geom_type == "Polygon" and polygon_mode.get():
                 coords = feat["geometry"]["coordinates"][0]  # outer ring
                 geom = mesh_geom()
-                poly_m = [list(coord_to_meters(c[0], c[1], geom["x_off"], geom["y_off"]))
+                poly_m = [list(click_to_native(c[0], c[1], geom))
                           for c in coords]
                 values = effective_values()
                 stats = polygon_zonal_stats(tel_file(), values, poly_m, geom)
@@ -1518,7 +1578,7 @@ def server(input, output, session):
                 continue
             coords = feat["geometry"]["coordinates"]
             geom = mesh_geom()
-            poly_m = [list(coord_to_meters(c[0], c[1], geom["x_off"], geom["y_off"]))
+            poly_m = [list(click_to_native(c[0], c[1], geom))
                       for c in coords]
 
             if input.particles():
@@ -1725,7 +1785,7 @@ def server(input, output, session):
         coord = hover["coordinate"]
         tf = tel_file()
         geom = mesh_geom()
-        px, py = coord_to_meters(coord[0], coord[1], geom["x_off"], geom["y_off"])
+        px, py = click_to_native(coord[0], coord[1], geom)
         idx, nx, ny = nearest_node(tf, px, py)
         vals = current_values()
         var = current_var()
@@ -1943,7 +2003,7 @@ def server(input, output, session):
             )
         coord = hover["coordinate"]
         geom = mesh_geom()
-        x_m, y_m = coord_to_meters(coord[0], coord[1], geom["x_off"], geom["y_off"])
+        x_m, y_m = click_to_native(coord[0], coord[1], geom)
         # Show value at nearest node if available
         try:
             tf = tel_file()
@@ -1954,8 +2014,14 @@ def server(input, output, session):
             val_str = f"  {var}: {val:.4g}"
         except Exception:
             val_str = ""
+        wgs84 = meters_to_wgs84(x_m, y_m, geom)
+        if wgs84:
+            lon, lat = wgs84
+            coord_text = f"{x_m:.0f}, {y_m:.0f}  |  {lon:.6f}°E, {lat:.6f}°N"
+        else:
+            coord_text = f"X: {x_m:.1f}   Y: {y_m:.1f}"
         return ui.div(
-            ui.span(f"X: {x_m:.1f}   Y: {y_m:.1f}", style="color: #00b4d8;"),
+            ui.span(coord_text, style="color: #00b4d8;"),
             ui.span(val_str, style="color: #48c78e; margin-left: 12px;"),
             style=_style,
         )
@@ -2199,13 +2265,22 @@ def server(input, output, session):
                 return
             # Export all points as columns
             buf = io.StringIO()
+            geom = mesh_geom()
+            crs = current_crs.get()
+            if crs:
+                buf.write(f"# CRS: EPSG:{crs.epsg} ({crs.name})\n")
             times_arr = np.array(tf.times)
             buf.write("Time (s)")
             all_values = []
             for i, pt in enumerate(pts):
                 _, values = time_series_at_point(tf, var, pt[0], pt[1])
                 all_values.append(values)
-                buf.write(f",Pt{i+1} ({pt[0]:.0f} {pt[1]:.0f})")
+                wgs84 = meters_to_wgs84(pt[0], pt[1], geom)
+                if wgs84:
+                    lon, lat = wgs84
+                    buf.write(f",Pt{i+1} ({pt[0]:.0f} {pt[1]:.0f} | {lon:.6f}E {lat:.6f}N)")
+                else:
+                    buf.write(f",Pt{i+1} ({pt[0]:.0f} {pt[1]:.0f})")
             buf.write("\n")
             for j in range(len(times_arr)):
                 buf.write(f"{times_arr[j]}")
@@ -2462,11 +2537,13 @@ def server(input, output, session):
             reverse = input.reverse_palette()
         except Exception:
             reverse = False
+        origin = [geom["lon_off"], geom["lat_off"]]
         lyr, vmin, vmax, log_applied = build_mesh_layer(geom, values, palette_id,
                                            filter_range=filt,
                                            color_range_override=crange,
                                            log_scale=use_log,
-                                           reverse_palette=reverse)
+                                           reverse_palette=reverse,
+                                           origin=origin)
         if use_log and not log_applied:
             ui.notification_show(
                 "Log scale requires positive values — using linear scale",
@@ -2475,24 +2552,24 @@ def server(input, output, session):
         layers = [lyr]
 
         if input.wireframe():
-            layers.append(build_wireframe_layer(tf, geom))
+            layers.append(build_wireframe_layer(tf, geom, origin=origin))
 
         # Boundary edges (color-coded by hydrodynamic type)
         if input.boundary_nodes():
-            layers.extend(build_boundary_layer(tf, geom, boundary_nodes_cached(), bc_types=cli_data()))
+            layers.extend(build_boundary_layer(tf, geom, boundary_nodes_cached(), bc_types=cli_data(), origin=origin))
 
         # Min/max location markers
         if input.show_extrema():
             extrema = find_extrema(tf, values)
-            layers.extend(build_extrema_markers(extrema, geom["x_off"], geom["y_off"]))
+            layers.extend(build_extrema_markers(extrema, geom["x_off"], geom["y_off"], origin=origin))
 
         if input.vectors():
-            vlyr = build_velocity_layer(tf, tidx, geom)
+            vlyr = build_velocity_layer(tf, tidx, geom, origin=origin)
             if vlyr is not None:
                 layers.append(vlyr)
 
         if input.contours():
-            clyr = build_contour_layer_fn(tf, values, geom)
+            clyr = build_contour_layer_fn(tf, values, geom, origin=origin)
             if clyr is not None:
                 layers.append(clyr)
 
@@ -2510,7 +2587,8 @@ def server(input, output, session):
         if compare_vals is not None:
             clyr2 = build_contour_layer_fn(tf, compare_vals, geom, n_contours=8,
                                            layer_id="compare-contours",
-                                           contour_color=[0, 0, 180])
+                                           contour_color=[0, 0, 180],
+                                           origin=origin)
             if clyr2 is not None:
                 layers.append(clyr2)
 
@@ -2518,26 +2596,26 @@ def server(input, output, session):
         pts = clicked_points.get()
         for i, pt in enumerate(pts):
             mx, my = float(pt[0] - geom["x_off"]), float(pt[1] - geom["y_off"])
-            layers.append(build_marker_layer(mx, my, layer_id=f"marker-{i}"))
+            layers.append(build_marker_layer(mx, my, layer_id=f"marker-{i}", origin=origin))
 
         # Cross-section path
         xsec = cross_section_points.get()
         if xsec is not None:
             path_centered = [[x - geom["x_off"], y - geom["y_off"]] for x, y in xsec]
-            layers.append(build_cross_section_layer(path_centered))
+            layers.append(build_cross_section_layer(path_centered, origin=origin))
 
         # Particle traces
         paths = particle_paths.get()
         if paths and input.particles():
             current_time = float(tf.times[tidx])
             trail = input.trail_length() if input.trail_length() is not None else 1.0
-            layers.append(build_particle_layer(paths, current_time, trail))
+            layers.append(build_particle_layer(paths, current_time, trail, origin=origin))
 
         # Measurement line (convert mesh-meter coords to centered for layer)
         mpts = measure_points.get()
         if mpts:
             mpts_centered = [[p[0] - geom["x_off"], p[1] - geom["y_off"]] for p in mpts]
-            layers.extend(build_measurement_layer(mpts_centered))
+            layers.extend(build_measurement_layer(mpts_centered, origin=origin))
 
         gradient_colors = cached_gradient_colors(palette_id, reverse=reverse)
         legend_entries = [{
@@ -2567,8 +2645,8 @@ def server(input, output, session):
         if current_path != last_file_path.get():
             last_file_path.set(current_path)
             kwargs["view_state"] = {
-                "longitude": 0,
-                "latitude": 0,
+                "longitude": geom["lon_off"],
+                "latitude": geom["lat_off"],
                 "zoom": geom["zoom"],
             }
 

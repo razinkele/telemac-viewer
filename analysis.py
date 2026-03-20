@@ -487,14 +487,6 @@ def polygon_zonal_stats(tf: Any, values: np.ndarray, polygon_m: list[list[float]
     }
 
 
-def coord_to_meters(lon: float, lat: float, x_off: float, y_off: float) -> tuple[float, float]:
-    """Convert map click coordinate (pseudo lon/lat from deck.gl) to mesh meters.
-
-    deck.gl reports click/hover coordinates as lon/lat even in METER_OFFSETS
-    mode. Multiply by _M2D to recover centered meters, then add the mesh
-    center offset to get original TELEMAC mesh coordinates.
-    """
-    return float(lon) * _M2D + x_off, float(lat) * _M2D + y_off
 
 
 def nearest_node(tf: Any, x_m: float, y_m: float) -> tuple[int, float, float]:

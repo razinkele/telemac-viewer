@@ -154,3 +154,19 @@ class TestOtherLayers:
         result = build_particle_layer(paths, current_time=0.5, trail_length=1.0)
         assert isinstance(result, dict)
         assert "currentTime" in result
+
+
+class TestOriginParameter:
+    def test_mesh_layer_default_origin(self, fake_tf, fake_geom):
+        values = np.array([0.1, 0.5, 0.5, 1.0])
+        lyr, _, _, _ = build_mesh_layer(fake_geom, values, "Viridis")
+        assert lyr["coordinateOrigin"] == [0, 0]
+
+    def test_mesh_layer_custom_origin(self, fake_tf, fake_geom):
+        values = np.array([0.1, 0.5, 0.5, 1.0])
+        lyr, _, _, _ = build_mesh_layer(fake_geom, values, "Viridis", origin=[24.0, 55.0])
+        assert lyr["coordinateOrigin"] == [24.0, 55.0]
+
+    def test_marker_layer_custom_origin(self):
+        lyr = build_marker_layer(0.0, 0.0, origin=[24.0, 55.0])
+        assert lyr["coordinateOrigin"] == [24.0, 55.0]

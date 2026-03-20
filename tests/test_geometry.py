@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from geometry import build_mesh_geometry
+from crs import crs_from_epsg
+from tests.helpers import FakeTF
 
 
 class TestBuildMeshGeometry2D:
@@ -59,3 +61,40 @@ class TestBuildMeshGeometry3D:
         pos = geom["positions"]
         z_vals = [pos[i * 3 + 2] for i in range(4)]
         assert all(z == 0.0 for z in z_vals)
+
+
+class TestBuildMeshGeometryCRS:
+    def test_no_crs_defaults_zero(self, fake_tf):
+        geom = build_mesh_geometry(fake_tf)
+        assert geom["lon_off"] == 0.0
+        assert geom["lat_off"] == 0.0
+        assert geom["crs"] is None
+
+    def test_with_crs_converts_center(self):
+        """LKS94 mesh center should map to real lon/lat."""
+        tf = FakeTF()
+        tf.meshx = np.array([490000, 510000, 490000, 510000], dtype=np.float64)
+        tf.meshy = np.array([6090000, 6090000, 6110000, 6110000], dtype=np.float64)
+        crs = crs_from_epsg(3346)
+        geom = build_mesh_geometry(tf, crs=crs)
+        assert 23.0 < geom["lon_off"] < 25.0
+        assert 54.5 < geom["lat_off"] < 56.0
+        assert geom["crs"] is crs
+        # x_off/y_off still in native meters
+        assert geom["x_off"] == pytest.approx(500000)
+        assert geom["y_off"] == pytest.approx(6100000)
+
+    def test_existing_tests_unchanged(self, fake_tf):
+        """crs=None path produces same results as before."""
+        geom = build_mesh_geometry(fake_tf, crs=None)
+        assert geom["x_off"] == pytest.approx(0.5)
+        assert geom["y_off"] == pytest.approx(0.5)
+        assert geom["npoin"] == 4
+
+    def test_iparam_offsets_applied(self):
+        """SELAFIN I_ORIG/J_ORIG offsets should shift x_off/y_off."""
+        tf = FakeTF()
+        tf.iparam = [0, 0, 1000, 2000, 0, 0, 0, 0, 0, 0]
+        geom = build_mesh_geometry(tf)
+        assert geom["x_off"] == pytest.approx(0.5 + 1000)
+        assert geom["y_off"] == pytest.approx(0.5 + 2000)
