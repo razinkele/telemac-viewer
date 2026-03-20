@@ -992,6 +992,13 @@ def server(input, output, session):
         return ui.input_action_button("clear_upload", "Clear upload (use examples)",
                                       class_="btn-sm btn-outline-danger w-100 mb-1")
 
+    @output
+    @render.ui
+    def compare_upload_ui():
+        if input.diff_mode():
+            return ui.input_file("compare_upload", "Compare file (.slf)", accept=[".slf"])
+        return ui.div()
+
     @reactive.effect
     @reactive.event(input.clear_upload)
     def handle_clear_upload():
@@ -1111,6 +1118,16 @@ def server(input, output, session):
         if crs:
             return ui.span(f"EPSG:{crs.epsg} — {crs.name}", class_="small text-success")
         return ui.span("No CRS — basemap alignment disabled", class_="small text-muted")
+
+    @output
+    @render.ui
+    def crs_offset_ui():
+        if input.epsg_input() and input.epsg_input().strip():
+            return ui.div(
+                ui.input_numeric("crs_x_offset", "X offset (m)", value=0, step=1000),
+                ui.input_numeric("crs_y_offset", "Y offset (m)", value=0, step=1000),
+            )
+        return ui.div()
 
     @reactive.calc
     def mesh_geom():
