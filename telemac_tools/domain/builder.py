@@ -171,13 +171,41 @@ def _bc_type_to_lihbor(bc: BoundaryCondition) -> tuple[int, float | None, float 
 
 
 # ---------------------------------------------------------------------------
+# Manning's regions
+# ---------------------------------------------------------------------------
+
+def _build_mannings_regions(reach) -> list[dict]:
+    """Build Manning's n spatial regions from cross-section bank positions."""
+    if not reach.cross_sections:
+        return []
+
+    # Channel zone polygon: connect left banks forward, right banks backward
+    left_banks = []
+    right_banks = []
+    for xs in sorted(reach.cross_sections, key=lambda x: x.station):
+        left_banks.append(xs.bank_coords[0])
+        right_banks.append(xs.bank_coords[1])
+
+    if len(left_banks) < 2:
+        return []
+
+    # Average channel Manning's n
+    avg_n = np.mean([xs.mannings_n[1] for xs in reach.cross_sections])
+
+    # Build closed polygon: left forward + right reversed + close
+    channel_poly = np.vstack(left_banks + right_banks[::-1] + [left_banks[0]])
+
+    return [{"polygon": channel_poly, "n": float(avg_n)}]
+
+
+# ---------------------------------------------------------------------------
 # 1D domain builder
 # ---------------------------------------------------------------------------
 
 def build_domain_1d(
     model: HecRasModel,
     dem_path: str,
-    floodplain_width: float = 100.0,
+    floodplain_width: float = 500.0,
     channel_spacing: float = 10.0,
 ) -> TelemacDomain:
     """Build a TelemacDomain from a 1D HEC-RAS model and a DEM.
@@ -224,19 +252,7 @@ def build_domain_1d(
         })
 
     # --- Manning's regions ---
-    mannings_regions: list[dict] = []
-    if reach.cross_sections:
-        # Use average channel Manning's n
-        n_vals = [xs.mannings_n[1] for xs in reach.cross_sections if len(xs.mannings_n) >= 2]
-        avg_n = float(np.mean(n_vals)) if n_vals else 0.035
-        mannings_regions.append({"n": avg_n, "label": "channel"})
-        # Overbank
-        ob_vals = []
-        for xs in reach.cross_sections:
-            if len(xs.mannings_n) >= 3:
-                ob_vals.extend([xs.mannings_n[0], xs.mannings_n[2]])
-        avg_ob = float(np.mean(ob_vals)) if ob_vals else 0.06
-        mannings_regions.append({"n": avg_ob, "label": "floodplain"})
+    mannings_regions = _build_mannings_regions(reach)
 
     # --- BC segments ---
     bc_segments: list[BCSegment] = []

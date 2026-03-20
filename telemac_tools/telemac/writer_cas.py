@@ -15,33 +15,33 @@ GEOMETRY FILE = {name}.slf
 BOUNDARY CONDITIONS FILE = {name}.cli
 RESULTS FILE = {name}_res.slf
 /
-/ GENERAL PARAMETERS
+/ EQUATIONS AND NUMERICAL SCHEME
 /----------------------------------------------------------------------
-TIME STEP = {timestep}
-NUMBER OF TIME STEPS = {nsteps}
-GRAPHIC PRINTOUT PERIOD = {print_period}
-LISTING PRINTOUT PERIOD = {print_period}
+EQUATIONS = 'SAINT-VENANT FV'
+FINITE VOLUME SCHEME = 5
+VARIABLE TIME-STEP = YES
+DESIRED COURANT NUMBER = 0.8
 /
-/ EQUATIONS
+/ FRICTION
 /----------------------------------------------------------------------
-VARIABLES FOR GRAPHIC PRINTOUTS = U,V,H,S,B
+LAW OF BOTTOM FRICTION = 4
 /
 / INITIAL CONDITIONS
 /----------------------------------------------------------------------
 INITIAL CONDITIONS = 'CONSTANT DEPTH'
 INITIAL DEPTH = 0.1
 /
-/ NUMERICAL PARAMETERS
+/ TIDAL FLATS
 /----------------------------------------------------------------------
-SOLVER = 1
-SOLVER ACCURACY = 1.E-4
-MAXIMUM NUMBER OF ITERATIONS FOR SOLVER = 200
-DISCRETIZATION IN SPACE = 11 ; 11
+TIDAL FLATS = YES
+CONTINUITY CORRECTION = YES
+TREATMENT OF NEGATIVE DEPTHS = 2
 /
-/ FRICTION
+/ OUTPUT
 /----------------------------------------------------------------------
-LAW OF BOTTOM FRICTION = 4
-FRICTION COEFFICIENT = 0.035
+DURATION = {duration}
+GRAPHIC PRINTOUT PERIOD = 60
+VARIABLES FOR GRAPHIC PRINTOUTS = 'U,V,H,S,B'
 """
 
 
@@ -74,15 +74,10 @@ def write_cas(
     if title is None:
         title = name
 
-    nsteps = int(duration / timestep)
-    print_period = max(1, nsteps // 100)
-
     text = _TEMPLATE.format(
         title=title,
         name=name,
-        timestep=timestep,
-        nsteps=nsteps,
-        print_period=print_period,
+        duration=duration,
     )
 
     if overrides:
