@@ -40,6 +40,7 @@ from layers import (
     build_boundary_layer,
 )
 import asyncio
+import math
 import shlex
 import threading
 import os as _os
@@ -1133,8 +1134,11 @@ def server(input, output, session):
     def mesh_geom():
         tf = tel_file()
         crs = current_crs.get()
-        x_offset = input.crs_x_offset() if input.crs_x_offset() else 0
-        y_offset = input.crs_y_offset() if input.crs_y_offset() else 0
+        try:
+            x_offset = input.crs_x_offset() or 0
+            y_offset = input.crs_y_offset() or 0
+        except Exception:
+            x_offset, y_offset = 0, 0
         origin_offset = (x_offset, y_offset)
         if is_3d_mode.get() and tf.nplan > 1:
             try:
@@ -2827,7 +2831,7 @@ def server(input, output, session):
                     })
             if xs_lines:
                 layers.append(line_layer(
-                    "cross-sections",
+                    f"cross-sections-{reach.name}",
                     xs_lines,
                     getColor=[255, 220, 0, 180],
                     getWidth=2,
@@ -2922,11 +2926,9 @@ def server(input, output, session):
                 x_off = (min(all_x) + max(all_x)) / 2
                 y_off = (min(all_y) + max(all_y)) / 2
                 extent = max(max(all_x) - min(all_x), max(all_y) - min(all_y), 1.0)
-                import math
                 zoom = math.log2(600 * 360 / (256 * (extent / 111320))) if extent > 0 else 10
 
                 preview_layers = _build_import_preview_layers(model, x_off, y_off)
-                import asyncio
                 asyncio.ensure_future(import_map_widget.update(
                     session,
                     layers=preview_layers,
@@ -3037,19 +3039,22 @@ def server(input, output, session):
     def dl_slf():
         path = _import_file_path(".slf")
         if path:
-            yield open(path, "rb").read()
+            with open(path, "rb") as f:
+                yield f.read()
 
     @render.download(filename=lambda: _import_filename(".cli"))
     def dl_cli():
         path = _import_file_path(".cli")
         if path:
-            yield open(path, "rb").read()
+            with open(path, "rb") as f:
+                yield f.read()
 
     @render.download(filename=lambda: _import_filename(".cas"))
     def dl_cas():
         path = _import_file_path(".cas")
         if path:
-            yield open(path, "rb").read()
+            with open(path, "rb") as f:
+                yield f.read()
 
     def _import_filename(ext: str) -> str:
         hdf_files = input.import_hdf()

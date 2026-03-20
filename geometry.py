@@ -42,16 +42,17 @@ def build_mesh_geometry(tf: Any, crs: CRSType | None = None,
         i_orig = int(tf.iparam[2])
         j_orig = int(tf.iparam[3])
 
-    x_off = float((x.min() + x.max()) / 2) + i_orig
-    y_off = float((y.min() + y.max()) / 2) + j_orig
+    # Mesh center in raw coordinates (for centered rendering positions)
+    mesh_center_x = float((x.min() + x.max()) / 2)
+    mesh_center_y = float((y.min() + y.max()) / 2)
 
-    # Manual origin offset (for pre-centered meshes lacking absolute CRS origin)
-    x_off += origin_offset[0]
-    y_off += origin_offset[1]
+    # Full offset for CRS transform: mesh center + SELAFIN origin + manual offset
+    x_off = mesh_center_x + i_orig + origin_offset[0]
+    y_off = mesh_center_y + j_orig + origin_offset[1]
 
     positions = np.zeros((npoin, 3), dtype=np.float32)
-    positions[:, 0] = (x[:npoin] - x_off + i_orig).astype(np.float32)
-    positions[:, 1] = (y[:npoin] - y_off + j_orig).astype(np.float32)
+    positions[:, 0] = (x[:npoin] - mesh_center_x).astype(np.float32)
+    positions[:, 1] = (y[:npoin] - mesh_center_y).astype(np.float32)
     if z_values is not None:
         positions[:, 2] = (z_values[:npoin] * z_scale).astype(np.float32)
 
