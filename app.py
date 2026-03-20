@@ -638,6 +638,59 @@ app_ui = ui.page_navbar(
             col_widths=[4, 8],
         ),
     ),
+    # ── Import tab ────────────────────────────────────────────────────
+    ui.nav_panel(
+        "Import",
+        ui.layout_columns(
+            ui.card(
+                ui.card_header("HEC-RAS → TELEMAC Import"),
+                ui.input_select("import_source", "Source format", choices={
+                    "hecras6": "HEC-RAS 6.x (.hdf)",
+                }),
+                ui.input_file("import_hdf", "HEC-RAS geometry file (.hdf)",
+                              accept=[".hdf", ".hdf5"]),
+                ui.input_file("import_dem", "DEM file (.tif)",
+                              accept=[".tif", ".tiff"]),
+                ui.tags.details(
+                    ui.tags.summary("1D Options"),
+                    ui.input_numeric("fp_width", "Floodplain width (m)",
+                                     value=500, min=50, max=5000, step=50),
+                    ui.input_numeric("channel_refine", "Channel refinement (m²)",
+                                     value=10, min=1, max=100, step=1),
+                    ui.input_numeric("floodplain_refine", "Floodplain refinement (m²)",
+                                     value=200, min=10, max=1000, step=10),
+                ),
+                ui.input_select("import_mesher", "Mesher", choices={
+                    "triangle": "Triangle (default)",
+                }),
+                ui.input_select("import_scheme", "Numerical scheme", choices={
+                    "finite_volume": "Finite Volume (robust)",
+                    "finite_element": "Finite Element (accurate)",
+                }),
+                ui.div(
+                    ui.input_action_button("import_preview", "Preview",
+                                           class_="btn-sm btn-primary me-2"),
+                    ui.input_action_button("import_convert", "Convert",
+                                           class_="btn-sm btn-success"),
+                    class_="d-flex gap-2 mb-2",
+                ),
+                ui.output_ui("import_status_ui"),
+                ui.tags.hr(),
+                ui.tags.h6("Download Output"),
+                ui.output_ui("import_download_ui"),
+            ),
+            ui.card(
+                ui.card_header("Preview"),
+                ui.output_ui("import_preview_info"),
+                ui.tags.pre(
+                    ui.output_text_verbatim("import_log"),
+                    class_="sim-console",
+                ),
+                class_="ocean-card",
+            ),
+            col_widths=[4, 8],
+        ),
+    ),
     # ── Navbar extras ──────────────────────────────────────────────────
     ui.nav_spacer(),
     ui.nav_control(
@@ -2697,6 +2750,194 @@ def server(input, output, session):
             widgets=widgets,
             **kwargs,
         )
+
+
+    # ── Import tab server logic ─────────────────────────────────────────
+
+    import_model = reactive.value(None)     # parsed HecRasModel
+    import_output_dir = reactive.value(None)  # path to generated files
+    import_log_text = reactive.value("")
+
+    def _append_log(msg: str):
+        import_log_text.set(import_log_text.get() + msg + "\n")
+
+    @output
+    @render.text
+    def import_log():
+        return import_log_text.get()
+
+    @reactive.effect
+    @reactive.event(input.import_preview)
+    def handle_import_preview():
+        """Parse HEC-RAS file and show summary."""
+        import_log_text.set("")
+        hdf_files = input.import_hdf()
+        if not hdf_files:
+            _append_log("Please upload a HEC-RAS geometry file (.hdf)")
+            return
+
+        hdf_path = hdf_files[0]["datapath"]
+        _append_log(f"Parsing: {hdf_files[0]['name']}")
+
+        try:
+            from telemac_tools.hecras import parse_hecras
+            model = parse_hecras(hdf_path)
+            import_model.set(model)
+
+            if model.rivers:
+                for r in model.rivers:
+                    _append_log(f"  Reach: {r.name}")
+                    _append_log(f"    Cross-sections: {len(r.cross_sections)}")
+                    if r.cross_sections:
+                        stations = [xs.station for xs in r.cross_sections]
+                        _append_log(f"    Station range: {min(stations):.0f} – {max(stations):.0f} m")
+                    _append_log(f"    Alignment points: {r.alignment.shape[0]}")
+            if model.areas_2d:
+                for a in model.areas_2d:
+                    _append_log(f"  2D Area: {a.name}")
+                    _append_log(f"    Cells: {len(a.cells)}")
+                    _append_log(f"    Face points: {a.face_points.shape[0]}")
+            if model.boundaries:
+                _append_log(f"  Boundary conditions: {len(model.boundaries)}")
+                for bc in model.boundaries:
+                    _append_log(f"    {bc.location}: {bc.bc_type}")
+
+            _append_log("\nReady to convert. Click 'Convert' to generate TELEMAC files.")
+
+        except Exception as e:
+            _append_log(f"ERROR: {e}")
+            import_model.set(None)
+
+    @reactive.effect
+    @reactive.event(input.import_convert)
+    def handle_import_convert():
+        """Run full conversion pipeline."""
+        model = import_model.get()
+        if model is None:
+            _append_log("Please click Preview first to parse the HEC-RAS file.")
+            return
+
+        _append_log("\n--- Converting ---")
+
+        hdf_files = input.import_hdf()
+        hdf_path = hdf_files[0]["datapath"]
+        hdf_name = hdf_files[0]["name"].rsplit(".", 2)[0]  # strip .g01.hdf
+
+        dem_files = input.import_dem()
+        dem_path = dem_files[0]["datapath"] if dem_files else None
+
+        if model.rivers and not dem_path:
+            _append_log("ERROR: DEM file required for 1D→2D conversion")
+            return
+
+        import tempfile
+        out_dir = tempfile.mkdtemp(prefix="telemac_import_")
+
+        try:
+            from telemac_tools import hecras_to_telemac
+
+            scheme = input.import_scheme()
+            cas_overrides = {}
+            if scheme == "finite_element":
+                cas_overrides["EQUATIONS"] = "'SAINT-VENANT FE'"
+                cas_overrides["FINITE VOLUME SCHEME"] = None
+
+            hecras_to_telemac(
+                hecras_path=hdf_path,
+                dem_path=dem_path,
+                output_dir=out_dir,
+                name=hdf_name,
+                floodplain_width=float(input.fp_width()),
+                backend=input.import_mesher(),
+                cas_overrides=cas_overrides if cas_overrides else None,
+            )
+
+            import_output_dir.set(out_dir)
+            _append_log(f"Output directory: {out_dir}")
+            _append_log(f"  {hdf_name}.slf — mesh + variables")
+            _append_log(f"  {hdf_name}.cli — boundary conditions")
+            _append_log(f"  {hdf_name}.cas — steering file")
+
+            # Count mesh stats
+            from data_manip.extraction.telemac_file import TelemacFile
+            tf = TelemacFile(_os.path.join(out_dir, f"{hdf_name}.slf"))
+            _append_log(f"\nMesh: {tf.npoin2} nodes, {tf.nelem2} elements")
+            _append_log(f"Variables: {', '.join(tf.varnames)}")
+            tf.close()
+
+            _append_log("\nConversion complete. Use Download buttons below.")
+
+        except Exception as e:
+            _append_log(f"ERROR: {e}")
+            import traceback
+            _append_log(traceback.format_exc())
+
+    @output
+    @render.ui
+    def import_status_ui():
+        model = import_model.get()
+        if model is None:
+            return ui.span("Upload a file and click Preview", class_="small text-muted")
+        n_rivers = len(model.rivers)
+        n_areas = len(model.areas_2d)
+        parts = []
+        if n_rivers:
+            total_xs = sum(len(r.cross_sections) for r in model.rivers)
+            parts.append(f"{n_rivers} reach(es), {total_xs} XS")
+        if n_areas:
+            total_cells = sum(len(a.cells) for a in model.areas_2d)
+            parts.append(f"{n_areas} 2D area(s), {total_cells} cells")
+        return ui.span(" | ".join(parts), class_="small text-success")
+
+    @output
+    @render.ui
+    def import_preview_info():
+        return ui.div()
+
+    @output
+    @render.ui
+    def import_download_ui():
+        out = import_output_dir.get()
+        if out is None:
+            return ui.span("No output yet", class_="small text-muted")
+        return ui.div(
+            ui.download_button("dl_slf", "Download .slf", class_="btn-sm btn-outline-primary me-1"),
+            ui.download_button("dl_cli", "Download .cli", class_="btn-sm btn-outline-primary me-1"),
+            ui.download_button("dl_cas", "Download .cas", class_="btn-sm btn-outline-primary"),
+            class_="d-flex gap-1",
+        )
+
+    @render.download(filename=lambda: _import_filename(".slf"))
+    def dl_slf():
+        path = _import_file_path(".slf")
+        if path:
+            yield open(path, "rb").read()
+
+    @render.download(filename=lambda: _import_filename(".cli"))
+    def dl_cli():
+        path = _import_file_path(".cli")
+        if path:
+            yield open(path, "rb").read()
+
+    @render.download(filename=lambda: _import_filename(".cas"))
+    def dl_cas():
+        path = _import_file_path(".cas")
+        if path:
+            yield open(path, "rb").read()
+
+    def _import_filename(ext: str) -> str:
+        hdf_files = input.import_hdf()
+        if hdf_files:
+            return hdf_files[0]["name"].rsplit(".", 2)[0] + ext
+        return "project" + ext
+
+    def _import_file_path(ext: str) -> str | None:
+        out = import_output_dir.get()
+        if out is None:
+            return None
+        name = _import_filename(ext)
+        path = _os.path.join(out, name)
+        return path if _os.path.isfile(path) else None
 
 
 app = App(app_ui, server)
