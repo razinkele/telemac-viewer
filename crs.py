@@ -116,14 +116,9 @@ def guess_crs_from_coords(x: ndarray, y: ndarray) -> CRS | None:
     x_min, x_max = float(x.min()), float(x.max())
     y_min, y_max = float(y.min()), float(y.max())
 
-    # WGS84 lon/lat — require minimum extent (>1°) and reasonable magnitudes
-    # to avoid false-positive on small lab/flume models near origin
-    x_extent = x_max - x_min
-    y_extent = y_max - y_min
-    coords_large_enough = max(abs(x_min), abs(x_max), abs(y_min), abs(y_max)) > 10.0
-    if (-180 <= x_min and x_max <= 180 and -90 <= y_min and y_max <= 90
-            and x_extent > 1.0 and y_extent > 1.0 and coords_large_enough):
-        return crs_from_epsg(4326)
+    # WGS84 cannot be reliably detected from coordinates alone — small lab
+    # models (0-100m) are indistinguishable from geographic degrees.
+    # WGS84 is only set via .cas file detection or manual EPSG entry.
 
     # LKS94 (Lithuania) — check before general UTM
     if 300_000 <= x_min and x_max <= 700_000 and 5_950_000 <= y_min and y_max <= 6_250_000:

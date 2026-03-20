@@ -154,13 +154,12 @@ class TestGuessCrsFromCoords:
         assert crs is not None
         assert crs.epsg == 3346
 
-    def test_wgs84_range(self):
-        """Real geographic extent — must span >1 degree to trigger."""
+    def test_wgs84_range_returns_none(self):
+        """WGS84 cannot be detected from coordinates alone — too ambiguous."""
         x = np.array([20.0, 25.0, 30.0], dtype=np.float64)
         y = np.array([50.0, 55.0, 60.0], dtype=np.float64)
         crs = guess_crs_from_coords(x, y)
-        assert crs is not None
-        assert crs.epsg == 4326
+        assert crs is None
 
     def test_small_local_returns_none(self):
         """Small lab/flume model (e.g. Gouttedo 0-1m) must NOT trigger WGS84."""
@@ -173,6 +172,13 @@ class TestGuessCrsFromCoords:
         """Gouttedo-scale mesh (~100m) must not be mistaken for WGS84."""
         x = np.array([0.0, 50.0, 100.0], dtype=np.float64)
         y = np.array([0.0, 50.0, 100.0], dtype=np.float64)
+        crs = guess_crs_from_coords(x, y)
+        assert crs is None
+
+    def test_gouttedo_real_scale_returns_none(self):
+        """Actual Gouttedo mesh (0-20m) must not trigger WGS84."""
+        x = np.array([0.0, 10.0, 20.1], dtype=np.float64)
+        y = np.array([0.0, 10.0, 20.1], dtype=np.float64)
         crs = guess_crs_from_coords(x, y)
         assert crs is None
 
