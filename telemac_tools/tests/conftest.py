@@ -174,3 +174,21 @@ def fake_dem(tmp_path):
         ],
     )
     return str(path)
+
+
+@pytest.fixture
+def hdf_unsteady(tmp_path):
+    """Synthetic HEC-RAS unsteady flow file with BC time series."""
+    path = tmp_path / "test.u01.hdf"
+    with h5py.File(path, "w") as f:
+        ufd = f.create_group("Unsteady Flow Data")
+        bcs = ufd.create_group("Boundary Conditions")
+        us = bcs.create_group("Upstream")
+        fh = us.create_group("Flow Hydrograph")
+        fh.create_dataset("Flow", data=np.array([10.0, 50.0, 100.0, 50.0, 10.0]))
+        fh.create_dataset("Time", data=np.array([0.0, 1.0, 2.0, 3.0, 4.0]))
+        ds = bcs.create_group("Downstream")
+        sh = ds.create_group("Stage Hydrograph")
+        sh.create_dataset("Stage", data=np.array([2.0, 2.5, 3.0, 2.5, 2.0]))
+        sh.create_dataset("Time", data=np.array([0.0, 1.0, 2.0, 3.0, 4.0]))
+    return str(path)

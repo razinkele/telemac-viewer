@@ -25,6 +25,7 @@ class BoundaryCondition:
     bc_type: str                     # "flow", "stage", "normal_depth", "rating_curve"
     location: str                    # "upstream" / "downstream" / reach name
     line_coords: np.ndarray | None = None
+    timeseries: dict | None = None  # {"time": array, "values": array, "unit": str}
 
 
 @dataclass
