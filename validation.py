@@ -2,6 +2,7 @@
 """Functions for parsing observation CSV files and computing validation statistics."""
 
 import csv
+import logging
 import numpy as np
 from numpy import ndarray
 
@@ -117,6 +118,9 @@ def compute_volume_timeseries(tf, compute_integral_fn):
     return np.array(times), np.array(volumes)
 
 
+_logger = logging.getLogger(__name__)
+
+
 def parse_liq_file(liq_path):
     """Parse TELEMAC .liq liquid boundary file.
 
@@ -127,13 +131,13 @@ def parse_liq_file(liq_path):
     try:
         with open(liq_path) as f:
             lines = [l.strip() for l in f if l.strip() and not l.strip().startswith('#')]
-        if len(lines) < 3:
-            return None
-        # Line 0: header (T Q(1) Q(2) ... or T SL(1) SL(2) ...)
+    except OSError:
+        return None
+    if len(lines) < 3:
+        return None
+    try:
         headers = lines[0].split()
-        # Line 1: units (s m3/s m3/s ... or s m2/s m ...)
         units = lines[1].split()
-        # Lines 2+: data
         data_lines = lines[2:]
         ncols = len(headers)
         data = np.array([[float(x) for x in line.split()[:ncols]] for line in data_lines])
@@ -150,5 +154,6 @@ def parse_liq_file(liq_path):
                 "unit": unit,
             }
         return result
-    except Exception:
+    except (ValueError, IndexError, KeyError) as exc:
+        _logger.warning("Failed to parse .liq file '%s': %s", liq_path, exc)
         return None

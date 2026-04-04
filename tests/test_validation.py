@@ -1,4 +1,5 @@
 # tests/test_validation.py — Tests for validation.py
+import logging
 import numpy as np
 import pytest
 
@@ -102,3 +103,27 @@ def test_parse_liq_file(tmp_path):
     assert result["Q(1)"]["values"][0] == 500.0
     assert result["Q(1)"]["unit"] == "m3/s"
     assert result["SL(2)"]["unit"] == "m"
+
+
+class TestParseLiqFileErrors:
+    def test_malformed_float_returns_none_and_logs(self, tmp_path, caplog):
+        """Malformed data in .liq file should return None and log a warning."""
+        liq = tmp_path / "bad.liq"
+        liq.write_text("T  Q(1)\ns  m3/s\n0.0  abc\n")
+        with caplog.at_level(logging.WARNING):
+            result = parse_liq_file(str(liq))
+        assert result is None
+        assert any("parse" in r.message.lower() or "liq" in r.message.lower()
+                    for r in caplog.records)
+
+    def test_missing_file_returns_none(self, tmp_path):
+        """Missing file should return None without raising."""
+        result = parse_liq_file(str(tmp_path / "nonexistent.liq"))
+        assert result is None
+
+    def test_too_few_lines_returns_none(self, tmp_path):
+        """File with fewer than 3 lines should return None."""
+        liq = tmp_path / "short.liq"
+        liq.write_text("T  Q(1)\ns  m3/s\n")
+        result = parse_liq_file(str(liq))
+        assert result is None
