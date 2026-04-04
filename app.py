@@ -2085,8 +2085,8 @@ def server(input, output, session):
             tf = tel_file()
             var = current_var()
             tidx = current_tidx()
-            node = nearest_node(tf, x_m, y_m)
-            val = tf.get_data_value(var, tidx)[node]
+            idx, _, _ = nearest_node(tf, x_m, y_m)
+            val = tf.get_data_value(var, tidx)[idx]
             val_str = f"  {var}: {val:.4g}"
         except Exception:
             val_str = ""
