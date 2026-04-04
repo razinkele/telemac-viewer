@@ -17,6 +17,7 @@ from analysis import (
     compute_particle_paths, generate_seed_grid, distribute_seeds_along_line,
     export_timeseries_csv, export_crosssection_csv, export_all_variables_csv,
     find_cas_files, detect_module,
+    compute_flood_envelope, compute_flood_arrival, compute_flood_duration,
 )
 
 
@@ -447,3 +448,46 @@ class TestSimUtilities:
 
     def test_detect_fallback(self):
         assert detect_module("/some/path/foo.cas") == "telemac2d"
+
+
+# ---------------------------------------------------------------------------
+# TestFloodAnalysis
+# ---------------------------------------------------------------------------
+
+class TestFloodAnalysis:
+    def test_flood_envelope_is_peak(self, fake_tf):
+        """Envelope should be max value across all timesteps at each node."""
+        env = compute_flood_envelope(fake_tf, "WATER DEPTH", threshold=0.01)
+        expected_peak = np.array([0.2, 1.0, 1.0, 2.0])
+        np.testing.assert_allclose(env, expected_peak, atol=1e-6)
+
+    def test_flood_envelope_threshold(self, fake_tf):
+        """Nodes whose peak is below threshold should be zeroed."""
+        env = compute_flood_envelope(fake_tf, "WATER DEPTH", threshold=0.5)
+        assert env[0] == 0.0
+        assert env[3] == pytest.approx(2.0)
+
+    def test_flood_arrival_time(self, fake_tf):
+        """Arrival = time when value first exceeds threshold."""
+        arrival = compute_flood_arrival(fake_tf, "WATER DEPTH", threshold=0.6)
+        assert np.isnan(arrival[0])
+        assert arrival[1] == pytest.approx(1.0)
+        assert arrival[3] == pytest.approx(0.0)
+
+    def test_flood_arrival_all_dry(self, fake_tf):
+        """All NaN if threshold is never exceeded."""
+        arrival = compute_flood_arrival(fake_tf, "WATER DEPTH", threshold=999.0)
+        assert np.all(np.isnan(arrival))
+
+    def test_flood_duration(self, fake_tf):
+        """Duration = total time above threshold."""
+        dur = compute_flood_duration(fake_tf, "WATER DEPTH", threshold=0.6)
+        assert dur[0] == pytest.approx(0.0)
+        assert dur[1] == pytest.approx(2.0)
+        assert dur[3] == pytest.approx(3.0)
+
+    def test_flood_duration_single_timestep(self):
+        """Single timestep uses dt=1.0 fallback."""
+        tf = SingleTimeTF()
+        dur = compute_flood_duration(tf, "WATER DEPTH", threshold=0.01)
+        assert np.all(dur == pytest.approx(1.0))
