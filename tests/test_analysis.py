@@ -1,5 +1,6 @@
 """Tests for analysis.py — all computation functions."""
 from __future__ import annotations
+import logging
 import os
 import numpy as np
 import pytest
@@ -546,3 +547,25 @@ class TestPolygonZonalStats:
         stats = polygon_zonal_stats(fake_tf, values, polygon, geom={})
         assert stats["count"] == 0
         assert stats["mean"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# TestSanitizeResultLogging
+# ---------------------------------------------------------------------------
+
+class TestSanitizeResultLogging:
+    def test_logs_warning_on_nan(self, caplog):
+        """_sanitize_result should log when replacing NaN/Inf."""
+        arr = np.array([1.0, np.nan, np.inf, -np.inf, 2.0])
+        with caplog.at_level(logging.WARNING):
+            result = _sanitize_result(arr)
+        assert np.all(np.isfinite(result))
+        assert any("non-finite" in r.message.lower() for r in caplog.records)
+
+    def test_no_warning_on_clean_data(self, caplog):
+        """No warning when data is all finite."""
+        arr = np.array([1.0, 2.0, 3.0])
+        with caplog.at_level(logging.WARNING):
+            result = _sanitize_result(arr)
+        np.testing.assert_array_equal(result, arr)
+        assert len(caplog.records) == 0

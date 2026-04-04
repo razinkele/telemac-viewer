@@ -164,6 +164,8 @@ def _scatter_to_vertices(ikle: np.ndarray, elem_values: np.ndarray, npoin: int) 
 def _sanitize_result(arr: np.ndarray) -> np.ndarray:
     """Replace NaN/Inf with 0 in computed field results."""
     if not np.all(np.isfinite(arr)):
+        bad_count = int(np.count_nonzero(~np.isfinite(arr)))
+        _logger.warning("%d non-finite values replaced with 0 in computed result", bad_count)
         return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
     return arr
 
