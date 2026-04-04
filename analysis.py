@@ -667,9 +667,9 @@ def generate_seed_grid(tf: Any, n_target: int = 500) -> list[list[float]]:
         finder = tri.get_trifinder()
         inside = finder(points[:, 0], points[:, 1]) >= 0
         return points[inside].tolist()
-    except Exception:
-        # Fallback: return all grid points if triangulation is unavailable
-        return points.tolist()
+    except (AttributeError, RuntimeError, ValueError):
+        _logger.warning("Triangulation unavailable for seed filtering; returning empty seed list")
+        return []
 
 
 def distribute_seeds_along_line(polyline_m: list[list[float]], n_seeds: int = 100) -> list[list[float]]:
