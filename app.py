@@ -2716,7 +2716,8 @@ def server(input, output, session):
 
         # Only update view_state on file change
         uploaded = input.upload()
-        current_path = uploaded[0]["datapath"] if uploaded else EXAMPLES.get(input.example(), "")
+        current_path = (uploaded[0]["datapath"] if uploaded and use_upload.get()
+                        else EXAMPLES.get(input.example(), ""))
         kwargs = {}
         if current_path != last_file_path.get():
             last_file_path.set(current_path)
