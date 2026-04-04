@@ -18,6 +18,7 @@ from analysis import (
     export_timeseries_csv, export_crosssection_csv, export_all_variables_csv,
     find_cas_files, detect_module,
     compute_flood_envelope, compute_flood_arrival, compute_flood_duration,
+    read_cli_file, polygon_zonal_stats,
 )
 
 
@@ -491,3 +492,57 @@ class TestFloodAnalysis:
         tf = SingleTimeTF()
         dur = compute_flood_duration(tf, "WATER DEPTH", threshold=0.01)
         assert np.all(dur == pytest.approx(1.0))
+
+
+# ---------------------------------------------------------------------------
+# TestCliFile
+# ---------------------------------------------------------------------------
+
+class TestCliFile:
+    def test_valid_cli_file(self, tmp_path):
+        """Parse a minimal .cli file with LIHBOR codes."""
+        cli = tmp_path / "test.cli"
+        cli.write_text(
+            "2 0 0 0.0 0.0 0.0 0.0 0 0.0 0.0 0.0 1\n"
+            "5 0 0 0.0 0.0 0.0 0.0 0 0.0 0.0 0.0 2\n"
+            "4 0 0 0.0 0.0 0.0 0.0 0 0.0 0.0 0.0 3\n"
+        )
+        result = read_cli_file(str(cli))
+        assert result is not None
+        assert result[1] == 2  # wall
+        assert result[2] == 5  # prescribed
+        assert result[3] == 4  # free
+
+    def test_missing_file_returns_none(self, tmp_path):
+        result = read_cli_file(str(tmp_path / "nonexistent.cli"))
+        assert result is None
+
+    def test_empty_file_returns_none(self, tmp_path):
+        cli = tmp_path / "empty.cli"
+        cli.write_text("")
+        result = read_cli_file(str(cli))
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# TestPolygonZonalStats
+# ---------------------------------------------------------------------------
+
+class TestPolygonZonalStats:
+    def test_polygon_covering_all_nodes(self, fake_tf):
+        """Polygon enclosing entire mesh should include all 4 nodes."""
+        polygon = [[-0.5, -0.5], [1.5, -0.5], [1.5, 1.5], [-0.5, 1.5]]
+        values = fake_tf.get_data_value("WATER DEPTH", 0)  # [0.1, 0.5, 0.5, 1.0]
+        stats = polygon_zonal_stats(fake_tf, values, polygon, geom={})
+        assert stats["count"] == 4
+        assert stats["min"] == pytest.approx(0.1)
+        assert stats["max"] == pytest.approx(1.0)
+        assert stats["mean"] == pytest.approx(np.mean([0.1, 0.5, 0.5, 1.0]))
+
+    def test_empty_polygon(self, fake_tf):
+        """Polygon outside mesh should return zeros."""
+        polygon = [[10, 10], [11, 10], [11, 11], [10, 11]]
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        stats = polygon_zonal_stats(fake_tf, values, polygon, geom={})
+        assert stats["count"] == 0
+        assert stats["mean"] == 0.0
