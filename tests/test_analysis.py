@@ -233,6 +233,14 @@ class TestExpressionParser:
         with pytest.raises(ValueError):
             evaluate_expression(fake_tf, 0, "1 +")
 
+    def test_chained_comparison(self, fake_tf):
+        """Chained comparison a < b < c should mean (a < b) AND (b < c)."""
+        # WATER DEPTH at t=0: [0.1, 0.5, 0.5, 1.0]
+        # 0.2 < WATER_DEPTH < 0.8 should be True for nodes with 0.5 (indices 1,2)
+        result = evaluate_expression(fake_tf, 0, "0.2 < WATER_DEPTH < 0.8")
+        expected = np.array([False, True, True, False])
+        np.testing.assert_array_equal(result.astype(bool), expected)
+
 
 # ---------------------------------------------------------------------------
 # TestSpatialFunctions

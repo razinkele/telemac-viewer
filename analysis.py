@@ -327,12 +327,16 @@ def _ast_eval(node, ns):
 
     if isinstance(node, ast.Compare):
         left = _ast_eval(node.left, ns)
+        result = None
         for op_node, comparator in zip(node.ops, node.comparators):
             op = _SAFE_COMPARE.get(type(op_node))
             if op is None:
                 raise ValueError(f"Unsupported comparison: {type(op_node).__name__}")
-            left = op(left, _ast_eval(comparator, ns))
-        return left
+            right = _ast_eval(comparator, ns)
+            cmp = op(left, right)
+            result = cmp if result is None else np.logical_and(result, cmp)
+            left = right
+        return result
 
     if isinstance(node, ast.IfExp):
         test = _ast_eval(node.test, ns)
