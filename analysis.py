@@ -9,6 +9,8 @@ import numpy as np
 from typing import Any
 from constants import _M2D
 from telemac_defaults import find_velocity_pair
+import logging
+_logger = logging.getLogger(__name__)
 
 # Derived variable definitions: name -> (required_vars, compute_fn)
 DERIVED_VARIABLES = {
@@ -424,16 +426,21 @@ def read_cli_file(cli_path: str) -> dict[int, int] | None:
     Returns None if file cannot be read.
     """
     try:
-        bc_types: dict[int, int] = {}
         with open(cli_path) as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) >= 12:
-                    lihbor = int(parts[0])
-                    node_num = int(parts[11])
-                    bc_types[node_num] = lihbor
+            raw_lines = f.readlines()
+    except OSError:
+        return None
+    try:
+        bc_types: dict[int, int] = {}
+        for line in raw_lines:
+            parts = line.split()
+            if len(parts) >= 12:
+                lihbor = int(parts[0])
+                node_num = int(parts[11])
+                bc_types[node_num] = lihbor
         return bc_types if bc_types else None
-    except Exception:
+    except (ValueError, IndexError) as exc:
+        _logger.warning("Failed to parse .cli file '%s': %s", cli_path, exc)
         return None
 
 

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from numpy import ndarray
 from pyproj import Transformer, CRS as ProjCRS
 from constants import _M2D
+import logging
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -102,7 +104,8 @@ def detect_crs_from_cas(cas_path: str) -> CRS | None:
 
     try:
         return crs_from_epsg(epsg)
-    except Exception:
+    except (ValueError, RuntimeError) as exc:
+        _logger.warning("CRS EPSG:%d detected in .cas but failed to initialize: %s", epsg, exc)
         return None
 
 
