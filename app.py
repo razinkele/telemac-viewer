@@ -1,11 +1,11 @@
 # app.py — TELEMAC Viewer v3
-import io
+import asyncio
 import logging
+import threading
+
 import numpy as np
-_logger = logging.getLogger(__name__)
-import plotly.graph_objects as go
 from shiny import App, reactive, render, ui
-from shinywidgets import output_widget, render_widget
+from shinywidgets import output_widget
 from shiny_deckgl import (
     MapWidget,
     head_includes,
@@ -24,11 +24,12 @@ from shiny_deckgl import (
     lighting_effect,
 )
 
+_logger = logging.getLogger(__name__)
+
 from constants import (
     EXAMPLES, EXAMPLE_CHOICES, PALETTES,
     cached_gradient_colors, format_time,
 )
-from geometry import build_mesh_geometry
 from layers import (
     build_mesh_layer,
     build_velocity_layer,
@@ -40,61 +41,14 @@ from layers import (
     build_extrema_markers,
     build_measurement_layer,
     build_boundary_layer,
-    _COORD_METER_OFFSETS,
-)
-import asyncio
-import glob
-import math
-import shlex
-import shutil
-import threading
-import os as _os
-from crs import (
-    crs_from_epsg, detect_crs_from_cas, guess_crs_from_coords,
-    click_to_native, meters_to_wgs84,
 )
 from analysis import (
-    nearest_node,
-    time_series_at_point,
-    cross_section_profile,
-    compute_particle_paths,
-    generate_seed_grid,
-    distribute_seeds_along_line,
-    get_available_derived,
-    compute_derived,
-    export_crosssection_csv,
-    compute_mesh_quality,
-    find_cas_files,
-    detect_module_from_path,
-    vertical_profile_at_point,
-    compute_difference,
-    compute_temporal_stats,
     find_extrema,
-    find_boundary_nodes,
-    find_boundary_edges,
+    compute_difference,
     compute_slope,
-    export_all_variables_csv,
-    compute_mesh_integral,
-    evaluate_expression,
-    compute_discharge,
     compute_courant_number,
-    compute_element_area,
-    compute_flood_envelope,
-    compute_flood_arrival,
-    compute_flood_duration,
-    read_cli_file,
-    extract_layer_2d,
-    polygon_zonal_stats,
 )
-from telemac_defaults import (
-    suggest_palette, is_bipolar,
-    detect_module_from_vars, find_velocity_pair,
-)
-from validation import (
-    parse_observation_csv, compute_rmse, compute_nse,
-    compute_volume_timeseries, parse_liq_file,
-)
-from data_manip.extraction.telemac_file import TelemacFile
+from telemac_defaults import is_bipolar
 
 # ---------------------------------------------------------------------------
 # Map widget
