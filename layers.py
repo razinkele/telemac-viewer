@@ -1,8 +1,7 @@
 # layers.py
 from __future__ import annotations
 import numpy as np
-from typing import Any
-from viewer_types import MeshGeometry
+from viewer_types import MeshGeometry, TelemacFileProtocol
 from shiny_deckgl import (
     layer,
     simple_mesh_layer,
@@ -79,7 +78,7 @@ def build_mesh_layer(geom: MeshGeometry, values: np.ndarray, palette_id: str,
     return lyr, vmin, vmax, log_applied
 
 
-def build_velocity_layer(tf: Any, time_idx: int, geom: MeshGeometry,
+def build_velocity_layer(tf: TelemacFileProtocol, time_idx: int, geom: MeshGeometry,
                          origin: list[float] | None = None) -> dict | None:
     """Build velocity arrow layer from U/V components."""
     pair = find_velocity_pair(tf.varnames)
@@ -132,7 +131,7 @@ def build_velocity_layer(tf: Any, time_idx: int, geom: MeshGeometry,
     )
 
 
-def build_contour_layer_fn(tf: Any, values: np.ndarray, geom: MeshGeometry,
+def build_contour_layer_fn(tf: TelemacFileProtocol, values: np.ndarray, geom: MeshGeometry,
                            n_contours: int = 6, layer_id: str = "contours",
                            contour_color: list[int] | None = None,
                            origin: list[float] | None = None) -> dict | None:
@@ -291,7 +290,7 @@ def build_particle_layer(paths: list[list[list[float]]], current_time: float, tr
     )
 
 
-def build_wireframe_layer(tf: Any, geom: MeshGeometry,
+def build_wireframe_layer(tf: TelemacFileProtocol, geom: MeshGeometry,
                           origin: list[float] | None = None) -> dict:
     """Build mesh wireframe as line segments (triangle edges)."""
     x, y = tf.meshx, tf.meshy
@@ -394,7 +393,7 @@ def build_measurement_layer(points_m: list[list[float]],
     return layers
 
 
-def build_boundary_layer(tf: Any, geom: MeshGeometry, boundary_nodes: list[int],
+def build_boundary_layer(tf: TelemacFileProtocol, geom: MeshGeometry, boundary_nodes: list[int],
                          bc_types: dict[int, int] | None = None,
                          boundary_edges: tuple | None = None,
                          origin: list[float] | None = None) -> list[dict]:

@@ -80,3 +80,16 @@ class FakeTF:
             abscissa.append(cum_dist)
             values_out.append(float(vals[nearest]))
         return points_out, abscissa, values_out
+
+    def get_z_name(self):
+        raise KeyError("No Z variable in FakeTF")
+
+    def close(self):
+        pass
+
+
+# Verify FakeTF satisfies the protocol (checked at import time by type checkers)
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from viewer_types import TelemacFileProtocol
+    _: TelemacFileProtocol = FakeTF()  # type: ignore[assignment]

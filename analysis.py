@@ -8,6 +8,7 @@ import re
 import numpy as np
 from typing import Any
 from constants import _M2D
+from viewer_types import TelemacFileProtocol
 from telemac_defaults import find_velocity_pair
 import logging
 _logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ DERIVED_VARIABLES = {
 }
 
 
-def get_available_derived(tf: Any) -> list[str]:
+def get_available_derived(tf: TelemacFileProtocol) -> list[str]:
     """Return list of derived variable names available for this file."""
     varnames = [v.strip() for v in tf.varnames]
     available = []
@@ -44,7 +45,7 @@ def get_available_derived(tf: Any) -> list[str]:
     return available
 
 
-def compute_derived(tf: Any, varname: str, tidx: int) -> np.ndarray:
+def compute_derived(tf: TelemacFileProtocol, varname: str, tidx: int) -> np.ndarray:
     """Compute a derived variable. Returns numpy array."""
     spec = DERIVED_VARIABLES[varname]
     if spec["compute"] == "vorticity":
@@ -95,7 +96,7 @@ def export_crosssection_csv(abscissa: np.ndarray, values: np.ndarray, varname: s
     return buf.getvalue()
 
 
-def compute_discharge(tf: Any, tidx: int, polyline_m: list[list[float]]) -> dict[str, Any]:
+def compute_discharge(tf: TelemacFileProtocol, tidx: int, polyline_m: list[list[float]]) -> dict[str, Any]:
     """Compute discharge (Q) through a cross-section polyline.
 
     Q = integral of (velocity · normal) * depth along the section.
@@ -143,7 +144,7 @@ def compute_discharge(tf: Any, tidx: int, polyline_m: list[list[float]]) -> dict
     return {"total_q": total_q, "segments": segments, "skipped": skipped}
 
 
-def _element_areas(tf: Any) -> np.ndarray:
+def _element_areas(tf: TelemacFileProtocol) -> np.ndarray:
     """Vectorized element area computation. Returns (nelem,) float64 array."""
     x, y = tf.meshx, tf.meshy
     ikle = tf.ikle2
@@ -172,7 +173,7 @@ def _sanitize_result(arr: np.ndarray) -> np.ndarray:
     return arr
 
 
-def compute_courant_number(tf: Any, tidx: int) -> np.ndarray | None:
+def compute_courant_number(tf: TelemacFileProtocol, tidx: int) -> np.ndarray | None:
     """Compute Courant number (CFL) per vertex: CFL = V * dt / dx.
 
     dx is estimated as sqrt(average element area around each vertex).
@@ -207,13 +208,13 @@ def compute_courant_number(tf: Any, tidx: int) -> np.ndarray | None:
     return _sanitize_result(cfl.astype(np.float32))
 
 
-def compute_element_area(tf: Any) -> np.ndarray:
+def compute_element_area(tf: TelemacFileProtocol) -> np.ndarray:
     """Compute per-vertex element area (average of adjacent element areas)."""
     areas = _element_areas(tf)
     return _scatter_to_vertices(tf.ikle2, areas, tf.npoin2).astype(np.float32)
 
 
-def compute_mesh_integral(tf: Any, values: np.ndarray, threshold: float | None = None) -> dict[str, float]:
+def compute_mesh_integral(tf: TelemacFileProtocol, values: np.ndarray, threshold: float | None = None) -> dict[str, float]:
     """Compute area-weighted integral and statistics over the mesh.
 
     If threshold is set, only elements where all vertices exceed it are included.
@@ -265,7 +266,7 @@ _SAFE_COMPARE = {
 }
 
 
-def evaluate_expression(tf: Any, tidx: int, expression: str) -> np.ndarray:
+def evaluate_expression(tf: TelemacFileProtocol, tidx: int, expression: str) -> np.ndarray:
     """Evaluate a user-defined math expression safely using AST parsing.
 
     Variables are referenced by name with spaces replaced by underscores
@@ -353,7 +354,7 @@ def _ast_eval(node, ns):
     raise ValueError(f"Unsupported expression element: {type(node).__name__}")
 
 
-def compute_slope(tf: Any, values: np.ndarray) -> np.ndarray:
+def compute_slope(tf: TelemacFileProtocol, values: np.ndarray) -> np.ndarray:
     """Compute slope magnitude (gradient) of a scalar field on the mesh.
 
     Uses per-element gradient averaged to vertices. Returns per-vertex slope array.
@@ -378,7 +379,7 @@ def compute_slope(tf: Any, values: np.ndarray) -> np.ndarray:
     return _sanitize_result(_scatter_to_vertices(ikle, elem_slope, npoin).astype(np.float32))
 
 
-def export_all_variables_csv(tf: Any, tidx: int, x_m: float, y_m: float) -> str:
+def export_all_variables_csv(tf: TelemacFileProtocol, tidx: int, x_m: float, y_m: float) -> str:
     """Export all variable values at a point for a given timestep as CSV string."""
     nearest, _, _ = nearest_node(tf, x_m, y_m)
 
@@ -390,7 +391,7 @@ def export_all_variables_csv(tf: Any, tidx: int, x_m: float, y_m: float) -> str:
     return buf.getvalue()
 
 
-def find_boundary_nodes(tf: Any) -> list[int]:
+def find_boundary_nodes(tf: TelemacFileProtocol) -> list[int]:
     """Find boundary nodes of the 2D mesh.
 
     Boundary edges appear in only one triangle. Returns list of node indices.
@@ -399,7 +400,7 @@ def find_boundary_nodes(tf: Any) -> list[int]:
     return sorted(set(nodes_a.tolist() + nodes_b.tolist()))
 
 
-def find_boundary_edges(tf: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def find_boundary_edges(tf: TelemacFileProtocol) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Find boundary edges of the 2D mesh.
 
     Returns (boundary_keys, nodes_a, nodes_b) where nodes_a[i]-nodes_b[i]
@@ -460,7 +461,7 @@ def extract_layer_2d(values_3d: np.ndarray, npoin2: int, layer_k: int) -> np.nda
     return values_3d[start : start + npoin2].copy()
 
 
-def polygon_zonal_stats(tf: Any, values: np.ndarray, polygon_m: list[list[float]], geom: dict[str, Any]) -> dict[str, float]:
+def polygon_zonal_stats(tf: TelemacFileProtocol, values: np.ndarray, polygon_m: list[list[float]], geom: dict[str, Any]) -> dict[str, float]:
     """Compute statistics of a variable within a drawn polygon.
 
     polygon_m: list of [x_m, y_m] vertices in mesh meters.
@@ -504,7 +505,7 @@ def polygon_zonal_stats(tf: Any, values: np.ndarray, polygon_m: list[list[float]
 
 
 
-def nearest_node(tf: Any, x_m: float, y_m: float) -> tuple[int, float, float]:
+def nearest_node(tf: TelemacFileProtocol, x_m: float, y_m: float) -> tuple[int, float, float]:
     """Find the nearest 2D mesh node to a point in mesh meters.
 
     Returns (node_index, node_x, node_y).
@@ -516,7 +517,7 @@ def nearest_node(tf: Any, x_m: float, y_m: float) -> tuple[int, float, float]:
     return idx, float(x[idx]), float(y[idx])
 
 
-def time_series_at_point(tf: Any, varname: str, x_m: float, y_m: float) -> tuple[np.ndarray, np.ndarray]:
+def time_series_at_point(tf: TelemacFileProtocol, varname: str, x_m: float, y_m: float) -> tuple[np.ndarray, np.ndarray]:
     """Extract time series for a variable at a mesh point.
 
     Returns (times, values) arrays.
@@ -525,7 +526,7 @@ def time_series_at_point(tf: Any, varname: str, x_m: float, y_m: float) -> tuple
     return np.array(tf.times), ts[0]
 
 
-def cross_section_profile(tf: Any, varname: str, record: int, polyline_m: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
+def cross_section_profile(tf: TelemacFileProtocol, varname: str, record: int, polyline_m: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
     """Extract variable values along a polyline.
 
     polyline_m: list of [x, y] in mesh meters.
@@ -537,7 +538,7 @@ def cross_section_profile(tf: Any, varname: str, record: int, polyline_m: list[l
     return np.array(abscissa), np.array(values)
 
 
-def compute_particle_paths(tf: Any, seed_points: list[list[float]], x_off: float, y_off: float) -> list[list[list[float]]]:
+def compute_particle_paths(tf: TelemacFileProtocol, seed_points: list[list[float]], x_off: float, y_off: float) -> list[list[list[float]]]:
     """Compute Lagrangian particle trajectories from velocity field.
 
     Uses batched interpolation: fetches velocity field once per timestep,
@@ -645,7 +646,7 @@ def compute_particle_paths(tf: Any, seed_points: list[list[float]], x_off: float
     return [p for p in all_paths if len(p) > 1]
 
 
-def generate_seed_grid(tf: Any, n_target: int = 500) -> list[list[float]]:
+def generate_seed_grid(tf: TelemacFileProtocol, n_target: int = 500) -> list[list[float]]:
     """Generate a regular grid of seed points within the mesh bounding box.
 
     Returns list of [x_m, y_m] in mesh meters. Filters to points inside mesh.
@@ -708,7 +709,7 @@ def distribute_seeds_along_line(polyline_m: list[list[float]], n_seeds: int = 10
     return np.column_stack([seeds_x, seeds_y]).tolist()
 
 
-def compute_mesh_quality(tf: Any) -> np.ndarray:
+def compute_mesh_quality(tf: TelemacFileProtocol) -> np.ndarray:
     """Compute per-vertex mesh quality (0=worst, 1=best).
 
     Uses element aspect ratio: ratio of inscribed to circumscribed circle
@@ -738,7 +739,7 @@ def compute_mesh_quality(tf: Any) -> np.ndarray:
     return _sanitize_result(_scatter_to_vertices(ikle, elem_quality, npoin))
 
 
-def vertical_profile_at_point(tf: Any, varname: str, tidx: int, x_m: float, y_m: float) -> tuple[np.ndarray, np.ndarray, str]:
+def vertical_profile_at_point(tf: TelemacFileProtocol, varname: str, tidx: int, x_m: float, y_m: float) -> tuple[np.ndarray, np.ndarray, str]:
     """Extract vertical profile at a point for 3D files.
 
     Returns (elevations, values) arrays for each vertical plane.
@@ -770,7 +771,7 @@ def vertical_profile_at_point(tf: Any, varname: str, tidx: int, x_m: float, y_m:
     return elevations, values, elevation_label
 
 
-def find_extrema(tf: Any, values: np.ndarray) -> dict[str, tuple]:
+def find_extrema(tf: TelemacFileProtocol, values: np.ndarray) -> dict[str, tuple]:
     """Find locations of min and max values on the 2D mesh.
 
     Returns dict with 'min'/'max' keys, each containing (node_idx, x_m, y_m, value).
@@ -786,7 +787,7 @@ def find_extrema(tf: Any, values: np.ndarray) -> dict[str, tuple]:
     }
 
 
-def compute_temporal_stats(tf: Any, varname: str) -> dict[str, np.ndarray] | None:
+def compute_temporal_stats(tf: TelemacFileProtocol, varname: str) -> dict[str, np.ndarray] | None:
     """Compute min, max, mean across all timesteps for a variable.
 
     Returns dict with 'min', 'max', 'mean' arrays (per-node).
@@ -869,7 +870,7 @@ def compute_flood_duration(tf, varname="WATER DEPTH", threshold=0.01):
     return duration
 
 
-def compute_difference(tf: Any, varname: str, tidx: int, ref_tidx: int) -> np.ndarray:
+def compute_difference(tf: TelemacFileProtocol, varname: str, tidx: int, ref_tidx: int) -> np.ndarray:
     """Compute difference between current and reference timestep."""
     current = tf.get_data_value(varname, tidx)
     reference = tf.get_data_value(varname, ref_tidx)

@@ -2,14 +2,13 @@
 from __future__ import annotations
 import math
 import numpy as np
-from typing import Any
 from shiny_deckgl import encode_binary_attribute
 from constants import _M2D
 from crs import CRS as CRSType, native_to_wgs84
-from viewer_types import MeshGeometry
+from viewer_types import MeshGeometry, TelemacFileProtocol
 
 
-def build_mesh_geometry(tf: Any, crs: CRSType | None = None,
+def build_mesh_geometry(tf: TelemacFileProtocol, crs: CRSType | None = None,
                         z_values: np.ndarray | None = None,
                         z_scale: float = 1,
                         origin_offset: tuple[float, float] = (0, 0),
