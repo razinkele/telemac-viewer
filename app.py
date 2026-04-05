@@ -1666,7 +1666,7 @@ def server(input, output, session):
                 poly_m = [list(click_to_native(c[0], c[1], geom))
                           for c in coords]
                 values = effective_values()
-                stats = polygon_zonal_stats(tel_file(), values, poly_m, geom)
+                stats = polygon_zonal_stats(tel_file(), values, poly_m)
                 polygon_stats_data.set(stats)
                 polygon_mode.set(False)
                 await map_widget.disable_draw(session)

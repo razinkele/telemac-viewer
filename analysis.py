@@ -461,7 +461,7 @@ def extract_layer_2d(values_3d: np.ndarray, npoin2: int, layer_k: int) -> np.nda
     return values_3d[start : start + npoin2].copy()
 
 
-def polygon_zonal_stats(tf: TelemacFileProtocol, values: np.ndarray, polygon_m: list[list[float]], geom: dict[str, Any]) -> dict[str, float]:
+def polygon_zonal_stats(tf: TelemacFileProtocol, values: np.ndarray, polygon_m: list[list[float]]) -> dict[str, float]:
     """Compute statistics of a variable within a drawn polygon.
 
     polygon_m: list of [x_m, y_m] vertices in mesh meters.

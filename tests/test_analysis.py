@@ -570,7 +570,7 @@ class TestPolygonZonalStats:
         """Polygon enclosing entire mesh should include all 4 nodes."""
         polygon = [[-0.5, -0.5], [1.5, -0.5], [1.5, 1.5], [-0.5, 1.5]]
         values = fake_tf.get_data_value("WATER DEPTH", 0)  # [0.1, 0.5, 0.5, 1.0]
-        stats = polygon_zonal_stats(fake_tf, values, polygon, geom={})
+        stats = polygon_zonal_stats(fake_tf, values, polygon)
         assert stats["count"] == 4
         assert stats["min"] == pytest.approx(0.1)
         assert stats["max"] == pytest.approx(1.0)
@@ -580,7 +580,7 @@ class TestPolygonZonalStats:
         """Polygon outside mesh should return zeros."""
         polygon = [[10, 10], [11, 10], [11, 11], [10, 11]]
         values = fake_tf.get_data_value("WATER DEPTH", 0)
-        stats = polygon_zonal_stats(fake_tf, values, polygon, geom={})
+        stats = polygon_zonal_stats(fake_tf, values, polygon)
         assert stats["count"] == 0
         assert stats["mean"] == 0.0
 
