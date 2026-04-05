@@ -1480,6 +1480,7 @@ def server(input, output, session):
             if not pts:
                 return go.Figure()
             fig = go.Figure()
+            elev_label = "Elevation (m)"
             for i, pt in enumerate(pts):
                 elevations, values, elev_label = vertical_profile_at_point(tf, var, tidx, pt[0], pt[1])
                 if len(elevations) > 0:
