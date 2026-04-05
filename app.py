@@ -1,6 +1,8 @@
 # app.py — TELEMAC Viewer v3
 import io
+import logging
 import numpy as np
+_logger = logging.getLogger(__name__)
 import plotly.graph_objects as go
 from shiny import App, reactive, render, ui
 from shinywidgets import output_widget, render_widget
@@ -42,6 +44,7 @@ from layers import (
 import asyncio
 import math
 import shlex
+import shutil
 import threading
 import os as _os
 from crs import (
@@ -2947,6 +2950,8 @@ def server(input, output, session):
             _append_log(f"ERROR: {e}")
             import_model.set(None)
 
+    _import_out_dir = reactive.value(None)
+
     @reactive.effect
     @reactive.event(input.import_convert)
     def handle_import_convert():
@@ -2970,7 +2975,13 @@ def server(input, output, session):
             return
 
         import tempfile
+        # Clean up previous temp dir
+        old_dir = _import_out_dir.get()
+        if old_dir and _os.path.isdir(old_dir):
+            shutil.rmtree(old_dir, ignore_errors=True)
+
         out_dir = tempfile.mkdtemp(prefix="telemac_import_")
+        _import_out_dir.set(out_dir)
 
         try:
             from telemac_tools import hecras_to_telemac
@@ -3010,6 +3021,9 @@ def server(input, output, session):
             _append_log(f"ERROR: {e}")
             import traceback
             _append_log(traceback.format_exc())
+            ui.notification_show(f"Import conversion failed: {e}", type="error", duration=8)
+            shutil.rmtree(out_dir, ignore_errors=True)
+            _import_out_dir.set(None)
 
     @output
     @render.ui
