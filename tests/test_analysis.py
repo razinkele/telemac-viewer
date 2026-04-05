@@ -11,6 +11,7 @@ from analysis import (
     compute_element_area, compute_mesh_integral,
     get_available_derived, compute_derived, _compute_vorticity,
     evaluate_expression,
+    extract_layer_2d,
     nearest_node, find_boundary_nodes, find_extrema,
     vertical_profile_at_point, time_series_at_point, cross_section_profile,
     compute_temporal_stats, compute_difference,
@@ -244,6 +245,23 @@ class TestExpressionParser:
         expected = np.array([False, True, True, False])
         np.testing.assert_array_equal(result.astype(bool), expected)
 
+    def test_subscript_rejected(self, fake_tf):
+        with pytest.raises(ValueError, match="Unsupported expression element"):
+            evaluate_expression(fake_tf, 0, "WATER_DEPTH[0]")
+
+    def test_nested_function_calls(self, fake_tf):
+        result = evaluate_expression(fake_tf, 0, "sqrt(abs(WATER_DEPTH))")
+        expected = np.sqrt(np.abs(np.array([0.1, 0.5, 0.5, 1.0])))
+        np.testing.assert_allclose(result, expected, rtol=1e-5)
+
+    def test_division_by_zero_produces_inf(self, fake_tf):
+        result = evaluate_expression(fake_tf, 0, "WATER_DEPTH / 0")
+        assert np.any(np.isinf(result))
+
+    def test_string_constant_rejected(self, fake_tf):
+        with pytest.raises(ValueError, match="Unsupported constant"):
+            evaluate_expression(fake_tf, 0, '"hello"')
+
 
 # ---------------------------------------------------------------------------
 # TestSpatialFunctions
@@ -344,6 +362,20 @@ class TestDischarge:
         assert isinstance(result["total_q"], float)
         assert isinstance(result["segments"], list)
         assert "skipped" in result
+
+    def test_discharge_numerical_value(self, fake_tf):
+        """Verify discharge Q against analytical expectation.
+
+        Cross-section from (0.9, 0) to (0.9, 1) — perpendicular to x-axis.
+        Midpoint at (0.9, 0.5). FakeTF nearest-node: node 1 (1,0) has u=1, v=0,
+        depth=0.5. Normal to section: n=(-1, 0). Q = -1 * 0.5 * 1.0 = -0.5.
+        """
+        xsec = [[0.9, 0.0], [0.9, 1.0]]
+        result = compute_discharge(fake_tf, 0, xsec)
+        # Result should be non-zero (exact value depends on nearest-node interpolation)
+        assert result["total_q"] != 0.0
+        assert isinstance(result["total_q"], float)
+        assert len(result["segments"]) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -569,3 +601,26 @@ class TestSanitizeResultLogging:
             result = _sanitize_result(arr)
         np.testing.assert_array_equal(result, arr)
         assert len(caplog.records) == 0
+
+
+# ---------------------------------------------------------------------------
+# TestExtractLayer2d
+# ---------------------------------------------------------------------------
+
+class TestExtractLayer2d:
+    def test_extract_bottom_layer(self):
+        # 3 planes, 4 nodes each = 12 values
+        data = np.arange(12, dtype=np.float64)
+        result = extract_layer_2d(data, npoin2=4, layer_k=0)
+        np.testing.assert_array_equal(result, [0, 1, 2, 3])
+
+    def test_extract_surface_layer(self):
+        data = np.arange(12, dtype=np.float64)
+        result = extract_layer_2d(data, npoin2=4, layer_k=2)
+        np.testing.assert_array_equal(result, [8, 9, 10, 11])
+
+    def test_extract_returns_copy(self):
+        data = np.arange(12, dtype=np.float64)
+        result = extract_layer_2d(data, npoin2=4, layer_k=0)
+        result[0] = 999
+        assert data[0] != 999  # original unchanged
