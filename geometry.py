@@ -6,13 +6,14 @@ from typing import Any
 from shiny_deckgl import encode_binary_attribute
 from constants import _M2D
 from crs import CRS as CRSType, native_to_wgs84
+from viewer_types import MeshGeometry
 
 
 def build_mesh_geometry(tf: Any, crs: CRSType | None = None,
                         z_values: np.ndarray | None = None,
                         z_scale: float = 1,
                         origin_offset: tuple[float, float] = (0, 0),
-                        ) -> dict[str, Any]:
+                        ) -> MeshGeometry:
     """Build mesh geometry for SimpleMeshLayer.
 
     Transforms TELEMAC mesh coordinates (arbitrary metric CRS) into
@@ -68,13 +69,13 @@ def build_mesh_geometry(tf: Any, crs: CRSType | None = None,
     else:
         lon_off, lat_off = 0.0, 0.0
 
-    return {
-        "npoin": npoin,
-        "positions": encode_binary_attribute(positions.flatten()),
-        "indices": encode_binary_attribute(indices),
-        "x_off": x_off, "y_off": y_off,
-        "lon_off": lon_off, "lat_off": lat_off,
-        "crs": crs,
-        "extent_m": extent_m,
-        "zoom": zoom,
-    }
+    return MeshGeometry(
+        npoin=npoin,
+        positions=encode_binary_attribute(positions.flatten()),
+        indices=encode_binary_attribute(indices),
+        x_off=x_off, y_off=y_off,
+        lon_off=lon_off, lat_off=lat_off,
+        crs=crs,
+        extent_m=extent_m,
+        zoom=zoom,
+    )

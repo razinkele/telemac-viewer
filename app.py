@@ -1386,7 +1386,7 @@ def server(input, output, session):
             ui.notification_show(
                 f"Cannot determine depth range: {e}", type="warning", duration=5, id="zscale_warn")
             depth_range = 0.0
-        default_scale = min(50, int(geom["extent_m"] / depth_range)) if depth_range > 0 else 10
+        default_scale = min(50, int(geom.extent_m / depth_range)) if depth_range > 0 else 10
         return ui.input_slider(
             "z_scale", "Z Scale",
             min=1, max=100, value=default_scale, step=1,
@@ -1684,7 +1684,7 @@ def server(input, output, session):
                 ui.notification_show("Computing particle paths from seed line...",
                                      duration=None, id="particle_notif")
                 loop = asyncio.get_running_loop()
-                x_off, y_off = geom["x_off"], geom["y_off"]
+                x_off, y_off = geom.x_off, geom.y_off
                 paths = await loop.run_in_executor(
                     None, _run_with_lock, compute_particle_paths, tf, seeds, x_off, y_off)
                 particle_paths.set(paths)
@@ -1726,7 +1726,7 @@ def server(input, output, session):
                                  duration=None, id="particle_notif")
             try:
                 seeds = generate_seed_grid(tf, n_target=500)
-                x_off, y_off = geom["x_off"], geom["y_off"]
+                x_off, y_off = geom.x_off, geom.y_off
                 loop = asyncio.get_running_loop()
                 paths = await loop.run_in_executor(
                     None, _run_with_lock, compute_particle_paths, tf, seeds, x_off, y_off)
@@ -2646,7 +2646,7 @@ def server(input, output, session):
             reverse = input.reverse_palette()
         except (TypeError, AttributeError, KeyError):
             reverse = False
-        origin = [geom["lon_off"], geom["lat_off"]]
+        origin = [geom.lon_off, geom.lat_off]
         lyr, vmin, vmax, log_applied = build_mesh_layer(geom, values, palette_id,
                                            filter_range=filt,
                                            color_range_override=crange,
@@ -2670,7 +2670,7 @@ def server(input, output, session):
         # Min/max location markers
         if input.show_extrema():
             extrema = find_extrema(tf, values)
-            layers.extend(build_extrema_markers(extrema, geom["x_off"], geom["y_off"], origin=origin))
+            layers.extend(build_extrema_markers(extrema, geom.x_off, geom.y_off, origin=origin))
 
         if input.vectors():
             vlyr = build_velocity_layer(tf, tidx, geom, origin=origin)
@@ -2704,13 +2704,13 @@ def server(input, output, session):
         # Markers for clicked points
         pts = clicked_points.get()
         for i, pt in enumerate(pts):
-            mx, my = float(pt[0] - geom["x_off"]), float(pt[1] - geom["y_off"])
+            mx, my = float(pt[0] - geom.x_off), float(pt[1] - geom.y_off)
             layers.append(build_marker_layer(mx, my, layer_id=f"marker-{i}", origin=origin))
 
         # Cross-section path
         xsec = cross_section_points.get()
         if xsec is not None:
-            path_centered = [[x - geom["x_off"], y - geom["y_off"]] for x, y in xsec]
+            path_centered = [[x - geom.x_off, y - geom.y_off] for x, y in xsec]
             layers.append(build_cross_section_layer(path_centered, origin=origin))
 
         # Particle traces
@@ -2723,7 +2723,7 @@ def server(input, output, session):
         # Measurement line (convert mesh-meter coords to centered for layer)
         mpts = measure_points.get()
         if mpts:
-            mpts_centered = [[p[0] - geom["x_off"], p[1] - geom["y_off"]] for p in mpts]
+            mpts_centered = [[p[0] - geom.x_off, p[1] - geom.y_off] for p in mpts]
             layers.extend(build_measurement_layer(mpts_centered, origin=origin))
 
         gradient_colors = cached_gradient_colors(palette_id, reverse=reverse)
@@ -2755,9 +2755,9 @@ def server(input, output, session):
         if current_path != last_file_path.get():
             last_file_path.set(current_path)
             kwargs["view_state"] = {
-                "longitude": geom["lon_off"],
-                "latitude": geom["lat_off"],
-                "zoom": geom["zoom"],
+                "longitude": geom.lon_off,
+                "latitude": geom.lat_off,
+                "zoom": geom.zoom,
             }
 
         # Build widgets list

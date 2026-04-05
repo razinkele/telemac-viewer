@@ -7,6 +7,7 @@ native↔WGS84 transforms, .cas auto-detection, click conversion.
 from __future__ import annotations
 import re
 from dataclasses import dataclass
+from typing import Any
 from numpy import ndarray
 from pyproj import Transformer, CRS as ProjCRS
 from constants import _M2D
@@ -133,21 +134,21 @@ def guess_crs_from_coords(x: ndarray, y: ndarray) -> CRS | None:
 
 # --- Click conversion and display helpers ---
 
-def click_to_native(lon: float, lat: float, geom: dict) -> tuple[float, float]:
+def click_to_native(lon: float, lat: float, geom: Any) -> tuple[float, float]:
     """Convert deck.gl click coordinates to native CRS meters.
 
     When CRS is set, deck.gl reports real lon/lat — use pyproj inverse.
     When CRS is None, fall back to _M2D approximation (old behavior).
     """
-    crs = geom.get("crs")
+    crs = geom.crs
     if crs is not None:
         return wgs84_to_native(lon, lat, crs)
-    return float(lon) * _M2D + geom["x_off"], float(lat) * _M2D + geom["y_off"]
+    return float(lon) * _M2D + geom.x_off, float(lat) * _M2D + geom.y_off
 
 
-def meters_to_wgs84(x_m: float, y_m: float, geom: dict) -> tuple[float, float] | None:
+def meters_to_wgs84(x_m: float, y_m: float, geom: Any) -> tuple[float, float] | None:
     """Convert native CRS meters to WGS84 for display. Returns None if no CRS."""
-    crs = geom.get("crs")
+    crs = geom.crs
     if crs is None:
         return None
     return native_to_wgs84(x_m, y_m, crs)

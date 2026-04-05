@@ -36,12 +36,12 @@ def test_load_file(tf):
 
 
 def test_geometry(tf, geom):
-    assert geom["npoin"] == tf.npoin2
-    assert geom["positions"]["@@binary"] is True
+    assert geom.npoin == tf.npoin2
+    assert geom.positions["@@binary"] is True
     import base64
-    raw = base64.b64decode(geom["positions"]["value"])
+    raw = base64.b64decode(geom.positions["value"])
     assert len(raw) == tf.npoin2 * 3 * 4  # float32
-    assert geom["zoom"] > 0
+    assert geom.zoom > 0
 
 
 def test_mesh_layer(tf, geom):
@@ -112,7 +112,7 @@ def test_expression_parser(tf):
 def test_particle_tracing(tf, geom):
     from analysis import compute_particle_paths, generate_seed_grid
     seeds = generate_seed_grid(tf, n_target=20)
-    paths = compute_particle_paths(tf, seeds, geom["x_off"], geom["y_off"])
+    paths = compute_particle_paths(tf, seeds, geom.x_off, geom.y_off)
     assert isinstance(paths, list)
     # Each path (if any) should be list of [x, y, time] triplets
     for p in paths:

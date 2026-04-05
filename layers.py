@@ -2,6 +2,7 @@
 from __future__ import annotations
 import numpy as np
 from typing import Any
+from viewer_types import MeshGeometry
 from shiny_deckgl import (
     layer,
     simple_mesh_layer,
@@ -21,14 +22,14 @@ _GRAY = np.array([0.85, 0.85, 0.85], dtype=np.float32)
 _WIRE_COLOR = [100, 100, 100, 80]
 
 
-def build_mesh_layer(geom: dict[str, Any], values: np.ndarray, palette_id: str,
+def build_mesh_layer(geom: MeshGeometry, values: np.ndarray, palette_id: str,
                      filter_range: tuple[float, float] | None = None,
                      color_range_override: tuple[float, float] | None = None,
                      log_scale: bool = False,
                      reverse_palette: bool = False,
                      origin: list[float] | None = None) -> tuple[dict, float, float, bool]:
     """Build SimpleMeshLayer with per-vertex coloring and optional value filter."""
-    npoin = geom["npoin"]
+    npoin = geom.npoin
 
     vmin, vmax = float(np.nanmin(values[:npoin])), float(np.nanmax(values[:npoin]))
     if np.isnan(vmin):
@@ -64,10 +65,10 @@ def build_mesh_layer(geom: dict[str, Any], values: np.ndarray, palette_id: str,
         "mesh",
         data=[{"position": [0, 0, 0]}],
         mesh="@@CustomGeometry",
-        _meshPositions=geom["positions"],
+        _meshPositions=geom.positions,
         _meshNormals=[],
         _meshColors=encode_binary_attribute(colors_f32.flatten()),
-        _meshIndices=geom["indices"],
+        _meshIndices=geom.indices,
         coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=origin or [0, 0],
         sizeScale=1,
@@ -78,7 +79,7 @@ def build_mesh_layer(geom: dict[str, Any], values: np.ndarray, palette_id: str,
     return lyr, vmin, vmax, log_applied
 
 
-def build_velocity_layer(tf: Any, time_idx: int, geom: dict[str, Any],
+def build_velocity_layer(tf: Any, time_idx: int, geom: MeshGeometry,
                          origin: list[float] | None = None) -> dict | None:
     """Build velocity arrow layer from U/V components."""
     pair = find_velocity_pair(tf.varnames)
@@ -89,7 +90,7 @@ def build_velocity_layer(tf: Any, time_idx: int, geom: dict[str, Any],
     v = tf.get_data_value(pair[1], time_idx)
     x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
-    x_off, y_off = geom["x_off"], geom["y_off"]
+    x_off, y_off = geom.x_off, geom.y_off
 
     mag = np.sqrt(u[:npoin]**2 + v[:npoin]**2)
     max_mag = float(mag.max())
@@ -131,7 +132,7 @@ def build_velocity_layer(tf: Any, time_idx: int, geom: dict[str, Any],
     )
 
 
-def build_contour_layer_fn(tf: Any, values: np.ndarray, geom: dict[str, Any],
+def build_contour_layer_fn(tf: Any, values: np.ndarray, geom: MeshGeometry,
                            n_contours: int = 6, layer_id: str = "contours",
                            contour_color: list[int] | None = None,
                            origin: list[float] | None = None) -> dict | None:
@@ -145,7 +146,7 @@ def build_contour_layer_fn(tf: Any, values: np.ndarray, geom: dict[str, Any],
     npoin = tf.npoin2
     ikle = tf.ikle2
     x, y = tf.meshx, tf.meshy
-    x_off, y_off = geom["x_off"], geom["y_off"]
+    x_off, y_off = geom.x_off, geom.y_off
     vmin, vmax = float(np.nanmin(values[:npoin])), float(np.nanmax(values[:npoin]))
     if vmax == vmin:
         return None
@@ -290,12 +291,12 @@ def build_particle_layer(paths: list[list[list[float]]], current_time: float, tr
     )
 
 
-def build_wireframe_layer(tf: Any, geom: dict[str, Any],
+def build_wireframe_layer(tf: Any, geom: MeshGeometry,
                           origin: list[float] | None = None) -> dict:
     """Build mesh wireframe as line segments (triangle edges)."""
     x, y = tf.meshx, tf.meshy
     ikle = tf.ikle2
-    x_off, y_off = geom["x_off"], geom["y_off"]
+    x_off, y_off = geom.x_off, geom.y_off
 
     # Extract unique edges using integer key encoding (faster than np.unique with axis=0)
     e0 = np.column_stack([ikle[:, 0], ikle[:, 1]])
@@ -393,7 +394,7 @@ def build_measurement_layer(points_m: list[list[float]],
     return layers
 
 
-def build_boundary_layer(tf: Any, geom: dict[str, Any], boundary_nodes: list[int],
+def build_boundary_layer(tf: Any, geom: MeshGeometry, boundary_nodes: list[int],
                          bc_types: dict[int, int] | None = None,
                          boundary_edges: tuple | None = None,
                          origin: list[float] | None = None) -> list[dict]:
@@ -407,7 +408,7 @@ def build_boundary_layer(tf: Any, geom: dict[str, Any], boundary_nodes: list[int
     from analysis import find_boundary_edges as _find_edges
 
     x, y = tf.meshx, tf.meshy
-    x_off, y_off = geom["x_off"], geom["y_off"]
+    x_off, y_off = geom.x_off, geom.y_off
 
     # Get boundary edges
     if boundary_edges is not None:

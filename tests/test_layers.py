@@ -174,7 +174,7 @@ class TestOtherLayers:
     def test_extrema_markers(self, fake_tf, fake_geom):
         values = fake_tf.get_data_value("WATER DEPTH", 0)
         extrema = find_extrema(fake_tf, values)
-        result = build_extrema_markers(extrema, fake_geom["x_off"], fake_geom["y_off"])
+        result = build_extrema_markers(extrema, fake_geom.x_off, fake_geom.y_off)
         assert isinstance(result, list)
         assert len(result) == 2
 
@@ -236,7 +236,7 @@ class TestOriginParameter:
     def test_extrema_markers(self, fake_tf, fake_geom):
         values = fake_tf.get_data_value("WATER DEPTH", 0)
         extrema = find_extrema(fake_tf, values)
-        layers = build_extrema_markers(extrema, fake_geom["x_off"], fake_geom["y_off"], origin=[24.0, 55.0])
+        layers = build_extrema_markers(extrema, fake_geom.x_off, fake_geom.y_off, origin=[24.0, 55.0])
         for lyr in layers:
             assert lyr["coordinateOrigin"] == [24.0, 55.0]
 

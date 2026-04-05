@@ -8,6 +8,19 @@ from crs import (
     detect_crs_from_cas, guess_crs_from_coords,
     click_to_native, meters_to_wgs84,
 )
+from viewer_types import MeshGeometry
+
+
+def _make_geom(**kwargs) -> MeshGeometry:
+    """Build a minimal MeshGeometry for testing crs helpers."""
+    defaults = dict(
+        npoin=0, positions={}, indices={},
+        x_off=0.0, y_off=0.0,
+        lon_off=0.0, lat_off=0.0,
+        crs=None, extent_m=1.0, zoom=1.0,
+    )
+    defaults.update(kwargs)
+    return MeshGeometry(**defaults)
 
 
 class TestCrsFromEpsg:
@@ -191,7 +204,7 @@ class TestClickToNative:
         crs = crs_from_epsg(3346)
         x_orig, y_orig = 500000.0, 6100000.0
         lon, lat = native_to_wgs84(x_orig, y_orig, crs)
-        geom = {"x_off": x_orig, "y_off": y_orig, "crs": crs}
+        geom = _make_geom(x_off=x_orig, y_off=y_orig, crs=crs)
         x, y = click_to_native(lon, lat, geom)
         assert x == pytest.approx(x_orig, abs=1.0)
         assert y == pytest.approx(y_orig, abs=1.0)
@@ -199,7 +212,7 @@ class TestClickToNative:
     def test_without_crs_fallback(self):
         """Without CRS, should match old coord_to_meters behavior."""
         from constants import _M2D
-        geom = {"x_off": 100.0, "y_off": 200.0, "crs": None}
+        geom = _make_geom(x_off=100.0, y_off=200.0, crs=None)
         lon, lat = 0.001, 0.002
         x, y = click_to_native(lon, lat, geom)
         assert x == pytest.approx(lon * _M2D + 100.0)
@@ -209,7 +222,7 @@ class TestClickToNative:
 class TestMetersToWgs84:
     def test_with_crs(self):
         crs = crs_from_epsg(3346)
-        geom = {"crs": crs}
+        geom = _make_geom(crs=crs)
         result = meters_to_wgs84(500000, 6100000, geom)
         assert result is not None
         lon, lat = result
@@ -217,7 +230,7 @@ class TestMetersToWgs84:
         assert 54.5 < lat < 56.0
 
     def test_without_crs(self):
-        geom = {"crs": None}
+        geom = _make_geom(crs=None)
         result = meters_to_wgs84(100, 200, geom)
         assert result is None
 
@@ -231,13 +244,13 @@ class TestOriginOffset:
         geom = build_mesh_geometry(tf, crs=crs, origin_offset=(309424, 6132619))
         # Mesh center (0.5, 0.5) + offset -> (309424.5, 6132619.5) in LKS94
         # Should map to approximately 20.9E, 55.3N (Curonian Lagoon)
-        assert 20.0 < geom["lon_off"] < 22.0
-        assert 54.5 < geom["lat_off"] < 56.0
+        assert 20.0 < geom.lon_off < 22.0
+        assert 54.5 < geom.lat_off < 56.0
 
     def test_zero_offset_unchanged(self):
         from geometry import build_mesh_geometry
         from tests.helpers import FakeTF
         geom_default = build_mesh_geometry(FakeTF())
         geom_zero = build_mesh_geometry(FakeTF(), origin_offset=(0, 0))
-        assert geom_default["x_off"] == geom_zero["x_off"]
-        assert geom_default["y_off"] == geom_zero["y_off"]
+        assert geom_default.x_off == geom_zero.x_off
+        assert geom_default.y_off == geom_zero.y_off

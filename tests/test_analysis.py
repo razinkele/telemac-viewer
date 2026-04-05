@@ -5,6 +5,7 @@ import os
 import numpy as np
 import pytest
 from tests.helpers import FakeTF
+from viewer_types import MeshGeometry
 from analysis import (
     _element_areas, _scatter_to_vertices, _sanitize_result,
     compute_mesh_quality, compute_slope, compute_courant_number,
@@ -270,7 +271,10 @@ class TestExpressionParser:
 class TestSpatialFunctions:
     def test_click_to_native_no_crs(self):
         from crs import click_to_native
-        x, y = click_to_native(0.0, 0.0, {"x_off": 500.0, "y_off": 300.0, "crs": None})
+        geom = MeshGeometry(npoin=0, positions={}, indices={},
+                            x_off=500.0, y_off=300.0, lon_off=0.0, lat_off=0.0,
+                            crs=None, extent_m=1.0, zoom=1.0)
+        x, y = click_to_native(0.0, 0.0, geom)
         assert x == pytest.approx(500.0)
         assert y == pytest.approx(300.0)
 
