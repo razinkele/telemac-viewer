@@ -2240,6 +2240,13 @@ def server(input, output, session):
             if tf2.npoin2 != tel_file().npoin2:
                 ui.notification_show(f"Mesh mismatch: {tf2.npoin2} vs {tel_file().npoin2} nodes", type="error", duration=5)
                 return
+            # Close previous comparison file to avoid FD leak
+            old_tf = compare_tf.get()
+            if old_tf is not None:
+                try:
+                    old_tf.close()
+                except Exception:
+                    _logger.warning("Failed to close previous compare file", exc_info=True)
             compare_tf.set(tf2)
             ui.notification_show(f"Comparison file loaded: {tf2.npoin2} nodes, {len(tf2.varnames)} vars", duration=3)
         except Exception as e:
