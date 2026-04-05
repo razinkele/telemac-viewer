@@ -1106,7 +1106,8 @@ def server(input, output, session):
                 detected = detect_crs_from_cas(cas_path)
                 if detected:
                     current_crs.set(detected)
-                    ui.update_text("epsg_input", value=str(detected.epsg))
+                    with reactive.isolate():
+                        ui.update_text("epsg_input", value=str(detected.epsg))
                     return
 
         # Try coordinate heuristic
@@ -1114,7 +1115,8 @@ def server(input, output, session):
         detected = guess_crs_from_coords(tf.meshx, tf.meshy)
         if detected:
             current_crs.set(detected)
-            ui.update_text("epsg_input", value=str(detected.epsg))
+            with reactive.isolate():
+                ui.update_text("epsg_input", value=str(detected.epsg))
             return
 
         current_crs.set(None)
