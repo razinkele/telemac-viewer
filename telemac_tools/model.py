@@ -1,7 +1,22 @@
 """Intermediate data model for HEC-RAS → TELEMAC pipeline."""
 from __future__ import annotations
 from dataclasses import dataclass, field
+from enum import Enum, IntEnum
 import numpy as np
+
+
+class BCType(str, Enum):
+    FLOW = "flow"
+    STAGE = "stage"
+    NORMAL_DEPTH = "normal_depth"
+    RATING_CURVE = "rating_curve"
+    UNKNOWN = "unknown"
+
+
+class LIHBOR(IntEnum):
+    WALL = 2
+    FREE = 4
+    PRESCRIBED = 5
 
 
 @dataclass
@@ -22,7 +37,7 @@ class Reach:
 
 @dataclass
 class BoundaryCondition:
-    bc_type: str                     # "flow", "stage", "normal_depth", "rating_curve"
+    bc_type: BCType                  # flow, stage, normal_depth, rating_curve, unknown
     location: str                    # "upstream" / "downstream" / reach name
     line_coords: np.ndarray | None = None
     timeseries: dict | None = None  # {"time": array, "values": array, "unit": str}
@@ -51,6 +66,15 @@ class Mesh2D:
     elevation: np.ndarray            # (N,) bed elevation
     mannings_n: np.ndarray           # (N,) Manning's n
 
+    def __post_init__(self):
+        n = len(self.nodes)
+        if len(self.elevation) != n:
+            raise ValueError(f"elevation length {len(self.elevation)} != node count {n}")
+        if len(self.mannings_n) != n:
+            raise ValueError(f"mannings_n length {len(self.mannings_n)} != node count {n}")
+        if self.elements.size > 0 and int(self.elements.max()) >= n:
+            raise ValueError(f"element index {int(self.elements.max())} >= node count {n}")
+
 
 @dataclass
 class HecRasModel:
@@ -63,7 +87,7 @@ class HecRasModel:
 @dataclass
 class BCSegment:
     node_indices: list[int]
-    lihbor: int                      # 2=wall, 4=free, 5=prescribed
+    lihbor: LIHBOR                   # WALL=2, FREE=4, PRESCRIBED=5
     prescribed_h: float | None = None
     prescribed_q: float | None = None
     _line_coords: np.ndarray | None = None

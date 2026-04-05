@@ -48,3 +48,19 @@ class TestDataclasses:
     def test_parse_error(self):
         with pytest.raises(HecRasParseError):
             raise HecRasParseError("Missing group")
+
+    def test_mesh2d_rejects_mismatched_elevation(self):
+        nodes = np.array([[0, 0], [1, 0], [0, 1]], dtype=np.float64)
+        elems = np.array([[0, 1, 2]], dtype=np.int32)
+        with pytest.raises(ValueError, match="elevation length"):
+            Mesh2D(nodes=nodes, elements=elems,
+                   elevation=np.zeros(5),
+                   mannings_n=np.full(3, 0.035))
+
+    def test_mesh2d_rejects_out_of_bounds_element(self):
+        nodes = np.array([[0, 0], [1, 0], [0, 1]], dtype=np.float64)
+        elems = np.array([[0, 1, 99]], dtype=np.int32)
+        with pytest.raises(ValueError, match="element index"):
+            Mesh2D(nodes=nodes, elements=elems,
+                   elevation=np.zeros(3),
+                   mannings_n=np.full(3, 0.035))
