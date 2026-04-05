@@ -1051,7 +1051,12 @@ def server(input, output, session):
             # Re-raise to halt reactive chain — Shiny shows error state
             raise
         _prev_tel_file[0] = tf
-        # Clear transient state from previous file
+        return tf
+
+    @reactive.effect
+    def _reset_state_on_new_file():
+        """Reset all derived state when a new file is loaded."""
+        tel_file()  # take dependency on file changes
         particle_paths.set(None)
         cross_section_points.set(None)
         clicked_points.set([])
@@ -1065,7 +1070,6 @@ def server(input, output, session):
         compare_tf.set(None)
         volume_cache.set(None)
         polygon_stats_data.set(None)
-        return tf
 
     # --- CRS reactive ---
     current_crs = reactive.value(None)
