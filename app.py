@@ -2583,57 +2583,42 @@ def server(input, output, session):
         else:
             ui.notification_show("No simulation running", type="info", duration=2)
 
-    # -- Map update --
+    # -- Map update helpers --
 
-    @reactive.effect
-    async def update_map():
-        tf = tel_file()
-        geom = mesh_geom()
-        var = current_var()
-        tidx = current_tidx()
-        values = effective_values()
-        palette_id = input.palette() if input.palette() in PALETTES else "Viridis"
-
-        # Auto-switch to diverging palette for bipolar variables or difference mode
-        diag = input.diagnostic() if input.diagnostic() else "none"
-        if is_bipolar(var) and diag == "none" and not input.diff_mode():
-            palette_id = "_diverging"
-        elif input.diff_mode() and diag == "none":
-            palette_id = "_diverging"
-
-        # Display variable label
+    def _resolve_display_var(var, tidx, diag):
+        """Return the label string describing the currently displayed variable."""
         try:
             td = input.temporal_display() or "none"
         except (TypeError, AttributeError, KeyError):
             td = "none"
         if expr_result.get() is not None:
-            display_var = f"EXPR: {input.expr_input()}"
-        elif diag == "mesh_quality":
-            display_var = "MESH QUALITY"
-        elif diag == "slope":
-            display_var = f"SLOPE ({var})"
-        elif diag == "courant":
-            display_var = "COURANT NUMBER"
-        elif diag == "elem_area":
-            display_var = "ELEMENT AREA (m²)"
-        elif td != "none" and temporal_stats_cache.get() is not None:
-            display_var = f"{var} (temporal {td})"
-        elif input.diff_mode():
+            return f"EXPR: {input.expr_input()}"
+        if diag == "mesh_quality":
+            return "MESH QUALITY"
+        if diag == "slope":
+            return f"SLOPE ({var})"
+        if diag == "courant":
+            return "COURANT NUMBER"
+        if diag == "elem_area":
+            return "ELEMENT AREA (m²)"
+        if td != "none" and temporal_stats_cache.get() is not None:
+            return f"{var} (temporal {td})"
+        if input.diff_mode():
             try:
                 ref = input.ref_tidx() if input.ref_tidx() is not None else 0
             except (TypeError, AttributeError, KeyError):
                 ref = 0
-            display_var = f"Δ {var} (t{tidx}-t{ref})"
-        else:
-            display_var = var
+            return f"Δ {var} (t{tidx}-t{ref})"
+        return var
 
-        # Custom color range
-        crange = None
+    def _compute_color_range(palette_id, values):
+        """Return (crange, filt, use_log, reverse) for build_mesh_layer."""
         use_diverging = palette_id == "_diverging"
         try:
             custom_range = input.custom_range()
         except (TypeError, AttributeError, KeyError):
             custom_range = False
+        crange = None
         if use_diverging and not custom_range:
             abs_max = max(abs(float(values.min())), abs(float(values.max())))
             if abs_max > 0:
@@ -2646,7 +2631,6 @@ def server(input, output, session):
                 cmin, cmax = None, None
             if cmin is not None and cmax is not None:
                 crange = (cmin, cmax)
-
         try:
             filt = input.filter_range()
         except (TypeError, AttributeError, KeyError):
@@ -2659,19 +2643,11 @@ def server(input, output, session):
             reverse = input.reverse_palette()
         except (TypeError, AttributeError, KeyError):
             reverse = False
-        origin = [geom.lon_off, geom.lat_off]
-        lyr, vmin, vmax, log_applied = build_mesh_layer(geom, values, palette_id,
-                                           filter_range=filt,
-                                           color_range_override=crange,
-                                           log_scale=use_log,
-                                           reverse_palette=reverse,
-                                           origin=origin)
-        if use_log and not log_applied:
-            ui.notification_show(
-                "Log scale requires positive values — using linear scale",
-                type="warning", duration=3, id="log_warn")
+        return crange, filt, use_log, reverse
 
-        layers = [lyr]
+    def _build_overlay_layers(tf, geom, tidx, values, origin):
+        """Build all optional overlay layers (wireframe, vectors, contours, markers, etc.)."""
+        layers = []
 
         if input.wireframe():
             layers.append(build_wireframe_layer(tf, geom, origin=origin))
@@ -2739,6 +2715,10 @@ def server(input, output, session):
             mpts_centered = [[p[0] - geom.x_off, p[1] - geom.y_off] for p in mpts]
             layers.extend(build_measurement_layer(mpts_centered, origin=origin))
 
+        return layers
+
+    def _build_legend(display_var, vmin, vmax, palette_id, reverse):
+        """Build the layer_legend_widget for the map."""
         gradient_colors = cached_gradient_colors(palette_id, reverse=reverse)
         legend_entries = [{
             "layer_id": "mesh",
@@ -2753,12 +2733,48 @@ def server(input, output, session):
                 {"layer_id": "boundary-free", "label": "Free (Neumann)", "color": [0, 200, 80], "shape": "line"},
                 {"layer_id": "boundary-prescribed", "label": "Prescribed (H/Q)", "color": [40, 120, 255], "shape": "line"},
             ])
-        legend = layer_legend_widget(
+        return layer_legend_widget(
             entries=legend_entries,
             placement="bottom-right",
             show_checkbox=False,
             title="Legend",
         )
+
+    # -- Map update --
+
+    @reactive.effect
+    async def update_map():
+        tf = tel_file()
+        geom = mesh_geom()
+        var = current_var()
+        tidx = current_tidx()
+        values = effective_values()
+        palette_id = input.palette() if input.palette() in PALETTES else "Viridis"
+
+        # Auto-switch to diverging palette for bipolar variables or difference mode
+        diag = input.diagnostic() if input.diagnostic() else "none"
+        if is_bipolar(var) and diag == "none" and not input.diff_mode():
+            palette_id = "_diverging"
+        elif input.diff_mode() and diag == "none":
+            palette_id = "_diverging"
+
+        display_var = _resolve_display_var(var, tidx, diag)
+        crange, filt, use_log, reverse = _compute_color_range(palette_id, values)
+
+        origin = [geom.lon_off, geom.lat_off]
+        lyr, vmin, vmax, log_applied = build_mesh_layer(geom, values, palette_id,
+                                           filter_range=filt,
+                                           color_range_override=crange,
+                                           log_scale=use_log,
+                                           reverse_palette=reverse,
+                                           origin=origin)
+        if use_log and not log_applied:
+            ui.notification_show(
+                "Log scale requires positive values — using linear scale",
+                type="warning", duration=3, id="log_warn")
+
+        layers = [lyr] + _build_overlay_layers(tf, geom, tidx, values, origin)
+        legend = _build_legend(display_var, vmin, vmax, palette_id, reverse)
 
         # Only update view_state on file change
         uploaded = input.upload()
