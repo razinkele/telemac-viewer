@@ -293,27 +293,20 @@ def build_particle_layer(paths: list[list[list[float]]], current_time: float, tr
 def build_wireframe_layer(tf: TelemacFileProtocol, geom: MeshGeometry,
                           origin: list[float] | None = None) -> dict:
     """Build mesh wireframe as line segments (triangle edges)."""
+    from analysis import compute_unique_edges
+
     x, y = tf.meshx, tf.meshy
     ikle = tf.ikle2
     x_off, y_off = geom.x_off, geom.y_off
 
-    # Extract unique edges using integer key encoding (faster than np.unique with axis=0)
-    e0 = np.column_stack([ikle[:, 0], ikle[:, 1]])
-    e1 = np.column_stack([ikle[:, 1], ikle[:, 2]])
-    e2 = np.column_stack([ikle[:, 2], ikle[:, 0]])
-    all_edges = np.vstack([e0, e1, e2])
-    all_edges.sort(axis=1)
-    max_node = int(all_edges.max()) + 1
-    edge_keys = all_edges[:, 0].astype(np.int64) * max_node + all_edges[:, 1].astype(np.int64)
-    unique_keys = np.unique(edge_keys)
+    # Extract unique edges using shared helper
+    unique_keys, a_idx_raw, b_idx_raw = compute_unique_edges(ikle)
 
     # Subsample if too many edges (>50k)
     step = max(1, len(unique_keys) // 50000)
-    sampled_keys = unique_keys[::step]
+    a_idx = a_idx_raw[::step]
+    b_idx = b_idx_raw[::step]
 
-    # Decode back to node pairs
-    a_idx = (sampled_keys // max_node).astype(np.int32)
-    b_idx = (sampled_keys % max_node).astype(np.int32)
     src_x = (x[a_idx] - x_off).tolist()
     src_y = (y[a_idx] - y_off).tolist()
     tgt_x = (x[b_idx] - x_off).tolist()
