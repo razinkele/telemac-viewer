@@ -1711,14 +1711,19 @@ def server(input, output, session):
                 return
             ui.notification_show("Computing particle trajectories...",
                                  duration=None, id="particle_notif")
-            seeds = generate_seed_grid(tf, n_target=500)
-            x_off, y_off = geom["x_off"], geom["y_off"]
-            loop = asyncio.get_running_loop()
-            paths = await loop.run_in_executor(
-                None, _run_with_lock, compute_particle_paths, tf, seeds, x_off, y_off)
-            particle_paths.set(paths)
-            ui.notification_remove("particle_notif")
-            ui.notification_show(f"Computed {len(paths)} particle paths", duration=3)
+            try:
+                seeds = generate_seed_grid(tf, n_target=500)
+                x_off, y_off = geom["x_off"], geom["y_off"]
+                loop = asyncio.get_running_loop()
+                paths = await loop.run_in_executor(
+                    None, _run_with_lock, compute_particle_paths, tf, seeds, x_off, y_off)
+                particle_paths.set(paths)
+                ui.notification_show(f"Computed {len(paths)} particle paths", duration=3)
+            except Exception as e:
+                _logger.warning("Particle computation failed: %s", e)
+                ui.notification_show(f"Particle tracing failed: {e}", type="warning", duration=6)
+            finally:
+                ui.notification_remove("particle_notif")
         else:
             particle_paths.set(None)
 
