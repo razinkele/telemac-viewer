@@ -2886,7 +2886,7 @@ def server(input, output, session):
 
     @reactive.effect
     @reactive.event(input.import_preview)
-    def handle_import_preview():
+    async def handle_import_preview():
         """Parse HEC-RAS file and show summary."""
         import_log_text.set("")
         hdf_files = input.import_hdf()
@@ -2935,11 +2935,11 @@ def server(input, output, session):
                 zoom = math.log2(600 * 360 / (256 * (extent / 111320))) if extent > 0 else 10
 
                 preview_layers = _build_import_preview_layers(model, x_off, y_off)
-                asyncio.ensure_future(import_map_widget.update(
+                await import_map_widget.update(
                     session,
                     layers=preview_layers,
                     view_state={"longitude": 0, "latitude": 0, "zoom": zoom},
-                ))
+                )
 
             _append_log("\nReady to convert. Click 'Convert' to generate TELEMAC files.")
 
