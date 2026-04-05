@@ -1544,20 +1544,26 @@ def server(input, output, session):
             # Compute discharge and avg water level at cross-section for each timestep
             h_values = []
             q_values = []
+            skipped_h = 0
             for t in range(len(tf.times)):
                 result = compute_discharge(tf, t, xsec)
                 if result["total_q"] is not None:
-                    q_values.append(result["total_q"])
                     # Average water level along the cross-section
+                    h_val = None
                     try:
                         _, wl_vals = cross_section_profile(tf, "FREE SURFACE", t, xsec)
-                        h_values.append(float(np.mean(wl_vals)))
-                    except Exception:
+                        h_val = float(np.mean(wl_vals))
+                    except (KeyError, ValueError, IndexError):
                         try:
                             _, wd_vals = cross_section_profile(tf, "WATER DEPTH", t, xsec)
-                            h_values.append(float(np.mean(wd_vals)))
-                        except Exception:
-                            h_values.append(0.0)
+                            h_val = float(np.mean(wd_vals))
+                        except (KeyError, ValueError, IndexError):
+                            skipped_h += 1
+                    if h_val is not None:
+                        h_values.append(h_val)
+                        q_values.append(result["total_q"])
+            if skipped_h > 0:
+                _logger.warning("Rating curve: %d timesteps skipped (no water level data)", skipped_h)
             fig = go.Figure()
             if h_values and q_values:
                 fig.add_trace(go.Scatter(
