@@ -949,7 +949,7 @@ def server(input, output, session):
     def stat_var_name():
         try:
             return current_var()
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             return "—"
 
     @output
@@ -959,7 +959,7 @@ def server(input, output, session):
             tf = tel_file()
             tidx = current_tidx()
             return format_time(tf.times[tidx])
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             return "—"
 
     @output
@@ -968,7 +968,7 @@ def server(input, output, session):
         try:
             tf = tel_file()
             return f"{tf.npoin2:,}"
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             return "—"
 
     @output
@@ -977,7 +977,7 @@ def server(input, output, session):
         try:
             vals = effective_values()
             return f"{vals.min():.3g} – {vals.max():.3g}"
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             return "—"
 
     # -- Upload management --
@@ -1144,13 +1144,13 @@ def server(input, output, session):
         try:
             x_offset = input.crs_x_offset() or 0
             y_offset = input.crs_y_offset() or 0
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             x_offset, y_offset = 0, 0
         origin_offset = (x_offset, y_offset)
         if is_3d_mode.get() and tf.nplan > 1:
             try:
                 z_scale = input.z_scale() if input.z_scale() is not None else 10
-            except Exception:
+            except (TypeError, AttributeError, KeyError):
                 z_scale = 10
             try:
                 z_name = tf.get_z_name()
@@ -1168,7 +1168,7 @@ def server(input, output, session):
         tf = tel_file()
         try:
             var = input.variable()
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             var = None
         if var and var in tf.varnames:
             return var
@@ -1179,7 +1179,7 @@ def server(input, output, session):
         tf = tel_file()
         try:
             tidx = input.time_idx()
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             tidx = 0
         if tidx is None:
             tidx = 0
@@ -2101,7 +2101,7 @@ def server(input, output, session):
             idx, _, _ = nearest_node(tf, x_m, y_m)
             val = tf.get_data_value(var, tidx)[idx]
             val_str = f"  {var}: {val:.4g}"
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             val_str = ""
         wgs84 = meters_to_wgs84(x_m, y_m, geom)
         if wgs84:
@@ -2432,7 +2432,7 @@ def server(input, output, session):
         stats = temporal_stats_cache.get()
         try:
             td = input.temporal_display() or "none"
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             td = "none"
         if stats is not None and td != "none":
             return stats[td]
@@ -2442,7 +2442,7 @@ def server(input, output, session):
             tidx = current_tidx()
             try:
                 ref = input.ref_tidx() if input.ref_tidx() is not None else 0
-            except Exception:
+            except (TypeError, AttributeError, KeyError):
                 ref = 0
             return compute_difference(tf, var, tidx, ref)
         return current_values()
@@ -2491,7 +2491,7 @@ def server(input, output, session):
         cas_files = find_cas_files(path)
         try:
             cas_name = input.cas_file() if input.cas_file() else None
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             cas_name = None
         if not cas_name or cas_name not in cas_files:
             ui.notification_show("No .cas file selected", type="warning", duration=3)
@@ -2578,7 +2578,7 @@ def server(input, output, session):
         # Display variable label
         try:
             td = input.temporal_display() or "none"
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             td = "none"
         if expr_result.get() is not None:
             display_var = f"EXPR: {input.expr_input()}"
@@ -2595,7 +2595,7 @@ def server(input, output, session):
         elif input.diff_mode():
             try:
                 ref = input.ref_tidx() if input.ref_tidx() is not None else 0
-            except Exception:
+            except (TypeError, AttributeError, KeyError):
                 ref = 0
             display_var = f"Δ {var} (t{tidx}-t{ref})"
         else:
@@ -2606,7 +2606,7 @@ def server(input, output, session):
         use_diverging = palette_id == "_diverging"
         try:
             custom_range = input.custom_range()
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             custom_range = False
         if use_diverging and not custom_range:
             abs_max = max(abs(float(values.min())), abs(float(values.max())))
@@ -2616,22 +2616,22 @@ def server(input, output, session):
             try:
                 cmin = input.color_min()
                 cmax = input.color_max()
-            except Exception:
+            except (TypeError, AttributeError, KeyError):
                 cmin, cmax = None, None
             if cmin is not None and cmax is not None:
                 crange = (cmin, cmax)
 
         try:
             filt = input.filter_range()
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             filt = None
         try:
             use_log = input.log_scale()
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             use_log = False
         try:
             reverse = input.reverse_palette()
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             reverse = False
         origin = [geom["lon_off"], geom["lat_off"]]
         lyr, vmin, vmax, log_applied = build_mesh_layer(geom, values, palette_id,
@@ -2672,7 +2672,7 @@ def server(input, output, session):
         # Comparison variable contour overlay
         try:
             compare = input.compare_var() or ""
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             compare = ""
         compare_vals = None
         if compare.startswith("(2) ") and compare_tf.get() is not None:
@@ -2764,7 +2764,7 @@ def server(input, output, session):
         _LIGHT_BG = "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%23f0f4f8%22%7D%7D%5D%7D"
         try:
             basemap = input.basemap() or "dark"
-        except Exception:
+        except (TypeError, AttributeError, KeyError):
             basemap = "dark"
         _BASEMAP_STYLES = {
             "light": _LIGHT_BG,
