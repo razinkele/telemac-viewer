@@ -19,7 +19,7 @@ from analysis import (
     compute_discharge,
     compute_particle_paths, generate_seed_grid, distribute_seeds_along_line,
     export_timeseries_csv, export_crosssection_csv, export_all_variables_csv,
-    find_cas_files, detect_module,
+    find_cas_files, detect_module_from_path,
     compute_flood_envelope, compute_flood_arrival, compute_flood_duration,
     read_cli_file, polygon_zonal_stats,
 )
@@ -479,13 +479,13 @@ class TestSimUtilities:
         assert "case2.cas" in result
 
     def test_detect_telemac2d(self):
-        assert detect_module("/examples/telemac2d/foo.cas") == "telemac2d"
+        assert detect_module_from_path("/examples/telemac2d/foo.cas") == "telemac2d"
 
     def test_detect_telemac3d(self):
-        assert detect_module("/examples/telemac3d/foo.cas") == "telemac3d"
+        assert detect_module_from_path("/examples/telemac3d/foo.cas") == "telemac3d"
 
     def test_detect_fallback(self):
-        assert detect_module("/some/path/foo.cas") == "telemac2d"
+        assert detect_module_from_path("/some/path/foo.cas") == "telemac2d"
 
 
 # ---------------------------------------------------------------------------

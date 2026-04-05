@@ -2,7 +2,7 @@
 from __future__ import annotations
 import pytest
 from telemac_defaults import (
-    suggest_palette, is_bipolar, detect_module, find_velocity_pair,
+    suggest_palette, is_bipolar, detect_module_from_vars, find_velocity_pair,
 )
 
 
@@ -47,21 +47,21 @@ class TestIsBipolar:
         assert is_bipolar("VELOCITY U") is False
 
 
-class TestDetectModule:
+class TestDetectModuleFromVars:
     def test_tomawac(self):
-        assert detect_module(["HM0", "DMOY", "WATER DEPTH"]) == "TOMAWAC"
+        assert detect_module_from_vars(["HM0", "DMOY", "WATER DEPTH"]) == "TOMAWAC"
 
     def test_gaia(self):
-        assert detect_module(["EVOLUTION", "TOB", "WATER DEPTH"]) == "GAIA"
+        assert detect_module_from_vars(["EVOLUTION", "TOB", "WATER DEPTH"]) == "GAIA"
 
     def test_artemis(self):
-        assert detect_module(["PHAS", "QB"]) == "ARTEMIS"
+        assert detect_module_from_vars(["PHAS", "QB"]) == "ARTEMIS"
 
     def test_default_telemac2d(self):
-        assert detect_module(["WATER DEPTH", "VELOCITY U", "VELOCITY V"]) == "TELEMAC-2D"
+        assert detect_module_from_vars(["WATER DEPTH", "VELOCITY U", "VELOCITY V"]) == "TELEMAC-2D"
 
     def test_empty_list(self):
-        assert detect_module([]) == "TELEMAC-2D"
+        assert detect_module_from_vars([]) == "TELEMAC-2D"
 
 
 class TestFindVelocityPair:

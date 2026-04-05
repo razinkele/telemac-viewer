@@ -40,8 +40,10 @@ from layers import (
     build_extrema_markers,
     build_measurement_layer,
     build_boundary_layer,
+    _COORD_METER_OFFSETS,
 )
 import asyncio
+import glob
 import math
 import shlex
 import shutil
@@ -63,7 +65,7 @@ from analysis import (
     export_crosssection_csv,
     compute_mesh_quality,
     find_cas_files,
-    detect_module,
+    detect_module_from_path,
     vertical_profile_at_point,
     compute_difference,
     compute_temporal_stats,
@@ -86,7 +88,7 @@ from analysis import (
 )
 from telemac_defaults import (
     suggest_palette, is_bipolar,
-    detect_module as detect_module_vars, find_velocity_pair,
+    detect_module_from_vars, find_velocity_pair,
 )
 from validation import (
     parse_observation_csv, compute_rmse, compute_nse,
@@ -1233,7 +1235,6 @@ def server(input, output, session):
         uploaded = input.upload()
         if uploaded and use_upload.get():
             return None
-        import glob
         path = EXAMPLES.get(input.example(), "")
         cli_files = glob.glob(_os.path.join(_os.path.dirname(path), "*.cli"))
         return read_cli_file(cli_files[0]) if cli_files else None
@@ -1946,7 +1947,6 @@ def server(input, output, session):
         uploaded = input.upload()
         if uploaded and use_upload.get():
             return None
-        import glob
         path = EXAMPLES.get(input.example(), "")
         liq_files = glob.glob(_os.path.join(_os.path.dirname(path), "*.liq"))
         return parse_liq_file(liq_files[0]) if liq_files else None
@@ -2321,7 +2321,7 @@ def server(input, output, session):
         precision = "Double" if getattr(tf, 'float_type', 'f') == 'd' else "Single"
         nplan = getattr(tf, 'nplan', 0)
         dim = "3D" if nplan > 1 else "2D"
-        module = "TELEMAC-3D" if nplan > 1 else detect_module_vars(tf.varnames)
+        module = "TELEMAC-3D" if nplan > 1 else detect_module_from_vars(tf.varnames)
         date_info = ""
         if hasattr(tf, 'datetime') and tf.datetime is not None:
             dt_val = tf.datetime
@@ -2510,7 +2510,7 @@ def server(input, output, session):
             ui.notification_show("No .cas file selected", type="warning", duration=3)
             return
         cas_path = cas_files[cas_name]
-        module = detect_module(cas_path)
+        module = detect_module_from_path(cas_path)
         ncores = input.ncores() if input.ncores() is not None else 4
         cas_dir = _os.path.dirname(cas_path)
 
@@ -2833,8 +2833,6 @@ def server(input, output, session):
     def import_log():
         return import_log_text.get()
 
-    _IMPORT_METER_OFFSETS = 2
-
     def _build_import_preview_layers(model, x_off, y_off):
         """Build deck.gl preview layers from parsed HecRasModel."""
         layers = []
@@ -2851,7 +2849,7 @@ def server(input, output, session):
                 widthMinPixels=2,
                 widthMaxPixels=6,
                 pickable=False,
-                coordinateSystem=_IMPORT_METER_OFFSETS,
+                coordinateSystem=_COORD_METER_OFFSETS,
                 coordinateOrigin=[0, 0],
             ))
 
@@ -2872,7 +2870,7 @@ def server(input, output, session):
                     widthMinPixels=1,
                     widthMaxPixels=3,
                     pickable=False,
-                    coordinateSystem=_IMPORT_METER_OFFSETS,
+                    coordinateSystem=_COORD_METER_OFFSETS,
                     coordinateOrigin=[0, 0],
                 ))
 
@@ -2889,7 +2887,7 @@ def server(input, output, session):
                     widthMinPixels=2,
                     widthMaxPixels=5,
                     pickable=False,
-                    coordinateSystem=_IMPORT_METER_OFFSETS,
+                    coordinateSystem=_COORD_METER_OFFSETS,
                     coordinateOrigin=[0, 0],
                 ))
 
@@ -2906,7 +2904,7 @@ def server(input, output, session):
                 radiusMinPixels=1,
                 radiusMaxPixels=4,
                 pickable=False,
-                coordinateSystem=_IMPORT_METER_OFFSETS,
+                coordinateSystem=_COORD_METER_OFFSETS,
                 coordinateOrigin=[0, 0],
             ))
 

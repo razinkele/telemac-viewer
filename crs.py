@@ -62,17 +62,14 @@ _NUMZONE_KEYWORDS = re.compile(
 
 def _geosyst_to_epsg(geosyst: int, numzone: int) -> int | None:
     """Map TELEMAC GEOGRAPHIC SYSTEM code to EPSG."""
-    if geosyst == 1:
-        return 4326
-    if geosyst == 2:
-        return 32600 + numzone  # UTM North
-    if geosyst == 3:
-        return 32700 + numzone  # UTM South
-    if geosyst == 4:
-        return _LAMBERT_ZONES.get(numzone)
-    if geosyst == 5:
-        return 3395
-    return None
+    _GEOSYST_MAP: dict[int, int | None] = {
+        1: 4326,
+        2: 32600 + numzone,  # UTM North
+        3: 32700 + numzone,  # UTM South
+        4: _LAMBERT_ZONES.get(numzone),
+        5: 3395,
+    }
+    return _GEOSYST_MAP.get(geosyst)
 
 
 def detect_crs_from_cas(cas_path: str) -> CRS | None:

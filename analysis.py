@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import ast
+import glob
 import operator
 import re
 import numpy as np
@@ -954,13 +955,12 @@ def compute_difference(tf: TelemacFileProtocol, varname: str, tidx: int, ref_tid
 
 def find_cas_files(example_path: str) -> dict[str, str]:
     """Find .cas steering files in the same directory as an example .slf file."""
-    import glob
     directory = os.path.dirname(example_path)
     cas_files = sorted(glob.glob(os.path.join(directory, "*.cas")))
     return {os.path.basename(f): f for f in cas_files}
 
 
-def detect_module(cas_path: str) -> str:
+def detect_module_from_path(cas_path: str) -> str:
     """Detect which TELEMAC module a .cas file belongs to based on directory."""
     parts = cas_path.replace("\\", "/").split("/")
     for i, p in enumerate(parts):

@@ -63,7 +63,7 @@ def is_bipolar(varname: str) -> bool:
     return any(bp.upper() in upper for bp in BIPOLAR_VARIABLES)
 
 
-def detect_module(varnames: list[str]) -> str:
+def detect_module_from_vars(varnames: list[str]) -> str:
     """Detect TELEMAC module from variable names."""
     joined = " ".join(v.strip().upper() for v in varnames)
     for module, signatures in MODULE_SIGNATURES.items():
