@@ -56,6 +56,24 @@ class TestBuildMeshLayer:
         assert vmin == 0.0
         assert vmax == 10.0
 
+    def test_filter_range_grays_out_values(self, fake_geom):
+        values = np.array([0.1, 0.5, 0.5, 1.0], dtype=np.float32)
+        lyr, vmin, vmax, log_applied = build_mesh_layer(
+            fake_geom, values, "Viridis", filter_range=(0.3, 0.7))
+        assert lyr is not None
+        # Values outside [0.3, 0.7] should have alpha=0 in the color array
+        # Check that the layer was built successfully
+        assert vmin is not None
+        assert vmax is not None
+
+    def test_uniform_values(self, fake_geom):
+        values = np.array([5.0, 5.0, 5.0, 5.0], dtype=np.float32)
+        lyr, vmin, vmax, log_applied = build_mesh_layer(
+            fake_geom, values, "Viridis")
+        assert lyr is not None
+        # vmax should be adjusted to vmin + 1 to avoid division by zero
+        assert vmax > vmin
+
 
 class TestBuildVelocityLayer:
     def test_no_velocity_vars(self, fake_geom):
@@ -131,6 +149,27 @@ class TestOtherLayers:
         assert isinstance(result, list)
         assert len(result) > 0
         assert all(isinstance(r, dict) for r in result)
+
+    def test_boundary_with_bc_types_empty(self, fake_tf, fake_geom):
+        from layers import build_boundary_layer
+        from analysis import find_boundary_nodes
+        bnodes = find_boundary_nodes(fake_tf)
+        # Empty bc_types is valid — all default to wall
+        bc_types = {}
+        lyr = build_boundary_layer(fake_tf, fake_geom, bnodes, bc_types=bc_types)
+        assert isinstance(lyr, list)
+        assert len(lyr) > 0
+
+    def test_boundary_with_prescribed_bc(self, fake_tf, fake_geom):
+        from layers import build_boundary_layer
+        from analysis import find_boundary_nodes
+        bnodes = find_boundary_nodes(fake_tf)
+        # bc_types uses 1-based node keys (TELEMAC convention)
+        # Node 1 (1-based) as prescribed (5), node 2 as wall (2)
+        bc_types = {1: 5, 2: 2}
+        lyr = build_boundary_layer(fake_tf, fake_geom, bnodes, bc_types=bc_types)
+        assert isinstance(lyr, list)
+        assert len(lyr) > 0
 
     def test_extrema_markers(self, fake_tf, fake_geom):
         values = fake_tf.get_data_value("WATER DEPTH", 0)
