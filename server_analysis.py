@@ -40,7 +40,6 @@ from validation import (
     parse_observation_csv,
     compute_rmse,
     compute_nse,
-    compute_volume_timeseries as _cv_vol,
     parse_liq_file,
 )
 from data_manip.extraction.telemac_file import TelemacFile

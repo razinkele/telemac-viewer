@@ -1,5 +1,4 @@
 # app.py — TELEMAC Viewer v3
-import asyncio
 import logging
 import threading
 
@@ -1008,6 +1007,10 @@ def server(input, output, session):
     # -- Simulation launcher --
     from server_simulation import register_simulation_handlers
     register_simulation_handlers(input, output, session)
+
+    # -- Playback controls, keyboard shortcuts, auto-advance --
+    from server_playback import register_playback_handlers
+    register_playback_handlers(input, output, session, playing, tel_file, current_var)
 
     # -- Map update helpers --
 
