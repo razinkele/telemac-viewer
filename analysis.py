@@ -566,7 +566,8 @@ def compute_particle_paths(tf: Any, seed_points: list[list[float]], x_off: float
     npoin = tf.npoin2
     try:
         tri = tf.tri
-    except Exception:
+    except AttributeError:
+        _logger.info("TelemacFile has no .tri attribute; building from ikle2")
         from matplotlib.tri import Triangulation
         tri = Triangulation(x_mesh[:npoin], y_mesh[:npoin], tf.ikle2)
     finder = tri.get_trifinder()
