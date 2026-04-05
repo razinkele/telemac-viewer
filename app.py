@@ -1426,6 +1426,189 @@ def server(input, output, session):
             style="height:250px; overflow:hidden; background: rgba(15, 25, 35, 0.85);",
         )
 
+    def _chart_timeseries(tf, var, tidx):
+        pts = clicked_points.get()
+        if not pts:
+            return go.Figure()
+        fig = go.Figure()
+        for i, pt in enumerate(pts):
+            times, values = time_series_at_point(tf, var, pt[0], pt[1])
+            fig.add_trace(go.Scatter(
+                x=times, y=values, mode="lines",
+                name=f"Pt {i+1} ({pt[0]:.0f}, {pt[1]:.0f})",
+            ))
+        if tidx < len(tf.times):
+            fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
+        # Overlay observation data if available
+        obs = obs_data.get()
+        if obs is not None:
+            obs_times, obs_values, obs_varname = obs
+            fig.add_trace(go.Scatter(
+                x=obs_times, y=obs_values, mode="lines",
+                name=f"Obs: {obs_varname}",
+                line=dict(color="red", dash="dash"),
+            ))
+            # Compare with the last clicked point's model trace
+            if pts:
+                last_pt = pts[-1]
+                model_times, model_values = time_series_at_point(tf, var, last_pt[0], last_pt[1])
+                model_interp = np.interp(obs_times, model_times, model_values)
+                rmse = compute_rmse(model_interp, obs_values)
+                nse = compute_nse(model_interp, obs_values)
+                fig.add_annotation(
+                    text=f"RMSE={rmse:.4f}  NSE={nse:.4f}",
+                    xref="paper", yref="paper",
+                    x=0.02, y=0.98,
+                    showarrow=False,
+                    font=dict(size=11, color="red"),
+                    bgcolor="rgba(255,255,255,0.8)",
+                )
+        fig.update_layout(
+            xaxis_title="Time (s)", yaxis_title=var,
+            margin=dict(l=50, r=20, t=10, b=40), height=220,
+        )
+        return fig
+
+    def _chart_crosssection(tf, var, tidx):
+        xsec_pts = cross_section_points.get()
+        if xsec_pts is None:
+            return go.Figure()
+        abscissa, values = cross_section_profile(tf, var, tidx, xsec_pts)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=abscissa, y=values, mode="lines", name=var))
+        fig.update_layout(
+            xaxis_title="Distance (m)", yaxis_title=var,
+            margin=dict(l=50, r=20, t=10, b=40), height=220,
+        )
+        return fig
+
+    def _chart_vertprofile(tf, var, tidx):
+        pts = clicked_points.get()
+        if not pts:
+            return go.Figure()
+        fig = go.Figure()
+        elev_label = "Elevation (m)"
+        for i, pt in enumerate(pts):
+            elevations, values, elev_label = vertical_profile_at_point(tf, var, tidx, pt[0], pt[1])
+            if len(elevations) > 0:
+                fig.add_trace(go.Scatter(
+                    x=values, y=elevations, mode="lines+markers",
+                    name=f"Pt {i+1} ({pt[0]:.0f}, {pt[1]:.0f})",
+                ))
+        fig.update_layout(
+            xaxis_title=var, yaxis_title=elev_label,
+            margin=dict(l=50, r=20, t=10, b=40), height=220,
+        )
+        return fig
+
+    def _chart_histogram(tf, var):
+        vals = effective_values()
+        npoin = tf.npoin2
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(x=vals[:npoin], nbinsx=50, name=var))
+        fig.update_layout(
+            xaxis_title=var, yaxis_title="Count",
+            margin=dict(l=50, r=20, t=10, b=40), height=220,
+        )
+        return fig
+
+    def _chart_multivar(tf, tidx):
+        pts = clicked_points.get()
+        if not pts:
+            return go.Figure()
+        px, py = pts[-1]
+        fig = go.Figure()
+        for vname in tf.varnames:
+            times, values = time_series_at_point(tf, vname, px, py)
+            fig.add_trace(go.Scatter(
+                x=times, y=values, mode="lines", name=vname,
+            ))
+        if tidx < len(tf.times):
+            fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
+        fig.update_layout(
+            xaxis_title="Time (s)", yaxis_title="Value",
+            margin=dict(l=50, r=20, t=10, b=40), height=220,
+        )
+        return fig
+
+    def _chart_rating(tf):
+        xsec = cross_section_points.get()
+        if xsec is None:
+            return go.Figure()
+        # Compute discharge and avg water level at cross-section for each timestep
+        h_values = []
+        q_values = []
+        skipped_h = 0
+        for t in range(len(tf.times)):
+            result = compute_discharge(tf, t, xsec)
+            if result["total_q"] is not None:
+                # Average water level along the cross-section
+                h_val = None
+                try:
+                    _, wl_vals = cross_section_profile(tf, "FREE SURFACE", t, xsec)
+                    h_val = float(np.mean(wl_vals))
+                except (KeyError, ValueError, IndexError):
+                    try:
+                        _, wd_vals = cross_section_profile(tf, "WATER DEPTH", t, xsec)
+                        h_val = float(np.mean(wd_vals))
+                    except (KeyError, ValueError, IndexError):
+                        skipped_h += 1
+                if h_val is not None:
+                    h_values.append(h_val)
+                    q_values.append(result["total_q"])
+        if skipped_h > 0:
+            _logger.warning("Rating curve: %d timesteps skipped (no water level data)", skipped_h)
+        fig = go.Figure()
+        if h_values and q_values:
+            fig.add_trace(go.Scatter(
+                x=h_values, y=q_values, mode="lines+markers",
+                name="h-Q", marker=dict(size=4),
+            ))
+        fig.update_layout(
+            xaxis_title="Water level (m)", yaxis_title="Discharge (m\u00b3/s)",
+            margin=dict(l=50, r=20, t=10, b=40), height=220,
+        )
+        return fig
+
+    def _chart_volume():
+        vc = volume_cache.get()
+        if vc is None:
+            return go.Figure()
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=vc["times"], y=vc["volumes"], mode="lines", name="Volume"))
+        fig.update_layout(
+            xaxis_title="Time (s)", yaxis_title="Volume (m³)",
+            margin=dict(l=50, r=20, t=10, b=40), height=220,
+        )
+        return fig
+
+    def _chart_boundary_ts():
+        data = liq_data()
+        if data is None:
+            return go.Figure()
+        fig = go.Figure()
+        for name, entry in data.items():
+            label = f"{name} ({entry['unit']})" if entry.get("unit") else name
+            fig.add_trace(go.Scatter(
+                x=entry["times"], y=entry["values"], mode="lines", name=label))
+        fig.update_layout(
+            xaxis_title="Time (s)", yaxis_title="Value",
+            margin=dict(l=50, r=20, t=10, b=40), height=220,
+        )
+        return fig
+
+    _CHART_DISPATCH = {
+        "timeseries":  lambda tf, var, tidx: _chart_timeseries(tf, var, tidx),
+        "crosssection": lambda tf, var, tidx: _chart_crosssection(tf, var, tidx),
+        "vertprofile": lambda tf, var, tidx: _chart_vertprofile(tf, var, tidx),
+        "histogram":   lambda tf, var, tidx: _chart_histogram(tf, var),
+        "multivar":    lambda tf, var, tidx: _chart_multivar(tf, tidx),
+        "rating":      lambda tf, var, tidx: _chart_rating(tf),
+        "volume":      lambda tf, var, tidx: _chart_volume(),
+        "boundary_ts": lambda tf, var, tidx: _chart_boundary_ts(),
+    }
+
     @output
     @render_widget
     def analysis_chart():
@@ -1434,180 +1617,10 @@ def server(input, output, session):
         var = current_var()
         tidx = current_tidx()
 
-        if mode == "timeseries":
-            pts = clicked_points.get()
-            if not pts:
-                return go.Figure()
-            fig = go.Figure()
-            for i, pt in enumerate(pts):
-                times, values = time_series_at_point(tf, var, pt[0], pt[1])
-                fig.add_trace(go.Scatter(
-                    x=times, y=values, mode="lines",
-                    name=f"Pt {i+1} ({pt[0]:.0f}, {pt[1]:.0f})",
-                ))
-            if tidx < len(tf.times):
-                fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
-            # Overlay observation data if available
-            obs = obs_data.get()
-            if obs is not None:
-                obs_times, obs_values, obs_varname = obs
-                fig.add_trace(go.Scatter(
-                    x=obs_times, y=obs_values, mode="lines",
-                    name=f"Obs: {obs_varname}",
-                    line=dict(color="red", dash="dash"),
-                ))
-                # Compare with the last clicked point's model trace
-                if pts:
-                    last_pt = pts[-1]
-                    model_times, model_values = time_series_at_point(tf, var, last_pt[0], last_pt[1])
-                    model_interp = np.interp(obs_times, model_times, model_values)
-                    rmse = compute_rmse(model_interp, obs_values)
-                    nse = compute_nse(model_interp, obs_values)
-                    fig.add_annotation(
-                        text=f"RMSE={rmse:.4f}  NSE={nse:.4f}",
-                        xref="paper", yref="paper",
-                        x=0.02, y=0.98,
-                        showarrow=False,
-                        font=dict(size=11, color="red"),
-                        bgcolor="rgba(255,255,255,0.8)",
-                    )
-            fig.update_layout(
-                xaxis_title="Time (s)", yaxis_title=var,
-                margin=dict(l=50, r=20, t=10, b=40), height=220,
-            )
-            return fig
-
-        if mode == "crosssection":
-            xsec_pts = cross_section_points.get()
-            if xsec_pts is None:
-                return go.Figure()
-            abscissa, values = cross_section_profile(tf, var, tidx, xsec_pts)
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=abscissa, y=values, mode="lines", name=var))
-            fig.update_layout(
-                xaxis_title="Distance (m)", yaxis_title=var,
-                margin=dict(l=50, r=20, t=10, b=40), height=220,
-            )
-            return fig
-
-        if mode == "vertprofile":
-            pts = clicked_points.get()
-            if not pts:
-                return go.Figure()
-            fig = go.Figure()
-            elev_label = "Elevation (m)"
-            for i, pt in enumerate(pts):
-                elevations, values, elev_label = vertical_profile_at_point(tf, var, tidx, pt[0], pt[1])
-                if len(elevations) > 0:
-                    fig.add_trace(go.Scatter(
-                        x=values, y=elevations, mode="lines+markers",
-                        name=f"Pt {i+1} ({pt[0]:.0f}, {pt[1]:.0f})",
-                    ))
-            fig.update_layout(
-                xaxis_title=var, yaxis_title=elev_label,
-                margin=dict(l=50, r=20, t=10, b=40), height=220,
-            )
-            return fig
-
-        if mode == "histogram":
-            vals = effective_values()
-            npoin = tf.npoin2
-            fig = go.Figure()
-            fig.add_trace(go.Histogram(x=vals[:npoin], nbinsx=50, name=var))
-            fig.update_layout(
-                xaxis_title=var, yaxis_title="Count",
-                margin=dict(l=50, r=20, t=10, b=40), height=220,
-            )
-            return fig
-
-        if mode == "multivar":
-            pts = clicked_points.get()
-            if not pts:
-                return go.Figure()
-            px, py = pts[-1]
-            fig = go.Figure()
-            for vname in tf.varnames:
-                times, values = time_series_at_point(tf, vname, px, py)
-                fig.add_trace(go.Scatter(
-                    x=times, y=values, mode="lines", name=vname,
-                ))
-            if tidx < len(tf.times):
-                fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
-            fig.update_layout(
-                xaxis_title="Time (s)", yaxis_title="Value",
-                margin=dict(l=50, r=20, t=10, b=40), height=220,
-            )
-            return fig
-
-        if mode == "rating":
-            xsec = cross_section_points.get()
-            if xsec is None:
-                return go.Figure()
-            tf = tel_file()
-            # Compute discharge and avg water level at cross-section for each timestep
-            h_values = []
-            q_values = []
-            skipped_h = 0
-            for t in range(len(tf.times)):
-                result = compute_discharge(tf, t, xsec)
-                if result["total_q"] is not None:
-                    # Average water level along the cross-section
-                    h_val = None
-                    try:
-                        _, wl_vals = cross_section_profile(tf, "FREE SURFACE", t, xsec)
-                        h_val = float(np.mean(wl_vals))
-                    except (KeyError, ValueError, IndexError):
-                        try:
-                            _, wd_vals = cross_section_profile(tf, "WATER DEPTH", t, xsec)
-                            h_val = float(np.mean(wd_vals))
-                        except (KeyError, ValueError, IndexError):
-                            skipped_h += 1
-                    if h_val is not None:
-                        h_values.append(h_val)
-                        q_values.append(result["total_q"])
-            if skipped_h > 0:
-                _logger.warning("Rating curve: %d timesteps skipped (no water level data)", skipped_h)
-            fig = go.Figure()
-            if h_values and q_values:
-                fig.add_trace(go.Scatter(
-                    x=h_values, y=q_values, mode="lines+markers",
-                    name="h-Q", marker=dict(size=4),
-                ))
-            fig.update_layout(
-                xaxis_title="Water level (m)", yaxis_title="Discharge (m\u00b3/s)",
-                margin=dict(l=50, r=20, t=10, b=40), height=220,
-            )
-            return fig
-
-        if mode == "volume":
-            vc = volume_cache.get()
-            if vc is None:
-                return go.Figure()
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=vc["times"], y=vc["volumes"], mode="lines", name="Volume"))
-            fig.update_layout(
-                xaxis_title="Time (s)", yaxis_title="Volume (m³)",
-                margin=dict(l=50, r=20, t=10, b=40), height=220,
-            )
-            return fig
-
-        if mode == "boundary_ts":
-            data = liq_data()
-            if data is None:
-                return go.Figure()
-            fig = go.Figure()
-            for name, entry in data.items():
-                label = f"{name} ({entry['unit']})" if entry.get("unit") else name
-                fig.add_trace(go.Scatter(
-                    x=entry["times"], y=entry["values"], mode="lines", name=label))
-            fig.update_layout(
-                xaxis_title="Time (s)", yaxis_title="Value",
-                margin=dict(l=50, r=20, t=10, b=40), height=220,
-            )
-            return fig
-
-        return go.Figure()
+        handler = _CHART_DISPATCH.get(mode)
+        if handler is None:
+            return go.Figure()
+        return handler(tf, var, tidx)
 
     # -- Click handler (time series) --
 
