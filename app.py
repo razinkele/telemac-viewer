@@ -1202,8 +1202,13 @@ def server(input, output, session):
                 nplan = getattr(tf, 'nplan', 0)
                 if nplan > 1:
                     return extract_layer_2d(vals, tf.npoin2, int(layer))
-        except Exception:
-            pass
+        except (TypeError, AttributeError, KeyError):
+            pass  # Widget not rendered yet
+        except (ValueError, IndexError) as exc:
+            _logger.warning("Layer extraction failed for layer %s: %s", layer, exc)
+            ui.notification_show(
+                f"Could not extract layer {layer} — showing full data",
+                type="warning", duration=5)
         return vals
 
     # -- Topology-only reactive calcs (independent of timestep) --
