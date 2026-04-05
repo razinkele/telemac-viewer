@@ -400,6 +400,25 @@ def find_boundary_nodes(tf: TelemacFileProtocol) -> list[int]:
     return sorted(set(nodes_a.tolist() + nodes_b.tolist()))
 
 
+def compute_unique_edges(ikle: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Extract unique edges from triangle connectivity.
+
+    Returns (edge_keys, nodes_a, nodes_b) where nodes_a[i]-nodes_b[i]
+    form the i-th unique edge.
+    """
+    e0 = np.column_stack([ikle[:, 0], ikle[:, 1]])
+    e1 = np.column_stack([ikle[:, 1], ikle[:, 2]])
+    e2 = np.column_stack([ikle[:, 2], ikle[:, 0]])
+    all_edges = np.vstack([e0, e1, e2])
+    all_edges.sort(axis=1)
+    max_node = int(all_edges.max()) + 1
+    edge_keys = all_edges[:, 0].astype(np.int64) * max_node + all_edges[:, 1].astype(np.int64)
+    unique_keys, unique_idx = np.unique(edge_keys, return_index=True)
+    nodes_a = (unique_keys // max_node).astype(np.int32)
+    nodes_b = (unique_keys % max_node).astype(np.int32)
+    return unique_keys, nodes_a, nodes_b
+
+
 def find_boundary_edges(tf: TelemacFileProtocol) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Find boundary edges of the 2D mesh.
 
@@ -784,6 +803,62 @@ def find_extrema(tf: TelemacFileProtocol, values: np.ndarray) -> dict[str, tuple
     return {
         "min": (imin, float(x[imin]), float(y[imin]), float(v[imin])),
         "max": (imax, float(x[imax]), float(y[imax]), float(v[imax])),
+    }
+
+
+def compute_all_temporal_stats(
+    tf: TelemacFileProtocol, varname: str, threshold: float = 0.01
+) -> dict[str, np.ndarray]:
+    """Single-pass computation of all temporal statistics.
+
+    Returns dict with keys: max_values, min_values, mean_values,
+    envelope, arrival, duration.
+    """
+    ntimes = len(tf.times)
+    npoin = tf.npoin2
+    if ntimes == 0:
+        z = np.zeros(npoin, dtype=np.float32)
+        return {"max_values": z, "min_values": z, "mean_values": z,
+                "envelope": z, "arrival": np.full(npoin, np.nan, dtype=np.float32),
+                "duration": z}
+
+    first = tf.get_data_value(varname, 0)[:npoin]
+    running_min = first.copy()
+    running_max = first.copy()
+    running_sum = first.copy().astype(np.float64)
+    arrival = np.full(npoin, np.nan, dtype=np.float32)
+    wet_count = np.zeros(npoin, dtype=np.int32)
+
+    wet = first > threshold
+    arrival[wet] = float(tf.times[0])
+    wet_count[wet] += 1
+
+    for t in range(1, ntimes):
+        vals = tf.get_data_value(varname, t)[:npoin]
+        running_min = np.minimum(running_min, vals)
+        running_max = np.maximum(running_max, vals)
+        running_sum += vals.astype(np.float64)
+        wet = vals > threshold
+        first_wet = wet & np.isnan(arrival)
+        arrival[first_wet] = float(tf.times[t])
+        wet_count[wet] += 1
+
+    # Duration: use average dt
+    if ntimes > 1:
+        avg_dt = (tf.times[-1] - tf.times[0]) / (ntimes - 1)
+    else:
+        avg_dt = 1.0
+
+    peak = running_max.copy()
+    peak[peak < threshold] = 0.0
+
+    return {
+        "max_values": running_max,
+        "min_values": running_min,
+        "mean_values": (running_sum / ntimes).astype(np.float32),
+        "envelope": peak.astype(np.float32),
+        "arrival": arrival,
+        "duration": (wet_count.astype(np.float64) * avg_dt).astype(np.float32),
     }
 
 

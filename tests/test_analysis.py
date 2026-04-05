@@ -15,7 +15,7 @@ from analysis import (
     extract_layer_2d,
     nearest_node, find_boundary_nodes, find_extrema,
     vertical_profile_at_point, time_series_at_point, cross_section_profile,
-    compute_temporal_stats, compute_difference,
+    compute_temporal_stats, compute_all_temporal_stats, compute_difference,
     compute_discharge,
     compute_particle_paths, generate_seed_grid, distribute_seeds_along_line,
     export_timeseries_csv, export_crosssection_csv, export_all_variables_csv,
@@ -628,3 +628,30 @@ class TestExtractLayer2d:
         result = extract_layer_2d(data, npoin2=4, layer_k=0)
         result[0] = 999
         assert data[0] != 999  # original unchanged
+
+
+# ---------------------------------------------------------------------------
+# TestComputeAllTemporalStats
+# ---------------------------------------------------------------------------
+
+class TestComputeAllTemporalStats:
+    def test_returns_all_keys(self, fake_tf):
+        result = compute_all_temporal_stats(fake_tf, "WATER DEPTH")
+        assert "max_values" in result
+        assert "min_values" in result
+        assert "mean_values" in result
+        assert "envelope" in result
+        assert "arrival" in result
+        assert "duration" in result
+
+    def test_max_values_match_individual(self, fake_tf):
+        combined = compute_all_temporal_stats(fake_tf, "WATER DEPTH")
+        individual = compute_temporal_stats(fake_tf, "WATER DEPTH")
+        np.testing.assert_allclose(
+            combined["max_values"], individual["max"], rtol=1e-5)
+
+    def test_min_values_match_individual(self, fake_tf):
+        combined = compute_all_temporal_stats(fake_tf, "WATER DEPTH")
+        individual = compute_temporal_stats(fake_tf, "WATER DEPTH")
+        np.testing.assert_allclose(
+            combined["min_values"], individual["min"], rtol=1e-5)
