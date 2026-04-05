@@ -41,6 +41,15 @@ class TestCrsFromEpsg:
         with pytest.raises(Exception):
             crs_from_epsg(99999)
 
+    def test_crs_rejects_none_transformer(self):
+        with pytest.raises(ValueError, match="requires both"):
+            CRS(epsg=4326, name="WGS 84", transformer=None, inv_transformer=None)
+
+    def test_crs_is_frozen(self):
+        c = crs_from_epsg(4326)
+        with pytest.raises(AttributeError):
+            c.epsg = 9999
+
 
 class TestTransforms:
     def test_lks94_to_wgs84(self):

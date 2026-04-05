@@ -15,12 +15,16 @@ import logging
 _logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class CRS:
     epsg: int
     name: str
     transformer: Transformer      # native → WGS84
     inv_transformer: Transformer   # WGS84 → native
+
+    def __post_init__(self):
+        if self.transformer is None or self.inv_transformer is None:
+            raise ValueError(f"CRS(epsg={self.epsg}) requires both forward and inverse transformers")
 
 
 def crs_from_epsg(code: int) -> CRS:
