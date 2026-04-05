@@ -2,7 +2,7 @@
 from __future__ import annotations
 import h5py
 import numpy as np
-from telemac_tools.model import BoundaryCondition
+from telemac_tools.model import BCType, BoundaryCondition
 
 
 def parse_bc_timeseries(path: str) -> list[BoundaryCondition]:
@@ -25,7 +25,7 @@ def parse_bc_timeseries(path: str) -> list[BoundaryCondition]:
                 continue
             grp = bc_grp[name]
             ts = None
-            bc_type = "unknown"
+            bc_type = BCType.UNKNOWN
 
             if "Flow Hydrograph" in grp:
                 fh = grp["Flow Hydrograph"]
@@ -35,7 +35,7 @@ def parse_bc_timeseries(path: str) -> list[BoundaryCondition]:
                         "values": fh["Flow"][:],
                         "unit": "m3/s",
                     }
-                    bc_type = "flow"
+                    bc_type = BCType.FLOW
             elif "Stage Hydrograph" in grp:
                 sh = grp["Stage Hydrograph"]
                 if "Stage" in sh and "Time" in sh:
@@ -44,7 +44,7 @@ def parse_bc_timeseries(path: str) -> list[BoundaryCondition]:
                         "values": sh["Stage"][:],
                         "unit": "m",
                     }
-                    bc_type = "stage"
+                    bc_type = BCType.STAGE
 
             location = "upstream" if "upstream" in name.lower() else "downstream"
             bcs.append(BoundaryCondition(

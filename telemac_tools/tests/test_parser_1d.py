@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from telemac_tools.hecras.parser_1d import parse_hecras_1d
-from telemac_tools.model import HecRasModel, HecRasParseError
+from telemac_tools.model import BCType, HecRasModel, HecRasParseError
 
 
 class TestParseHecras1d:
@@ -48,8 +48,8 @@ class TestParseHecras1d:
     def test_boundary_conditions(self, hdf_1d):
         model = parse_hecras_1d(hdf_1d)
         assert len(model.boundaries) == 2
-        assert model.boundaries[0].bc_type == "flow"
-        assert model.boundaries[1].bc_type == "normal_depth"
+        assert model.boundaries[0].bc_type == BCType.FLOW
+        assert model.boundaries[1].bc_type == BCType.NORMAL_DEPTH
 
     def test_bc_line_coords(self, hdf_1d):
         model = parse_hecras_1d(hdf_1d)

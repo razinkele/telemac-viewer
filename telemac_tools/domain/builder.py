@@ -11,6 +11,7 @@ from telemac_tools.model import (
     BCSegment,
     BoundaryCondition,
     HecRasModel,
+    LIHBOR,
     TelemacDomain,
 )
 
@@ -147,7 +148,7 @@ def _buffer_alignment(alignment: np.ndarray, distance: float) -> np.ndarray:
 # BC segment helpers
 # ---------------------------------------------------------------------------
 
-def _bc_type_to_lihbor(bc: BoundaryCondition) -> tuple[int, float | None, float | None]:
+def _bc_type_to_lihbor(bc: BoundaryCondition) -> tuple[LIHBOR, float | None, float | None]:
     """Map HEC-RAS BC type to TELEMAC LIHBOR code.
 
     For v1 we do NOT import flow/stage time series, so:
@@ -159,15 +160,15 @@ def _bc_type_to_lihbor(bc: BoundaryCondition) -> tuple[int, float | None, float 
     loc = (bc.location or "").lower()
     if bt in ("flow", "hydrograph"):
         if loc == "downstream":
-            return 4, None, None          # free outflow
-        return 5, 0.1, None              # prescribed — nominal wet depth
+            return LIHBOR.FREE, None, None          # free outflow
+        return LIHBOR.PRESCRIBED, 0.1, None         # prescribed — nominal wet depth
     elif bt in ("stage", "known_ws"):
-        return 5, 0.1, None              # prescribed — nominal wet depth
+        return LIHBOR.PRESCRIBED, 0.1, None         # prescribed — nominal wet depth
     elif bt in ("normal_depth", "rating_curve"):
-        return 4, None, None             # free / Neumann
+        return LIHBOR.FREE, None, None              # free / Neumann
     import warnings
     warnings.warn(f"Unknown BC type '{bc.bc_type}' — defaulting to wall (LIHBOR=2)")
-    return 2, None, None                 # wall
+    return LIHBOR.WALL, None, None                  # wall
 
 
 # ---------------------------------------------------------------------------

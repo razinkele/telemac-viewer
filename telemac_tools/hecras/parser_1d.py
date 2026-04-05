@@ -5,6 +5,7 @@ import h5py
 import numpy as np
 
 from telemac_tools.model import (
+    BCType,
     BoundaryCondition,
     CrossSection,
     HecRasModel,
@@ -238,7 +239,11 @@ def parse_hecras_1d(path: str) -> HecRasModel:
 
             for i, row in enumerate(bc_attrs):
                 location = _decode(row["Name"])
-                bc_type = _decode(row["Type"])
+                decoded_type = _decode(row["Type"])
+                try:
+                    bc_type = BCType(decoded_type)
+                except ValueError:
+                    bc_type = BCType.UNKNOWN
                 p_off, p_cnt = int(bc_poly_info[i, 0]), int(bc_poly_info[i, 1])
                 line_coords = bc_poly_pts[p_off : p_off + p_cnt].copy()
 

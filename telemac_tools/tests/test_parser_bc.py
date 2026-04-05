@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from telemac_tools.hecras.parser_bc import parse_bc_timeseries
+from telemac_tools.model import BCType
 
 
 class TestParseBcTimeseries:
@@ -18,13 +19,13 @@ class TestParseBcTimeseries:
         assert "time" in upstream.timeseries
         assert "values" in upstream.timeseries
         assert len(upstream.timeseries["time"]) == 5
-        assert upstream.bc_type == "flow"
+        assert upstream.bc_type == BCType.FLOW
 
     def test_stage_hydrograph(self, hdf_unsteady):
         bcs = parse_bc_timeseries(hdf_unsteady)
         downstream = [bc for bc in bcs if bc.location == "downstream"][0]
         assert downstream.timeseries is not None
-        assert downstream.bc_type == "stage"
+        assert downstream.bc_type == BCType.STAGE
 
     def test_no_unsteady_returns_empty(self, tmp_path):
         import h5py
