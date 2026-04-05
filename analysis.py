@@ -128,7 +128,9 @@ def compute_discharge(tf: Any, tidx: int, polyline_m: list[list[float]]) -> dict
             u = float(tf.get_data_on_points(pair[0], tidx, [[mx, my]])[0])
             v = float(tf.get_data_on_points(pair[1], tidx, [[mx, my]])[0])
             h = float(tf.get_data_on_points("WATER DEPTH", tidx, [[mx, my]])[0])
-        except Exception:
+        except (ValueError, IndexError, KeyError) as exc:
+            if skipped == 0:
+                _logger.warning("Discharge segment skipped: %s", exc)
             skipped += 1
             continue
 
@@ -759,7 +761,8 @@ def vertical_profile_at_point(tf: Any, varname: str, tidx: int, x_m: float, y_m:
         z_name = tf.get_z_name()
         z_3d = tf.get_data_value(z_name, tidx)
         elevations = np.array([float(z_3d[nearest_2d + k * npoin2]) for k in range(nplan)])
-    except Exception:
+    except (KeyError, IndexError, AttributeError) as exc:
+        _logger.warning("Elevation data unavailable for vertical profile: %s", exc)
         elevations = np.arange(nplan, dtype=np.float64)
         elevation_label = "Layer index (elevation unavailable)"
 
