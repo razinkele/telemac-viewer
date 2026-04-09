@@ -1,6 +1,8 @@
-# app.py — TELEMAC Viewer v3
+# app.py — TELEMAC Viewer
 import logging
 import threading
+
+from __version__ import __version__
 
 import numpy as np
 from shiny import App, reactive, render, ui
@@ -659,7 +661,7 @@ app_ui = ui.page_navbar(
     # ── Sidebar ────────────────────────────────────────────────────────
     sidebar=ui.sidebar(
         # ── Tier 1: Always visible ──
-        ui.h6("TELEMAC Viewer", style="margin:0 0 8px; color: var(--coastal-text);"),
+        ui.h6(f"TELEMAC Viewer v{__version__}", style="margin:0 0 8px; color: var(--coastal-text);"),
         ui.input_select("example", "Example case", choices=EXAMPLE_CHOICES),
         ui.input_file("upload", "Or upload .slf file", accept=[".slf"]),
         ui.output_ui("clear_upload_ui"),
@@ -755,7 +757,7 @@ app_ui = ui.page_navbar(
         ),
         width="280px",
     ),
-    title="TELEMAC Viewer",
+    title=f"TELEMAC Viewer v{__version__}",
     fillable=True,
     header=ui.TagList(
         ui.tags.link(
