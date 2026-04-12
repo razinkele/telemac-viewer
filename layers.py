@@ -484,3 +484,40 @@ def build_boundary_layer(tf: TelemacFileProtocol, geom: MeshGeometry, boundary_n
         ))
 
     return layers
+
+
+def build_polygon_layer(polygon_coords: list[list[float]],
+                        origin: list[float] | None = None) -> dict:
+    """Build a GeoJsonLayer outlining the user-drawn polygon.
+
+    polygon_coords: list of [x_m, y_m] points in mesh-offset coordinates.
+    """
+    coords = list(polygon_coords)
+    if coords and coords[0] != coords[-1]:
+        coords.append(coords[0])
+
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [coords],
+            },
+            "properties": {},
+        }],
+    }
+
+    return layer(
+        "GeoJsonLayer",
+        id="polygon-overlay",
+        data=geojson,
+        filled=True,
+        getFillColor=[255, 200, 0, 40],
+        getLineColor=[255, 160, 0, 200],
+        getLineWidth=2,
+        lineWidthMinPixels=2,
+        pickable=False,
+        coordinateSystem=_COORD_METER_OFFSETS,
+        coordinateOrigin=origin or [0, 0],
+    )

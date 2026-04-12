@@ -308,12 +308,18 @@ def register_import_handlers(input, output, session):
                 cas_overrides["EQUATIONS"] = "'SAINT-VENANT FE'"
                 cas_overrides["FINITE VOLUME SCHEME"] = None
 
+            channel_refine = float(input.channel_refine()) if input.channel_refine() else 10.0
+            fp_refine = float(input.floodplain_refine()) if input.floodplain_refine() else None
+            channel_spacing = max(1.0, channel_refine ** 0.5)
+
             hecras_to_telemac(
                 hecras_path=hdf_path,
                 dem_path=dem_path,
                 output_dir=out_dir,
                 name=hdf_name,
                 floodplain_width=float(input.fp_width()),
+                channel_spacing=channel_spacing,
+                floodplain_area=fp_refine,
                 backend=input.import_mesher(),
                 cas_overrides=cas_overrides if cas_overrides else None,
             )
@@ -340,3 +346,4 @@ def register_import_handlers(input, output, session):
             ui.notification_show(f"Import conversion failed: {e}", type="error", duration=8)
             shutil.rmtree(out_dir, ignore_errors=True)
             _import_out_dir.set(None)
+            import_output_dir.set(None)

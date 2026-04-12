@@ -8,6 +8,8 @@ def hecras_to_telemac(
     output_dir: str = ".",
     name: str = "project",
     floodplain_width: float = 500.0,
+    channel_spacing: float = 10.0,
+    floodplain_area: float | None = None,
     backend: str = "triangle",
     duration: float = 3600.0,
     cas_overrides: dict | None = None,
@@ -15,6 +17,11 @@ def hecras_to_telemac(
     """Convert HEC-RAS geometry to TELEMAC simulation files.
 
     Produces {name}.slf, {name}.cli, {name}.cas in output_dir.
+
+    Parameters
+    ----------
+    channel_spacing : point spacing along channel constraint lines (meters).
+    floodplain_area : max triangle area in floodplain (m²). None = auto.
     """
     from telemac_tools.hecras import parse_hecras
     from telemac_tools.domain import build_domain_1d, build_domain_2d
@@ -31,8 +38,9 @@ def hecras_to_telemac(
     elif model.rivers:
         if dem_path is None:
             raise ValueError("DEM path required for 1D→2D conversion")
-        domain = build_domain_1d(model, dem_path, floodplain_width=floodplain_width)
-        mesh = generate_mesh(domain, backend=backend)
+        domain = build_domain_1d(model, dem_path, floodplain_width=floodplain_width,
+                                channel_spacing=channel_spacing)
+        mesh = generate_mesh(domain, backend=backend, max_area=floodplain_area)
         # Extract boundary nodes for BC assignment
         from telemac_tools.telemac.writer_cli import _find_boundary_nodes
         import numpy as np

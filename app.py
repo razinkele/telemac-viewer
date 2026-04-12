@@ -42,12 +42,14 @@ from layers import (
     build_extrema_markers,
     build_measurement_layer,
     build_boundary_layer,
+    build_polygon_layer,
 )
 from analysis import (
     find_extrema,
     compute_difference,
     compute_slope,
     compute_courant_number,
+    get_var_values,
 )
 from telemac_defaults import is_bipolar
 
@@ -514,7 +516,6 @@ app_ui = ui.page_navbar(
             ui.card(
                 map_widget.ui(width="100%", height="calc(100vh - 200px)"),
                 ui.output_ui("analysis_panel_ui"),
-                ui.output_ui("coord_readout_ui"),
                 full_screen=True,
                 class_="ocean-card",
             ),
@@ -884,6 +885,7 @@ def server(input, output, session):
     recording = reactive.value(False)  # animation recording state
     polygon_mode = reactive.value(False)  # polygon drawing mode
     polygon_stats_data = reactive.value(None)  # polygon zonal stats result
+    polygon_geom = reactive.value(None)  # list of [x,y] polygon coords or None
     volume_cache = reactive.value(None)  # {"times": ndarray, "volumes": ndarray}
     expr_result = reactive.value(None)   # numpy array or None (custom expression result)
     integral_result = reactive.value(None)  # mesh integral result dict or None
@@ -938,7 +940,7 @@ def server(input, output, session):
         particle_paths, cross_section_points, clicked_points,
         temporal_stats_cache, integral_result, expr_result,
         measure_points, measure_mode, analysis_mode,
-        obs_data, compare_tf, volume_cache, polygon_stats_data,
+        obs_data, compare_tf, volume_cache, polygon_stats_data, polygon_geom,
         use_upload, is_3d_mode,
     )
     tel_file = _core["tel_file"]
@@ -1000,7 +1002,7 @@ def server(input, output, session):
         tel_file, mesh_geom, current_var, current_tidx, current_values, effective_values,
         analysis_mode, clicked_points, cross_section_points, particle_paths,
         temporal_stats_cache, measure_points, measure_mode, obs_data, compare_tf,
-        recording, polygon_mode, polygon_stats_data, volume_cache,
+        recording, polygon_mode, polygon_stats_data, polygon_geom, volume_cache,
         expr_result, integral_result,
         current_crs, use_upload, is_3d_mode,
         _run_with_lock,
@@ -1008,7 +1010,7 @@ def server(input, output, session):
 
     # -- Simulation launcher --
     from server_simulation import register_simulation_handlers
-    register_simulation_handlers(input, output, session)
+    register_simulation_handlers(input, output, session, use_upload)
 
     # -- Playback controls, keyboard shortcuts, auto-advance --
     from server_playback import register_playback_handlers
@@ -1085,7 +1087,13 @@ def server(input, output, session):
 
         # Boundary edges (color-coded by hydrodynamic type)
         if input.boundary_nodes():
-            layers.extend(build_boundary_layer(tf, geom, boundary_nodes_cached(), bc_types=cli_data(), origin=origin))
+            bc = cli_data()
+            layers.extend(build_boundary_layer(tf, geom, boundary_nodes_cached(), bc_types=bc, origin=origin))
+            if bc is None:
+                ui.notification_show(
+                    "No .cli file found — boundary types shown as Wall (inferred).",
+                    type="message", duration=4, id="cli_warn",
+                )
 
         # Min/max location markers
         if input.show_extrema():
@@ -1110,9 +1118,11 @@ def server(input, output, session):
         compare_vals = None
         if compare.startswith("(2) ") and compare_tf.get() is not None:
             real_name = compare[4:]
-            compare_vals = compare_tf.get().get_data_value(real_name, tidx)
-        elif compare and compare in tf.varnames:
-            compare_vals = tf.get_data_value(compare, tidx)
+            tf2 = compare_tf.get()
+            safe_tidx = min(tidx, len(tf2.times) - 1)
+            compare_vals = get_var_values(tf2, real_name, safe_tidx)
+        elif compare:
+            compare_vals = get_var_values(tf, compare, tidx)
         if compare_vals is not None:
             clyr2 = build_contour_layer_fn(tf, compare_vals, geom, n_contours=8,
                                            layer_id="compare-contours",
@@ -1145,6 +1155,12 @@ def server(input, output, session):
         if mpts:
             mpts_centered = [[p[0] - geom.x_off, p[1] - geom.y_off] for p in mpts]
             layers.extend(build_measurement_layer(mpts_centered, origin=origin))
+
+        # Polygon outline
+        pgon = polygon_geom.get()
+        if pgon is not None:
+            pgon_centered = [[p[0] - geom.x_off, p[1] - geom.y_off] for p in pgon]
+            layers.append(build_polygon_layer(pgon_centered, origin=origin))
 
         return layers
 

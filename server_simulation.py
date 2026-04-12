@@ -14,7 +14,7 @@ from constants import EXAMPLES
 _logger = logging.getLogger(__name__)
 
 
-def register_simulation_handlers(input, output, session):
+def register_simulation_handlers(input, output, session, use_upload=None):
     """Register server handlers for the Run Simulation tab.
 
     All simulation state is local to this function.
@@ -24,11 +24,15 @@ def register_simulation_handlers(input, output, session):
     sim_output = reactive.value("")      # accumulated console output
     sim_running = reactive.value(False)
 
+    def _is_upload_mode():
+        if use_upload is not None:
+            return use_upload.get()
+        return bool(input.upload())
+
     @output
     @render.ui
     def cas_select_ui():
-        uploaded = input.upload()
-        if uploaded:
+        if _is_upload_mode():
             return ui.p("Upload mode — no .cas files available", class_="text-muted small")
         path = EXAMPLES.get(input.example(), "")
         cas_files = find_cas_files(path)
@@ -58,7 +62,7 @@ def register_simulation_handlers(input, output, session):
         if sim_running.get():
             ui.notification_show("Simulation already running", type="warning", duration=3)
             return
-        uploaded = input.upload()
+        uploaded = _is_upload_mode()
         if uploaded:
             ui.notification_show("Cannot run simulation on uploaded files", type="warning", duration=3)
             return
@@ -85,7 +89,12 @@ def register_simulation_handlers(input, output, session):
 
         try:
             # Source TELEMAC env and run (quote all paths for shell safety)
-            env_script = _os.path.join(_os.environ.get("HOMETEL", ""), "configs/pysource.local.sh")
+            hometel = _os.environ.get("HOMETEL", "")
+            if not hometel or not _os.path.isdir(hometel):
+                sim_output.set(sim_output.get() + "ERROR: HOMETEL not set or directory not found.\n")
+                sim_running.set(False)
+                return
+            env_script = _os.path.join(hometel, "configs/pysource.local.sh")
             shell_cmd = (f"source {shlex.quote(env_script)} && "
                          f"cd {shlex.quote(cas_dir)} && "
                          f"{shlex.quote(runner)} {shlex.quote(cas_name)} "

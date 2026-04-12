@@ -11,6 +11,7 @@ from shiny import reactive, render, ui
 from analysis import (
     get_available_derived,
     compute_derived,
+    get_var_values,
     compute_mesh_quality,
     compute_element_area,
     find_boundary_nodes,
@@ -37,7 +38,7 @@ def register_core_handlers(
     particle_paths, cross_section_points, clicked_points,
     temporal_stats_cache, integral_result, expr_result,
     measure_points, measure_mode, analysis_mode,
-    obs_data, compare_tf, volume_cache, polygon_stats_data,
+    obs_data, compare_tf, volume_cache, polygon_stats_data, polygon_geom,
     # shared upload state
     use_upload, is_3d_mode,
 ):
@@ -126,9 +127,22 @@ def register_core_handlers(
         measure_mode.set(False)
         analysis_mode.set("none")
         obs_data.set(None)
+        old_compare = compare_tf.get()
+        if old_compare is not None:
+            try:
+                old_compare.close()
+            except Exception:
+                pass
         compare_tf.set(None)
         volume_cache.set(None)
         polygon_stats_data.set(None)
+        polygon_geom.set(None)
+        if use_upload.get():
+            ui.notification_show(
+                "Uploaded file: companion features (.cas CRS detection, "
+                ".cli boundary coloring, .liq hydrographs) are unavailable.",
+                type="message", duration=6, id="upload_notice",
+            )
 
     # -- CRS reactive --
 
@@ -233,7 +247,7 @@ def register_core_handlers(
             var = input.variable()
         except (TypeError, AttributeError, KeyError):
             var = None
-        if var and var in tf.varnames:
+        if var and (var in tf.varnames or var in get_available_derived(tf)):
             return var
         return tf.varnames[0]
 
@@ -253,11 +267,7 @@ def register_core_handlers(
         tf = tel_file()
         var = current_var()
         tidx = current_tidx()
-        derived = get_available_derived(tf)
-        if var in derived:
-            vals = compute_derived(tf, var, tidx)
-        else:
-            vals = tf.get_data_value(var, tidx)
+        vals = get_var_values(tf, var, tidx)
         # 3D layer extraction
         try:
             layer = input.layer_select()

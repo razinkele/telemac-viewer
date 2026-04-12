@@ -31,7 +31,7 @@ from analysis import (
     compute_flood_duration,
     polygon_zonal_stats,
     vertical_profile_at_point,
-    compute_volume_timeseries,
+    get_var_values,
 )
 from constants import format_time
 from crs import click_to_native, meters_to_wgs84
@@ -41,6 +41,7 @@ from validation import (
     compute_rmse,
     compute_nse,
     parse_liq_file,
+    compute_volume_timeseries,
 )
 from data_manip.extraction.telemac_file import TelemacFile
 import os as _os
@@ -56,7 +57,7 @@ def register_analysis_handlers(
     # shared reactive values
     analysis_mode, clicked_points, cross_section_points, particle_paths,
     temporal_stats_cache, measure_points, measure_mode, obs_data, compare_tf,
-    recording, polygon_mode, polygon_stats_data, volume_cache,
+    recording, polygon_mode, polygon_stats_data, polygon_geom, volume_cache,
     expr_result, integral_result,
     current_crs,
     use_upload,
@@ -355,8 +356,10 @@ def register_analysis_handlers(
                 poly_m = [list(click_to_native(c[0], c[1], geom))
                           for c in coords]
                 values = effective_values()
-                stats = polygon_zonal_stats(tel_file(), values, poly_m)
+                stats = polygon_zonal_stats(tel_file(), values, poly_m,
+                                            var_name=current_var())
                 polygon_stats_data.set(stats)
+                polygon_geom.set(poly_m)
                 polygon_mode.set(False)
                 await map_widget.disable_draw(session)
                 return
@@ -488,6 +491,11 @@ def register_analysis_handlers(
     @reactive.event(input.show_multivar)
     def handle_show_multivar():
         analysis_mode.set("multivar")
+
+    @reactive.effect
+    @reactive.event(input.show_histogram)
+    def handle_show_histogram():
+        analysis_mode.set("histogram")
 
     # -- Statistics --
 
@@ -639,7 +647,7 @@ def register_analysis_handlers(
         rows = []
         for i, (px, py) in enumerate(pts):
             idx, nx, ny = nearest_node(tf, px, py)
-            val = float(tf.get_data_value(var, tidx)[idx])
+            val = float(get_var_values(tf, var, tidx)[idx])
             rows.append(
                 ui.tags.tr(
                     ui.tags.td(f"P{i+1}", style="font-weight:bold;"),
@@ -781,6 +789,16 @@ def register_analysis_handlers(
     def handle_record_error():
         ui.notification_show(f"Recording failed: {input.record_error()}", type="error", duration=5)
 
+    @reactive.effect
+    @reactive.event(input.recording_active)
+    def _sync_recording_state():
+        """Sync server recording state from browser confirmation."""
+        browser_active = input.recording_active()
+        if browser_active != recording.get():
+            recording.set(browser_active)
+            if not browser_active:
+                ui.update_action_button("record_btn", label="Record")
+
     # -- Secondary file overlay --
 
     @reactive.effect
@@ -789,11 +807,27 @@ def register_analysis_handlers(
         uploaded = input.compare_upload()
         if not uploaded:
             return
+        tf2 = None
         try:
             tf2 = TelemacFile(uploaded[0]["datapath"])
-            if tf2.npoin2 != tel_file().npoin2:
-                ui.notification_show(f"Mesh mismatch: {tf2.npoin2} vs {tel_file().npoin2} nodes", type="error", duration=5)
+            tf1 = tel_file()
+            if tf2.npoin2 != tf1.npoin2:
+                ui.notification_show(
+                    f"Mesh mismatch: {tf2.npoin2} vs {tf1.npoin2} nodes",
+                    type="error", duration=5)
+                tf2.close()
                 return
+            if tf2.nelem2 != tf1.nelem2:
+                ui.notification_show(
+                    f"Element count mismatch: {tf2.nelem2} vs {tf1.nelem2} elements",
+                    type="error", duration=5)
+                tf2.close()
+                return
+            if len(tf2.times) != len(tf1.times):
+                ui.notification_show(
+                    f"Timestep count differs: {len(tf2.times)} vs {len(tf1.times)}. "
+                    "Using min of both ranges.",
+                    type="warning", duration=5)
             # Close previous comparison file to avoid FD leak
             old_tf = compare_tf.get()
             if old_tf is not None:
@@ -804,6 +838,11 @@ def register_analysis_handlers(
             compare_tf.set(tf2)
             ui.notification_show(f"Comparison file loaded: {tf2.npoin2} nodes, {len(tf2.varnames)} vars", duration=3)
         except Exception as e:
+            if tf2 is not None:
+                try:
+                    tf2.close()
+                except Exception:
+                    pass
             ui.notification_show(f"Failed to open comparison file: {e}", type="error", duration=5)
 
     # -- Polygon zonal statistics --
@@ -820,15 +859,20 @@ def register_analysis_handlers(
         stats = polygon_stats_data.get()
         if stats is None:
             return ui.div()
+        items = [
+            ui.span(f"Area: {stats['area']:.0f} m²", class_="small"), ui.br(),
+            ui.span(f"Nodes inside: {stats['count']}", class_="small"), ui.br(),
+            ui.span(f"Mean: {stats['mean']:.4f}", class_="small"), ui.br(),
+            ui.span(f"Min: {stats['min']:.4f}  Max: {stats['max']:.4f}", class_="small"),
+        ]
+        if stats.get("flooded_fraction", 0) > 0 or stats.get("flooded_area", 0) > 0:
+            items.extend([
+                ui.br(),
+                ui.span(f"Flooded: {stats['flooded_fraction']*100:.1f}%", class_="small"),
+            ])
         return ui.div(
             ui.strong("Polygon Statistics", class_="small"),
-            ui.div(
-                ui.span(f"Area: {stats['area']:.0f} m²", class_="small"), ui.br(),
-                ui.span(f"Nodes inside: {stats['count']}", class_="small"), ui.br(),
-                ui.span(f"Mean: {stats['mean']:.4f}", class_="small"), ui.br(),
-                ui.span(f"Min: {stats['min']:.4f}  Max: {stats['max']:.4f}", class_="small"), ui.br(),
-                ui.span(f"Flooded: {stats['flooded_fraction']*100:.1f}%", class_="small"),
-            ),
+            ui.div(*items),
             class_="mt-1 mb-1 border rounded p-2",
         )
 
@@ -943,8 +987,82 @@ def register_analysis_handlers(
             yield export_crosssection_csv(abscissa, values, var)
         elif mode == "rating":
             yield ""
-        else:
-            yield ""
+        elif mode == "volume":
+            vc = volume_cache.get()
+            if vc is None:
+                yield ""
+                return
+            buf = io.StringIO()
+            buf.write("Time (s),Volume (m³)\n")
+            for t, v in zip(vc["times"], vc["volumes"]):
+                buf.write(f"{t},{v}\n")
+            yield buf.getvalue()
+        elif mode == "histogram":
+            vals = effective_values()
+            if vals is None:
+                yield ""
+                return
+            buf = io.StringIO()
+            buf.write(f"{var}\n")
+            for v in vals:
+                buf.write(f"{v}\n")
+            yield buf.getvalue()
+        elif mode == "multivar":
+            pts = clicked_points.get()
+            if not pts:
+                yield ""
+                return
+            pt = pts[-1]
+            buf = io.StringIO()
+            times_arr = np.array(tf.times)
+            all_vars = tf.varnames
+            buf.write("Time (s)")
+            all_series = []
+            for vn in all_vars:
+                _, values = time_series_at_point(tf, vn, pt[0], pt[1])
+                all_series.append(values)
+                buf.write(f",{vn}")
+            buf.write("\n")
+            for j in range(len(times_arr)):
+                buf.write(f"{times_arr[j]}")
+                for vals in all_series:
+                    buf.write(f",{vals[j]}")
+                buf.write("\n")
+            yield buf.getvalue()
+        elif mode == "vertprofile":
+            pts = clicked_points.get()
+            if not pts:
+                yield ""
+                return
+            pt = pts[-1]
+            elevations, values, elev_label = vertical_profile_at_point(tf, var, tidx, pt[0], pt[1])
+            buf = io.StringIO()
+            buf.write(f"{elev_label},{var}\n")
+            for e, v in zip(elevations, values):
+                buf.write(f"{e},{v}\n")
+            yield buf.getvalue()
+        elif mode == "boundary_ts":
+            data = liq_data()
+            if data is None:
+                yield ""
+                return
+            buf = io.StringIO()
+            # Header
+            names = list(data.keys())
+            buf.write("Time (s)")
+            for name in names:
+                buf.write(f",{name}")
+            buf.write("\n")
+            # Use times from the first boundary
+            first = data[names[0]]
+            for j, t in enumerate(first["times"]):
+                buf.write(f"{t}")
+                for name in names:
+                    entry = data[name]
+                    v = entry["values"][j] if j < len(entry["values"]) else ""
+                    buf.write(f",{v}")
+                buf.write("\n")
+            yield buf.getvalue()
 
     @render.download(filename=lambda: "telemac_all_vars.csv")
     def download_all_vars():
