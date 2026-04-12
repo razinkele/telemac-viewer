@@ -83,7 +83,12 @@ def write_cas(
     if overrides:
         text += "/\n/ USER OVERRIDES\n/----------------------------------------------------------------------\n"
         for key, value in overrides.items():
-            text += f"{key} = {value}\n"
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.startswith("'"):
+                text += f"{key} = '{value}'\n"
+            else:
+                text += f"{key} = {value}\n"
 
     with open(path, "w") as f:
         f.write(text)

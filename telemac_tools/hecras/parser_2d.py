@@ -89,6 +89,7 @@ def parse_hecras_2d(path: str) -> HecRasModel:
 
             # Reconstruct cells
             cells: list[HecRasCell] = []
+            n_fp = len(face_points)
 
             if raw_cfpi is not None and raw_cfpi.ndim == 2:
                 # Padded 2D array: each row is face-point indices with -1 fill
