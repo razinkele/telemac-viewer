@@ -301,7 +301,8 @@ def register_import_handlers(input, output, session):
             _append_log("ERROR: No HEC-RAS file uploaded")
             return
         hdf_path = hdf_files[0]["datapath"]
-        hdf_name = hdf_files[0]["name"].rsplit(".", 2)[0]  # strip .g01.hdf
+        # Sanitise uploaded filename to prevent path traversal
+        hdf_name = _os.path.basename(hdf_files[0]["name"]).rsplit(".", 2)[0]
 
         dem_files = input.import_dem()
         dem_path = dem_files[0]["datapath"] if dem_files else None

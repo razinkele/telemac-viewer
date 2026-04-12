@@ -636,8 +636,19 @@ def polygon_zonal_stats(
     # Flooded fraction — only meaningful for depth-like variables
     _DEPTH_KEYWORDS = {"DEPTH", "HAUTEUR", "WATER DEPTH", "FREE SURFACE"}
     is_depth = any(kw in var_name.upper() for kw in _DEPTH_KEYWORDS)
+    flooded_area_elem = 0.0
     if is_depth:
         flooded = int((vals_inside > flood_threshold).sum())
+        # Element-area-based flooded area (handles non-uniform meshes correctly)
+        for ei in range(len(ikle)):
+            n0, n1, n2 = ikle[ei]
+            if n0 in inside_set and n1 in inside_set and n2 in inside_set:
+                v0, v1, v2 = values[n0], values[n1], values[n2]
+                if np.isnan(v0) or np.isnan(v1) or np.isnan(v2):
+                    continue
+                if (v0 > flood_threshold and v1 > flood_threshold
+                        and v2 > flood_threshold):
+                    flooded_area_elem += float(elem_areas[ei])
     else:
         flooded = 0
 
@@ -647,8 +658,8 @@ def polygon_zonal_stats(
         "min": float(np.nanmin(vals_inside)),
         "max": float(np.nanmax(vals_inside)),
         "count": n_inside,
-        "flooded_area": float(area * flooded / n_inside) if n_inside > 0 and is_depth else 0.0,
-        "flooded_fraction": float(flooded / n_inside) if n_inside > 0 and is_depth else 0.0,
+        "flooded_area": flooded_area_elem if is_depth else 0.0,
+        "flooded_fraction": float(flooded_area_elem / total_area_elem) if total_area_elem > 0 and is_depth else 0.0,
     }
 
 

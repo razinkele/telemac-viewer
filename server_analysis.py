@@ -348,6 +348,9 @@ def register_analysis_handlers(
 
         pts = clicked_points.get().copy()
         pts.append((x_m, y_m))
+        # Cap to prevent unbounded memory growth
+        if len(pts) > 200:
+            pts = pts[-200:]
         clicked_points.set(pts)
         tf = tel_file()
         if is_3d_mode.get() and tf.nplan > 1:
