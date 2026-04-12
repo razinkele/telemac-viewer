@@ -582,6 +582,12 @@ def polygon_zonal_stats(
     """
     from matplotlib.path import Path
 
+    if not polygon_m or len(polygon_m) < 3:
+        return {
+            "area": 0.0, "mean": 0.0, "min": 0.0, "max": 0.0,
+            "count": 0, "flooded_area": 0.0, "flooded_fraction": 0.0,
+        }
+
     x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
 
@@ -672,6 +678,8 @@ def nearest_node(
     """
     x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
+    if npoin == 0:
+        raise ValueError("Mesh has no 2D points (npoin2=0)")
     dists = (x[:npoin] - x_m) ** 2 + (y[:npoin] - y_m) ** 2
     idx = int(np.argmin(dists))
     return idx, float(x[idx]), float(y[idx])
@@ -690,6 +698,8 @@ def time_series_at_point(
                          for t in range(len(tf.times))])
         return np.array(tf.times), vals
     ts = tf.get_timeseries_on_points(varname, [[x_m, y_m]])
+    if not ts:
+        return np.array(tf.times), np.full(len(tf.times), np.nan)
     return np.array(tf.times), ts[0]
 
 
@@ -983,6 +993,11 @@ def find_extrema(tf: TelemacFileProtocol, values: np.ndarray) -> dict[str, tuple
     """
     npoin = tf.npoin2
     v = values[:npoin]
+    if npoin == 0 or not np.isfinite(v).any():
+        return {
+            "min": (-1, 0.0, 0.0, float("nan")),
+            "max": (-1, 0.0, 0.0, float("nan")),
+        }
     imin = int(np.nanargmin(v))
     imax = int(np.nanargmax(v))
     x, y = tf.meshx, tf.meshy
