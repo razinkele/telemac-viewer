@@ -87,6 +87,7 @@ def register_simulation_handlers(input, output, session, use_upload=None):
         sim_output.set(f"$ cd {cas_dir}\n$ {cmd_display}\n\n")
         sim_running.set(True)
 
+        proc = None
         try:
             # Source TELEMAC env and run (quote all paths for shell safety)
             hometel = _os.environ.get("HOMETEL", "")

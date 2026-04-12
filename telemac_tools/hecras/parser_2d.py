@@ -142,7 +142,13 @@ def parse_hecras_2d(path: str) -> HecRasModel:
             # Elevation per cell (optional)
             elevation = None
             if "Cells Minimum Elevation" in item:
-                elevation = item["Cells Minimum Elevation"][:].astype(np.float64)
+                raw_elev = item["Cells Minimum Elevation"][:].astype(np.float64)
+                if len(raw_elev) == len(cells):
+                    elevation = raw_elev
+                else:
+                    logger.warning(
+                        "Elevation array length (%d) != cell count (%d), skipping",
+                        len(raw_elev), len(cells))
 
             areas.append(
                 HecRas2DArea(

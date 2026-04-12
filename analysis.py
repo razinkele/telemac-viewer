@@ -1025,7 +1025,7 @@ def compute_all_temporal_stats(
         "mean_values": (running_sum / ntimes).astype(np.float32),
         "envelope": peak.astype(np.float32),
         "arrival": arrival,
-        "duration": (wet_count.astype(np.float64) * avg_dt).astype(np.float32),
+        "duration": (np.maximum(wet_count - 1, 0).astype(np.float64) * avg_dt).astype(np.float32),
     }
 
 

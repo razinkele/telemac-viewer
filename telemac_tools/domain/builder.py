@@ -38,8 +38,14 @@ def _read_dem(dem_path: str) -> tuple[np.ndarray, dict]:
         data = page.asarray()
 
         # Extract geotransform from GeoTIFF tags
-        tiepoint = page.tags[33922].value   # ModelTiepointTag
-        scale = page.tags[33550].value      # ModelPixelScaleTag
+        tp_tag = page.tags.get(33922)   # ModelTiepointTag
+        sc_tag = page.tags.get(33550)   # ModelPixelScaleTag
+        if tp_tag is None or sc_tag is None:
+            raise ValueError(
+                "DEM file missing required GeoTIFF tags "
+                "(ModelTiepointTag / ModelPixelScaleTag)")
+        tiepoint = tp_tag.value
+        scale = sc_tag.value
 
         origin_x = tiepoint[3]
         origin_y = tiepoint[4]
@@ -335,27 +341,38 @@ def build_domain_2d(model: HecRasModel) -> TelemacDomain:
         adj[a].append(b)
         adj[b].append(a)
 
-    # Walk the boundary ring
-    start = boundary_edges[0][0]
-    ring = [start]
-    visited = {start}
-    current = start
-    while True:
-        found_next = False
-        for nb in adj[current]:
-            if nb not in visited:
-                ring.append(nb)
-                visited.add(nb)
-                current = nb
-                found_next = True
+    # Walk boundary rings (may be multiple for domains with islands)
+    all_nodes: set[int] = set()
+    for a, b in boundary_edges:
+        all_nodes.add(a)
+        all_nodes.add(b)
+
+    rings: list[list[int]] = []
+    visited: set[int] = set()
+
+    while len(visited) < len(all_nodes):
+        # Pick an unvisited start node
+        start = next(n for n in all_nodes if n not in visited)
+        ring = [start]
+        visited.add(start)
+        current = start
+        while True:
+            found_next = False
+            for nb in adj[current]:
+                if nb not in visited:
+                    ring.append(nb)
+                    visited.add(nb)
+                    current = nb
+                    found_next = True
+                    break
+            if not found_next:
                 break
-        if not found_next:
-            break
+        ring.append(ring[0])
+        rings.append(ring)
 
-    # Close the ring
-    ring.append(ring[0])
-
-    poly = face_points[ring]
+    # Use the longest ring (outer boundary)
+    longest = max(rings, key=len)
+    poly = face_points[longest]
     return TelemacDomain(boundary_polygon=poly)
 
 

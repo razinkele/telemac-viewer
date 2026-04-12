@@ -987,6 +987,8 @@ def register_analysis_handlers(
         if mode == "timeseries":
             pts = clicked_points.get()
             if not pts:
+                ui.notification_show("No points selected — click the map first",
+                                     type="warning", duration=3)
                 yield ""
                 return
             # Export all points as columns
@@ -1018,6 +1020,8 @@ def register_analysis_handlers(
         elif mode == "crosssection":
             xsec_pts = cross_section_points.get()
             if xsec_pts is None:
+                ui.notification_show("No cross-section defined — draw a polyline first",
+                                     type="warning", duration=3)
                 yield ""
                 return
             abscissa, values = cross_section_profile(tf, var, tidx, xsec_pts)

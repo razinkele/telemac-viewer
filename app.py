@@ -974,6 +974,7 @@ def server(input, output, session):
                 return cfl
             ui.notification_show("Courant number requires VELOCITY U/V variables",
                                  type="warning", duration=4, id="cfl_warn")
+            return current_values()
         elif diag == "elem_area":
             return elem_area_values()
         # Temporal stats display

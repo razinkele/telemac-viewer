@@ -61,7 +61,6 @@ def write_liq(
         order = np.argsort(times, kind="stable")
         times = times[order]
         values = values[order]
-        _, unique_idx = np.unique(times, return_index=True)
         # For duplicates, keep last occurrence: use reverse-unique trick
         _, last_idx = np.unique(times[::-1], return_index=True)
         last_idx = len(times) - 1 - last_idx
