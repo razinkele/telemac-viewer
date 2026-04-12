@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 
+_logger = logging.getLogger(__name__)
+
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
@@ -337,7 +339,14 @@ def build_domain_2d(model: HecRasModel) -> TelemacDomain:
     if not boundary_edges:
         # Fallback: convex hull
         from scipy.spatial import ConvexHull
-        hull = ConvexHull(face_points)
+        if len(face_points) < 3:
+            _logger.warning("2D area has < 3 face points, cannot compute boundary")
+            return TelemacDomain(boundary_polygon=np.empty((0, 2)))
+        try:
+            hull = ConvexHull(face_points)
+        except Exception as exc:
+            _logger.warning("ConvexHull failed (%s), returning empty boundary", exc)
+            return TelemacDomain(boundary_polygon=np.empty((0, 2)))
         verts = hull.vertices
         poly = np.vstack([face_points[verts], face_points[verts[0:1]]])
         return TelemacDomain(boundary_polygon=poly)

@@ -604,10 +604,15 @@ def register_analysis_handlers(
                 stats["arrival"] = compute_flood_arrival(tf, flood_var)
                 stats["duration"] = compute_flood_duration(tf, flood_var)
             return stats
-        stats = await loop.run_in_executor(None, _run_with_lock, _compute_all_temporal, tf, var)
-        temporal_stats_cache.set(stats)
-        ui.notification_remove("temporal_notif")
-        ui.notification_show("Temporal statistics computed", duration=3)
+        try:
+            stats = await loop.run_in_executor(None, _run_with_lock, _compute_all_temporal, tf, var)
+            temporal_stats_cache.set(stats)
+            ui.notification_show("Temporal statistics computed", duration=3)
+        except Exception as exc:
+            _logger.warning("Temporal stats failed: %s", exc)
+            ui.notification_show(f"Temporal stats failed: {exc}", type="error", duration=5)
+        finally:
+            ui.notification_remove("temporal_notif")
 
     # -- Volume conservation --
 
@@ -618,11 +623,16 @@ def register_analysis_handlers(
         ui.notification_show("Computing volume over time...",
                              duration=None, id="volume_notif")
         loop = asyncio.get_running_loop()
-        times, vols = await loop.run_in_executor(
-            None, _run_with_lock, compute_volume_timeseries, tf, compute_mesh_integral)
-        volume_cache.set({"times": times, "volumes": vols})
-        ui.notification_remove("volume_notif")
-        analysis_mode.set("volume")
+        try:
+            times, vols = await loop.run_in_executor(
+                None, _run_with_lock, compute_volume_timeseries, tf, compute_mesh_integral)
+            volume_cache.set({"times": times, "volumes": vols})
+            analysis_mode.set("volume")
+        except Exception as exc:
+            _logger.warning("Volume computation failed: %s", exc)
+            ui.notification_show(f"Volume computation failed: {exc}", type="error", duration=5)
+        finally:
+            ui.notification_remove("volume_notif")
 
     # -- .liq boundary display --
 
@@ -1094,7 +1104,7 @@ def register_analysis_handlers(
             yield buf.getvalue()
         elif mode == "boundary_ts":
             data = liq_data()
-            if data is None:
+            if data is None or not data:
                 yield ""
                 return
             buf = io.StringIO()
