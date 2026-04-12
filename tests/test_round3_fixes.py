@@ -362,5 +362,5 @@ class TestFloodDurationSingleTimestep:
         dur = compute_flood_duration(tf, "WATER DEPTH", threshold=0.3)
         # Node 0: depth=0.1 < 0.3 → dry → dur=0
         assert dur[0] == pytest.approx(0.0)
-        # Node 3: depth=1.0 > 0.3 → wet → dur=1.0 (fallback dt)
-        assert dur[3] == pytest.approx(1.0)
+        # Single timestep has no forward intervals → duration is 0
+        assert dur[3] == pytest.approx(0.0)

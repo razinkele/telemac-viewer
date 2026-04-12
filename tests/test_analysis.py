@@ -518,17 +518,17 @@ class TestFloodAnalysis:
         assert np.all(np.isnan(arrival))
 
     def test_flood_duration(self, fake_tf):
-        """Duration = total time above threshold."""
+        """Duration = total time above threshold (forward intervals only)."""
         dur = compute_flood_duration(fake_tf, "WATER DEPTH", threshold=0.6)
         assert dur[0] == pytest.approx(0.0)
-        assert dur[1] == pytest.approx(2.0)
-        assert dur[3] == pytest.approx(3.0)
+        assert dur[1] == pytest.approx(1.0)
+        assert dur[3] == pytest.approx(2.0)
 
     def test_flood_duration_single_timestep(self):
-        """Single timestep uses dt=1.0 fallback."""
+        """Single timestep has no intervals, so duration is zero."""
         tf = SingleTimeTF()
         dur = compute_flood_duration(tf, "WATER DEPTH", threshold=0.01)
-        assert np.all(dur == pytest.approx(1.0))
+        assert np.all(dur == pytest.approx(0.0))
 
 
 # ---------------------------------------------------------------------------

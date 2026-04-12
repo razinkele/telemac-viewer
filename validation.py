@@ -114,7 +114,8 @@ def compute_volume_timeseries(tf, compute_integral_fn):
     """
     npoin = tf.npoin2
     varnames = [v.strip() for v in tf.varnames]
-    depth_var = "WATER DEPTH" if "WATER DEPTH" in varnames else tf.varnames[0]
+    _DEPTH_ALIASES = ["WATER DEPTH", "HAUTEUR D'EAU", "WATER DEPTH M", "FREE SURFACE"]
+    depth_var = next((v for v in _DEPTH_ALIASES if v in varnames), tf.varnames[0])
     times = []
     volumes = []
     for t in range(len(tf.times)):

@@ -1135,20 +1135,15 @@ def compute_flood_duration(tf, varname="WATER DEPTH", threshold=0.01):
     """Compute total flood duration per node.
 
     Returns per-node array of total time (seconds) spent above threshold.
-    Uses the output interval as the time weight for each timestep.
+    Accumulates forward intervals for each wet timestep (except the last).
     """
     npoin = tf.npoin2
     ntimes = len(tf.times)
     duration = np.zeros(npoin, dtype=np.float32)
-    for t in range(ntimes):
+    for t in range(ntimes - 1):
         vals = get_var_values(tf, varname, t)[:npoin]
         wet = vals > threshold
-        if t < ntimes - 1:
-            dt = float(tf.times[t + 1] - tf.times[t])
-        elif t > 0:
-            dt = float(tf.times[t] - tf.times[t - 1])
-        else:
-            dt = 1.0
+        dt = float(tf.times[t + 1] - tf.times[t])
         duration[wet] += dt
     return duration
 
