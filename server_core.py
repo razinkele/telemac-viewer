@@ -387,7 +387,7 @@ def register_core_handlers(
     def filter_ui():
         vals = current_values()
         vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
-        if np.isnan(vmin) or vmax <= vmin:
+        if np.isnan(vmin) or np.isinf(vmin) or np.isinf(vmax) or vmax <= vmin:
             vmin, vmax = 0.0, 1.0
         step = round((vmax - vmin) / 100, 4) if vmax > vmin else 0.01
         return ui.input_slider(

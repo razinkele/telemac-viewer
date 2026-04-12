@@ -102,6 +102,8 @@ def parse_hecras_2d(path: str) -> HecRasModel:
                 # Flat 1D array with offset/count from face info
                 for off, cnt in face_info:
                     indices = raw_cfpi[off : off + cnt].tolist()
+                    if any(idx >= n_fp for idx in indices):
+                        continue  # skip cells with out-of-range indices
                     cells.append(HecRasCell(face_point_indices=indices))
             elif face_info is not None:
                 # No cell-level face-point indices; build from face-level data
@@ -120,7 +122,7 @@ def parse_hecras_2d(path: str) -> HecRasModel:
                             face_idx = abs(face_orient_vals[j, 0])
                             if face_idx < len(faces_fp):
                                 for fp in faces_fp[face_idx]:
-                                    if fp >= 0 and fp not in fp_set:
+                                    if fp >= 0 and fp < n_fp and fp not in fp_set:
                                         fp_set.append(int(fp))
                         cells.append(HecRasCell(face_point_indices=fp_set))
                 else:

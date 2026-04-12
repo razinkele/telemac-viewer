@@ -58,6 +58,8 @@ def write_cli(
         if lihbor == 5:
             # Prescribed depth / level
             hbor = prescribed_h if prescribed_h is not None else 0.0
+            if not np.isfinite(hbor):
+                hbor = 0.0
             line = (
                 f"5 5 5 {hbor:.1f} 0.0 0.0 0.0 "
                 f"5 0.0 0.0 0.0 {node + 1} {idx + 1}"
