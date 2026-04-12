@@ -416,6 +416,13 @@ def register_analysis_handlers(
                         "Particle tracing timed out after 5 minutes",
                         type="error", duration=8)
                     return
+                except Exception as e:
+                    ui.notification_remove("particle_notif")
+                    _logger.warning("Seed-line particle tracing failed: %s", e)
+                    ui.notification_show(
+                        f"Particle tracing failed: {e}",
+                        type="warning", duration=6)
+                    return
                 particle_paths.set(paths)
                 ui.notification_remove("particle_notif")
                 ui.notification_show(f"Computed {len(paths)} particle paths", duration=3)

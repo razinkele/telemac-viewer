@@ -42,8 +42,12 @@ def parse_observation_csv(file_path: str) -> tuple[ndarray, ndarray, str]:
         for row in reader:
             if len(row) < 2:
                 continue
-            times.append(float(row[0]))
-            values.append(float(row[1]))
+            t_val = float(row[0])
+            v_val = float(row[1])
+            if not (np.isfinite(t_val) and np.isfinite(v_val)):
+                continue
+            times.append(t_val)
+            values.append(v_val)
     if not times:
         raise ValueError("CSV contains no data rows")
     return np.array(times, dtype=np.float64), np.array(values, dtype=np.float64), varname
@@ -151,7 +155,11 @@ def parse_liq_file(liq_path):
                                 len(parts), ncols, line[:60])
                 continue
             try:
-                rows.append([float(x) for x in parts[:ncols]])
+                row_vals = [float(x) for x in parts[:ncols]]
+                if not all(np.isfinite(v) for v in row_vals):
+                    _logger.warning("Skipping .liq row with inf/NaN: %s", line[:60])
+                    continue
+                rows.append(row_vals)
             except ValueError:
                 _logger.warning("Skipping .liq row with non-numeric value: %s", line[:60])
                 continue

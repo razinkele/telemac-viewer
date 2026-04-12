@@ -297,6 +297,9 @@ def register_import_handlers(input, output, session):
         _append_log("\n--- Converting ---")
 
         hdf_files = input.import_hdf()
+        if not hdf_files:
+            _append_log("ERROR: No HEC-RAS file uploaded")
+            return
         hdf_path = hdf_files[0]["datapath"]
         hdf_name = hdf_files[0]["name"].rsplit(".", 2)[0]  # strip .g01.hdf
 

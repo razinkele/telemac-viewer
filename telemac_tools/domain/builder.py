@@ -413,6 +413,10 @@ def assign_bc_nodes(
             if min_d <= tolerance:
                 matched.append(int(mesh_boundary_nodes[i]))
         seg.node_indices = matched
+        if not matched and seg._line_coords is not None and len(seg._line_coords) >= 2:
+            _logger.warning(
+                "BC segment '%s' matched zero boundary nodes (tolerance=%.1f m)",
+                seg.bc_type.name, tolerance)
 
 
 def _point_to_polyline_dist(pt: np.ndarray, line: np.ndarray) -> float:
