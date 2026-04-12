@@ -86,7 +86,8 @@ def write_cas(
             if value is None:
                 continue
             if isinstance(value, str) and not value.startswith("'"):
-                text += f"{key} = '{value}'\n"
+                escaped = value.replace("'", "''")
+                text += f"{key} = '{escaped}'\n"
             else:
                 text += f"{key} = {value}\n"
 

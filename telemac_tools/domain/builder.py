@@ -131,6 +131,10 @@ def _buffer_alignment(alignment: np.ndarray, distance: float) -> np.ndarray:
               reversed, first point repeated).
     """
     n = len(alignment)
+    if n < 2:
+        _logger.warning("Alignment has < 2 points, returning empty polygon")
+        return np.empty((0, 2), dtype=np.float64)
+
     left = np.empty((n, 2))
     right = np.empty((n, 2))
 

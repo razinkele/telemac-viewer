@@ -131,119 +131,137 @@ def parse_hecras_1d(path: str) -> HecRasModel:
         if "Cross Sections" in geo and "Attributes" in geo["Cross Sections"]:
             xs_grp = geo["Cross Sections"]
             xs_attrs = xs_grp["Attributes"][:]
-            se_info = xs_grp["Station Elevation Info"][:]
-            se_values = xs_grp["Station Elevation Values"][:]
-            poly_info = xs_grp["Polyline Info"][:]
-            poly_pts = xs_grp["Polyline Points"][:]
-
-            # Bank stations (optional — missing in some real files)
-            has_banks = "Bank Stations" in xs_grp
-            if has_banks:
-                bank_stations_ds = xs_grp["Bank Stations"][:]
-
-            # Manning's n (optional)
-            has_manning = "Manning's n Info" in xs_grp
-            if has_manning:
-                mann_info = xs_grp["Manning's n Info"][:]
-                mann_values = xs_grp["Manning's n Values"][:]
-
-            # Detect field names: real files may use "RS" instead of
-            # "Station", and field names vary across versions
-            attr_fields = xs_attrs.dtype.names
-            river_field = "River Name" if "River Name" in attr_fields else "River"
-            reach_field = "Reach Name" if "Reach Name" in attr_fields else "Reach"
-            # Station field: try "RS" (real files), then "Station" (synthetic)
-            if "RS" in attr_fields:
-                station_field = "RS"
-            elif "Station" in attr_fields:
-                station_field = "Station"
+            required_ds = ["Station Elevation Info", "Station Elevation Values",
+                           "Polyline Info", "Polyline Points"]
+            missing = [ds for ds in required_ds if ds not in xs_grp]
+            if missing:
+                _logger.warning("Cross Sections missing datasets %s, skipping all XS", missing)
             else:
-                station_field = None
+                se_info = xs_grp["Station Elevation Info"][:]
+                se_values = xs_grp["Station Elevation Values"][:]
+                poly_info = xs_grp["Polyline Info"][:]
+                poly_pts = xs_grp["Polyline Points"][:]
 
-            for i, row in enumerate(xs_attrs):
-                river = _decode(row[river_field])
-                reach = _decode(row[reach_field])
-
-                # Parse station value
-                if station_field is not None:
-                    raw_station = row[station_field]
-                    station = float(_decode(raw_station))
-                else:
-                    station = float(i)
-
-                name = f"{river}/{reach}"
-
-                # Station-elevation
-                se_off, se_cnt = int(se_info[i, 0]), int(se_info[i, 1])
-                se_data = se_values[se_off : se_off + se_cnt]
-                if len(se_data) == 0:
-                    _logger.warning("Cross-section %s has no station-elevation data, skipping", name)
-                    continue
-                sta_vals = se_data[:, 0]
-                elev_vals = se_data[:, 1]
-
-                # Polyline
-                p_off, p_cnt = int(poly_info[i, 0]), int(poly_info[i, 1])
-                polyline = poly_pts[p_off : p_off + p_cnt]
-
-                # Interpolate to world coordinates
-                coords = _interp_stations_to_world(sta_vals, elev_vals, polyline)
-
-                # Manning's n
-                if has_manning:
-                    m_off, m_cnt = int(mann_info[i, 0]), int(mann_info[i, 1])
-                    mannings_n = mann_values[m_off : m_off + m_cnt].tolist()
-                else:
-                    mannings_n = [0.035, 0.035, 0.035]
-
-                # Bank stations (use Left Bank / Right Bank from attrs
-                # if dedicated dataset is missing)
+                # Bank stations (optional — missing in some real files)
+                has_banks = "Bank Stations" in xs_grp
                 if has_banks:
-                    banks = bank_stations_ds[i]
-                    bank_st = (float(banks[0]), float(banks[1]))
-                elif "Left Bank" in attr_fields and "Right Bank" in attr_fields:
-                    bank_st = (float(row["Left Bank"]), float(row["Right Bank"]))
+                    bank_stations_ds = xs_grp["Bank Stations"][:]
+
+                # Manning's n (optional)
+                has_manning = "Manning's n Info" in xs_grp
+                if has_manning:
+                    mann_info = xs_grp["Manning's n Info"][:]
+                    mann_values = xs_grp["Manning's n Values"][:]
+
+                # Detect field names: real files may use "RS" instead of
+                # "Station", and field names vary across versions
+                attr_fields = xs_attrs.dtype.names
+                river_field = "River Name" if "River Name" in attr_fields else "River"
+                reach_field = "Reach Name" if "Reach Name" in attr_fields else "Reach"
+                # Station field: try "RS" (real files), then "Station" (synthetic)
+                if "RS" in attr_fields:
+                    station_field = "RS"
+                elif "Station" in attr_fields:
+                    station_field = "Station"
                 else:
-                    # Fallback: first and last station values
-                    bank_st = (float(sta_vals[0]), float(sta_vals[-1]))
+                    station_field = None
 
-                # Bank world coordinates: interpolate bank station positions
-                bank_fracs = []
-                sta_min, sta_max = sta_vals[0], sta_vals[-1]
-                sta_range = sta_max - sta_min
-                diffs = np.diff(polyline, axis=0)
-                seg_lengths = np.sqrt((diffs ** 2).sum(axis=1))
-                cum_length = np.concatenate([[0.0], np.cumsum(seg_lengths)])
-                total_length = cum_length[-1]
+                for i, row in enumerate(xs_attrs):
+                    river = _decode(row[river_field])
+                    reach = _decode(row[reach_field])
 
-                for bs in bank_st:
-                    if sta_range > 0:
-                        frac = (bs - sta_min) / sta_range
+                    # Parse station value
+                    if station_field is not None:
+                        raw_station = row[station_field]
+                        station = float(_decode(raw_station))
                     else:
-                        frac = 0.0
-                    dist = frac * total_length
-                    bx = np.interp(dist, cum_length, polyline[:, 0])
-                    by = np.interp(dist, cum_length, polyline[:, 1])
-                    bank_fracs.append([bx, by])
-                bank_coords = np.array(bank_fracs)
+                        station = float(i)
 
-                xs = CrossSection(
-                    station=station,
-                    coords=coords,
-                    mannings_n=mannings_n,
-                    bank_stations=bank_st,
-                    bank_coords=bank_coords,
-                )
+                    name = f"{river}/{reach}"
 
-                if name in reaches:
-                    reaches[name].cross_sections.append(xs)
-                else:
-                    # Create reach without alignment if centerline missing
-                    reaches[name] = Reach(
-                        name=name,
-                        alignment=np.empty((0, 2)),
-                        cross_sections=[xs],
+                    # Station-elevation — validate offset/count
+                    if i >= len(se_info):
+                        _logger.warning("Cross-section %d beyond se_info length, skipping", i)
+                        continue
+                    se_off, se_cnt = int(se_info[i, 0]), int(se_info[i, 1])
+                    if se_off < 0 or se_cnt < 0 or se_off + se_cnt > len(se_values):
+                        _logger.warning("Cross-section %s: invalid SE offset/count (%d/%d), skipping", name, se_off, se_cnt)
+                        continue
+                    se_data = se_values[se_off : se_off + se_cnt]
+                    if len(se_data) == 0:
+                        _logger.warning("Cross-section %s has no station-elevation data, skipping", name)
+                        continue
+                    sta_vals = se_data[:, 0]
+                    elev_vals = se_data[:, 1]
+
+                    # Polyline — validate offset/count
+                    if i >= len(poly_info):
+                        _logger.warning("Cross-section %d beyond poly_info length, skipping", i)
+                        continue
+                    p_off, p_cnt = int(poly_info[i, 0]), int(poly_info[i, 1])
+                    if p_off < 0 or p_cnt < 0 or p_off + p_cnt > len(poly_pts):
+                        _logger.warning("Cross-section %s: invalid polyline offset/count (%d/%d), skipping", name, p_off, p_cnt)
+                        continue
+                    polyline = poly_pts[p_off : p_off + p_cnt]
+
+                    # Interpolate to world coordinates
+                    coords = _interp_stations_to_world(sta_vals, elev_vals, polyline)
+
+                    # Manning's n
+                    if has_manning:
+                        m_off, m_cnt = int(mann_info[i, 0]), int(mann_info[i, 1])
+                        mannings_n = mann_values[m_off : m_off + m_cnt].tolist()
+                    else:
+                        mannings_n = [0.035, 0.035, 0.035]
+
+                    # Bank stations (use Left Bank / Right Bank from attrs
+                    # if dedicated dataset is missing)
+                    if has_banks:
+                        banks = bank_stations_ds[i]
+                        bank_st = (float(banks[0]), float(banks[1]))
+                    elif "Left Bank" in attr_fields and "Right Bank" in attr_fields:
+                        bank_st = (float(row["Left Bank"]), float(row["Right Bank"]))
+                    else:
+                        # Fallback: first and last station values
+                        bank_st = (float(sta_vals[0]), float(sta_vals[-1]))
+
+                    # Bank world coordinates: interpolate bank station positions
+                    bank_fracs = []
+                    sta_min, sta_max = sta_vals[0], sta_vals[-1]
+                    sta_range = sta_max - sta_min
+                    diffs = np.diff(polyline, axis=0)
+                    seg_lengths = np.sqrt((diffs ** 2).sum(axis=1))
+                    cum_length = np.concatenate([[0.0], np.cumsum(seg_lengths)])
+                    total_length = cum_length[-1]
+
+                    for bs in bank_st:
+                        if sta_range > 0:
+                            frac = (bs - sta_min) / sta_range
+                        else:
+                            frac = 0.0
+                        dist = frac * total_length
+                        bx = np.interp(dist, cum_length, polyline[:, 0])
+                        by = np.interp(dist, cum_length, polyline[:, 1])
+                        bank_fracs.append([bx, by])
+                    bank_coords = np.array(bank_fracs)
+
+                    xs = CrossSection(
+                        station=station,
+                        coords=coords,
+                        mannings_n=mannings_n,
+                        bank_stations=bank_st,
+                        bank_coords=bank_coords,
                     )
+
+                    if name in reaches:
+                        reaches[name].cross_sections.append(xs)
+                    else:
+                        # Create reach without alignment if centerline missing
+                        reaches[name] = Reach(
+                            name=name,
+                            alignment=np.empty((0, 2)),
+                            cross_sections=[xs],
+                        )
 
         # --- Boundary Condition Lines ---
         boundaries: list[BoundaryCondition] = []

@@ -715,6 +715,8 @@ def cross_section_profile(
         vals_full = compute_derived(tf, varname, record)
         points, abscissa, values = tf.get_data_on_polyline(
             tf.varnames[0], record, polyline_m)
+        if not points or len(points) < 3:
+            return np.array(abscissa), np.array(values)
         # Re-interpolate derived values at the polyline nodes
         from scipy.interpolate import LinearNDInterpolator
         mesh_pts = np.column_stack((tf.meshx[:tf.npoin2], tf.meshy[:tf.npoin2]))
