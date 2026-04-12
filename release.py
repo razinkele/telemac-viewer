@@ -187,7 +187,7 @@ def gather_commits(cwd: Path | None = None, since: str | None = None) -> list[di
 
         commits.append(
             {
-                "hash": commit_hash,
+                "hash": commit_hash[:7],
                 "type": ctype,
                 "scope": scope,
                 "message": message,
@@ -215,13 +215,15 @@ def prep_json(
     for c in commits:
         all_changed.update(c["files_changed"])
 
+    changed_modules = sorted(f for f in all_changed if f.endswith(".py"))
     user_facing = [m for m in USER_FACING_MODULES if m in all_changed]
 
     return {
+        "bump_type": bump_type,
         "old_version": f"{old[0]}.{old[1]}.{old[2]}",
         "new_version": f"{new[0]}.{new[1]}.{new[2]}",
         "commits": commits,
-        "changed_modules": sorted(all_changed),
+        "changed_modules": changed_modules,
         "user_facing_modules": user_facing,
     }
 
@@ -264,7 +266,7 @@ def main() -> None:
     command = sys.argv[1]
 
     if command == "prep":
-        if len(sys.argv) < 3:
+        if len(sys.argv) < 3 or sys.argv[2] not in ("major", "minor", "patch"):
             print("Usage: release.py prep <major|minor|patch> [--since <ref>]")
             sys.exit(1)
         bump_type = sys.argv[2]
@@ -273,11 +275,14 @@ def main() -> None:
             idx = sys.argv.index("--since")
             if idx + 1 < len(sys.argv):
                 since = sys.argv[idx + 1]
+            else:
+                print("Error: --since requires a ref argument")
+                sys.exit(1)
         result = prep_json(bump_type, since=since)
         print(json.dumps(result, indent=2))
 
     elif command == "bump":
-        if len(sys.argv) < 3:
+        if len(sys.argv) < 3 or sys.argv[2] not in ("major", "minor", "patch"):
             print("Usage: release.py bump <major|minor|patch>")
             sys.exit(1)
         bump_type = sys.argv[2]
