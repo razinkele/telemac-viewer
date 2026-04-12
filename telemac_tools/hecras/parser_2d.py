@@ -146,7 +146,7 @@ def parse_hecras_2d(path: str) -> HecRasModel:
                 if len(raw_elev) == len(cells):
                     elevation = raw_elev
                 else:
-                    logger.warning(
+                    _logger.warning(
                         "Elevation array length (%d) != cell count (%d), skipping",
                         len(raw_elev), len(cells))
 
@@ -206,8 +206,14 @@ def triangulate_2d_area(area: HecRas2DArea) -> Mesh2D:
 
     # Interpolate elevation from cell centers to all nodes
     if area.elevation is not None:
-        interp = NearestNDInterpolator(area.cell_centers, area.elevation)
-        elevation = interp(nodes)
+        valid = ~np.isnan(area.elevation)
+        if valid.any():
+            interp = NearestNDInterpolator(
+                area.cell_centers[valid], area.elevation[valid])
+            elevation = interp(nodes)
+        else:
+            _logger.warning("All cell elevations are NaN, using zeros")
+            elevation = np.zeros(nodes.shape[0])
     else:
         elevation = np.zeros(nodes.shape[0])
 

@@ -1,8 +1,12 @@
 """Parse 1D HEC-RAS geometry from HDF5 (.g01.hdf) files."""
 from __future__ import annotations
 
+import logging
+
 import h5py
 import numpy as np
+
+_logger = logging.getLogger(__name__)
 
 from telemac_tools.model import (
     BCType,
@@ -32,6 +36,15 @@ def _interp_stations_to_world(
     coords : (N, 3) world x, y, z
     """
     # Cumulative arc-length along the polyline
+    if len(polyline) == 0:
+        _logger.warning("Empty polyline in cross-section interpolation")
+        return np.column_stack([
+            np.zeros(len(station_vals)),
+            np.zeros(len(station_vals)),
+            elevations,
+        ])
+    if len(station_vals) == 0:
+        return np.empty((0, 3), dtype=np.float64)
     diffs = np.diff(polyline, axis=0)
     seg_lengths = np.sqrt((diffs ** 2).sum(axis=1))
     cum_length = np.concatenate([[0.0], np.cumsum(seg_lengths)])
@@ -163,6 +176,9 @@ def parse_hecras_1d(path: str) -> HecRasModel:
                 # Station-elevation
                 se_off, se_cnt = int(se_info[i, 0]), int(se_info[i, 1])
                 se_data = se_values[se_off : se_off + se_cnt]
+                if len(se_data) == 0:
+                    _logger.warning("Cross-section %s has no station-elevation data, skipping", name)
+                    continue
                 sta_vals = se_data[:, 0]
                 elev_vals = se_data[:, 1]
 

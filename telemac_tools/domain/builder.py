@@ -203,8 +203,15 @@ def _build_mannings_regions(reach) -> list[dict]:
     if len(left_banks) < 2:
         return []
 
-    # Average channel Manning's n
-    avg_n = np.mean([xs.mannings_n[1] for xs in reach.cross_sections])
+    # Average channel Manning's n (prefer index 1=channel, fallback to [0] or default)
+    def _channel_n(xs):
+        if len(xs.mannings_n) >= 2:
+            return xs.mannings_n[1]
+        if len(xs.mannings_n) >= 1:
+            return xs.mannings_n[0]
+        return 0.035
+
+    avg_n = np.mean([_channel_n(xs) for xs in reach.cross_sections])
 
     # Build closed polygon: left forward + right reversed + close
     channel_poly = np.vstack(left_banks + right_banks[::-1] + [left_banks[0]])

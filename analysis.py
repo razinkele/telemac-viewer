@@ -363,7 +363,10 @@ def evaluate_expression(
         raise ValueError(f"Syntax error in expression: {e}") from e
 
     result = _ast_eval(tree.body, namespace)
-    return np.asarray(result, dtype=np.float32)[:npoin]
+    result_arr = np.asarray(result, dtype=np.float32)
+    if result_arr.ndim == 0:
+        return np.full(npoin, result_arr.item(), dtype=np.float32)
+    return result_arr[:npoin]
 
 
 def _ast_eval(node, ns):
@@ -611,8 +614,11 @@ def polygon_zonal_stats(
     for ei in range(len(ikle)):
         n0, n1, n2 = ikle[ei]
         if n0 in inside_set and n1 in inside_set and n2 in inside_set:
+            v0, v1, v2 = values[n0], values[n1], values[n2]
+            if np.isnan(v0) or np.isnan(v1) or np.isnan(v2):
+                continue
             a = float(elem_areas[ei])
-            v_avg = float(values[n0] + values[n1] + values[n2]) / 3.0
+            v_avg = float(v0 + v1 + v2) / 3.0
             weighted_sum += v_avg * a
             total_area_elem += a
     weighted_mean = weighted_sum / total_area_elem if total_area_elem > 0 else float(np.nanmean(vals_inside))
@@ -829,8 +835,15 @@ def generate_seed_grid(
     dx = xmax - xmin
     dy = ymax - ymin
     aspect = dx / dy if dy > 0 else 1.0
+    aspect = max(0.01, min(aspect, 10000.0))  # clamp extreme ratios
     ny = max(2, int(np.sqrt(n_target / aspect)))
     nx = max(2, int(ny * aspect))
+    # Cap total grid points to prevent memory explosion on degenerate meshes
+    max_total = n_target * 4
+    if nx * ny > max_total:
+        scale = np.sqrt(max_total / (nx * ny))
+        nx = max(2, int(nx * scale))
+        ny = max(2, int(ny * scale))
 
     gx = np.linspace(xmin + dx * 0.05, xmax - dx * 0.05, nx)
     gy = np.linspace(ymin + dy * 0.05, ymax - dy * 0.05, ny)
