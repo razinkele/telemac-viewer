@@ -16,7 +16,8 @@ def hecras_to_telemac(
 ) -> None:
     """Convert HEC-RAS geometry to TELEMAC simulation files.
 
-    Produces {name}.slf, {name}.cli, {name}.cas in output_dir.
+    Produces {name}.slf, {name}.cli, {name}.cas (and {name}.liq if BC
+    timeseries are available) in output_dir.
 
     Parameters
     ----------
@@ -31,6 +32,9 @@ def hecras_to_telemac(
     from telemac_tools.hecras.parser_2d import triangulate_2d_area
 
     model = parse_hecras(hecras_path)
+
+    # Try to extract BC timeseries from companion .u##.hdf file
+    _enrich_bc_timeseries(model, hecras_path)
 
     if model.areas_2d:
         mesh = triangulate_2d_area(model.areas_2d[0])
@@ -53,4 +57,46 @@ def hecras_to_telemac(
         raise ValueError("No 1D or 2D geometry found in HEC-RAS file")
 
     write_telemac(mesh, domain, output_dir, name=name,
-                  duration=duration, cas_overrides=cas_overrides)
+                  duration=duration, cas_overrides=cas_overrides,
+                  boundaries=model.boundaries)
+
+
+def _enrich_bc_timeseries(model, hecras_path: str) -> None:
+    """Try to populate BC timeseries from the companion unsteady flow HDF5.
+
+    HEC-RAS geometry files are typically .g01.hdf; the unsteady flow file
+    is .p01.hdf or .u01.hdf in the same directory. We try several patterns.
+    """
+    import os
+    import glob as _glob
+
+    base_dir = os.path.dirname(hecras_path)
+    stem = os.path.basename(hecras_path).split(".")[0]  # "project"
+
+    # Look for unsteady flow files (.u##.hdf or .p##.hdf)
+    candidates = (
+        _glob.glob(os.path.join(base_dir, f"{stem}.u*.hdf")) +
+        _glob.glob(os.path.join(base_dir, f"{stem}.p*.hdf"))
+    )
+    if not candidates:
+        return
+
+    try:
+        from telemac_tools.hecras.parser_bc import parse_bc_timeseries
+        parsed_bcs = parse_bc_timeseries(candidates[0])
+    except Exception:
+        return
+
+    if not parsed_bcs:
+        return
+
+    # Match parsed BCs to model boundaries by location
+    for model_bc in model.boundaries:
+        if model_bc.timeseries is not None:
+            continue
+        for parsed_bc in parsed_bcs:
+            if (parsed_bc.timeseries is not None and
+                    parsed_bc.location.lower() == model_bc.location.lower()):
+                model_bc.timeseries = parsed_bc.timeseries
+                model_bc.bc_type = parsed_bc.bc_type
+                break

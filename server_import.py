@@ -94,12 +94,17 @@ def register_import_handlers(input, output, session):
         out = import_output_dir.get()
         if out is None:
             return ui.span("No output yet", class_="small text-muted")
-        return ui.div(
+        buttons = [
             ui.download_button("dl_slf", "Download .slf", class_="btn-sm btn-outline-primary me-1"),
             ui.download_button("dl_cli", "Download .cli", class_="btn-sm btn-outline-primary me-1"),
-            ui.download_button("dl_cas", "Download .cas", class_="btn-sm btn-outline-primary"),
-            class_="d-flex gap-1",
-        )
+            ui.download_button("dl_cas", "Download .cas", class_="btn-sm btn-outline-primary me-1"),
+        ]
+        liq_path = _import_file_path(".liq")
+        if liq_path:
+            buttons.append(
+                ui.download_button("dl_liq", "Download .liq", class_="btn-sm btn-outline-success"),
+            )
+        return ui.div(*buttons, class_="d-flex gap-1")
 
     @render.download(filename=lambda: _import_filename(".slf"))
     def dl_slf():
@@ -118,6 +123,13 @@ def register_import_handlers(input, output, session):
     @render.download(filename=lambda: _import_filename(".cas"))
     def dl_cas():
         path = _import_file_path(".cas")
+        if path:
+            with open(path, "rb") as f:
+                yield f.read()
+
+    @render.download(filename=lambda: _import_filename(".liq"))
+    def dl_liq():
+        path = _import_file_path(".liq")
         if path:
             with open(path, "rb") as f:
                 yield f.read()
@@ -329,6 +341,8 @@ def register_import_handlers(input, output, session):
             _append_log(f"  {hdf_name}.slf — mesh + variables")
             _append_log(f"  {hdf_name}.cli — boundary conditions")
             _append_log(f"  {hdf_name}.cas — steering file")
+            if _os.path.isfile(_os.path.join(out_dir, f"{hdf_name}.liq")):
+                _append_log(f"  {hdf_name}.liq — liquid boundary time series")
 
             # Count mesh stats
             from data_manip.extraction.telemac_file import TelemacFile
