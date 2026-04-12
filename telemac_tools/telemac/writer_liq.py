@@ -55,8 +55,20 @@ def write_liq(
     for i, bc in enumerate(ts_bcs):
         header, unit = _liq_column_name(bc, i)
         ts = bc.timeseries
-        values = np.interp(common_times, ts["time"], ts["values"])
-        columns.append((header, unit, values))
+        times = np.asarray(ts["time"], dtype=np.float64)
+        values = np.asarray(ts["values"], dtype=np.float64)
+        # Sort by time and deduplicate (keep last value for duplicate times)
+        order = np.argsort(times, kind="stable")
+        times = times[order]
+        values = values[order]
+        _, unique_idx = np.unique(times, return_index=True)
+        # For duplicates, keep last occurrence: use reverse-unique trick
+        _, last_idx = np.unique(times[::-1], return_index=True)
+        last_idx = len(times) - 1 - last_idx
+        times = times[last_idx]
+        values = values[last_idx]
+        interp_vals = np.interp(common_times, times, values)
+        columns.append((header, unit, interp_vals))
 
     # Write file
     col_width = 14

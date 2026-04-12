@@ -32,7 +32,10 @@ def parse_observation_csv(file_path: str) -> tuple[ndarray, ndarray, str]:
     varname = ""
     with open(file_path, "r", newline="") as f:
         reader = csv.reader(f)
-        header = next(reader)
+        try:
+            header = next(reader)
+        except StopIteration:
+            raise ValueError("CSV file is empty")
         if len(header) < 2:
             raise ValueError("CSV must have at least 2 columns (time, value)")
         varname = header[1].strip()
@@ -140,7 +143,19 @@ def parse_liq_file(liq_path):
         units = lines[1].split()
         data_lines = lines[2:]
         ncols = len(headers)
-        data = np.array([[float(x) for x in line.split()[:ncols]] for line in data_lines])
+        rows = []
+        for line in data_lines:
+            parts = line.split()
+            if len(parts) < ncols:
+                _logger.warning("Skipping .liq row with %d columns (expected %d): %s",
+                                len(parts), ncols, line[:60])
+                continue
+            try:
+                rows.append([float(x) for x in parts[:ncols]])
+            except ValueError:
+                _logger.warning("Skipping .liq row with non-numeric value: %s", line[:60])
+                continue
+        data = np.array(rows) if rows else np.empty((0, ncols))
         if data.size == 0:
             return None
         times = data[:, 0]

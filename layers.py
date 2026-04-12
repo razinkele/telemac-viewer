@@ -101,6 +101,7 @@ def build_velocity_layer(tf: TelemacFileProtocol, time_idx: int, geom: MeshGeome
 
     extent = max(float(x[:npoin].max() - x[:npoin].min()),
                  float(y[:npoin].max() - y[:npoin].min()), 1.0)
+    # Scale arrows so the longest is ~1/30th of the mesh extent
     arrow_scale = extent / (max_mag * 30)
 
     arrows = []
@@ -197,9 +198,10 @@ def build_contour_layer_fn(tf: TelemacFileProtocol, values: np.ndarray, geom: Me
         pts_y = np.column_stack([py01[idx], py12[idx], py20[idx]])  # (n, 3)
         mask = np.column_stack([c01[idx], c12[idx], c20[idx]])      # (n, 3) bool
 
-        # For each row, pick the 2 True columns
-        # Since exactly 2 are True, argmax on cumsum gives the first,
-        # and flip+argmax gives the second
+        # For each row, pick the 2 True columns.
+        # Since exactly 2 are True (normal case), argmax on cumsum gives the first,
+        # and flip+argmax gives the second. In rare saddle-point cases (all 3 True),
+        # this picks columns 0 and 2, drawing a valid but simplified contour segment.
         first = np.argmax(mask, axis=1)
         flipped = mask[:, ::-1]
         last = 2 - np.argmax(flipped, axis=1)

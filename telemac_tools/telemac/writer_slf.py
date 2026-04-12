@@ -90,16 +90,17 @@ def write_slf(
     slf.fole = {"name": path, "endian": ">", "float": ("f", 4)}
     slf.fole["hook"] = open(path, "wb")
 
-    # Write header
-    slf.append_header_slf()
+    try:
+        # Write header
+        slf.append_header_slf()
 
-    # Build variable arrays for timestep 0
-    bottom = mesh.elevation.astype(np.float32)
-    friction = mesh.mannings_n.astype(np.float32)
-    depth = np.full(npoin, init_depth, dtype=np.float32)
-    surface = bottom + depth
+        # Build variable arrays for timestep 0
+        bottom = mesh.elevation.astype(np.float32)
+        friction = mesh.mannings_n.astype(np.float32)
+        depth = np.full(npoin, init_depth, dtype=np.float32)
+        surface = bottom + depth
 
-    slf.append_core_time_slf(0.0)
-    slf.append_core_vars_slf([bottom, friction, depth, surface])
-
-    slf.fole["hook"].close()
+        slf.append_core_time_slf(0.0)
+        slf.append_core_vars_slf([bottom, friction, depth, surface])
+    finally:
+        slf.fole["hook"].close()

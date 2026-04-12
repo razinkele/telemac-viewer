@@ -128,17 +128,44 @@ def register_analysis_handlers(
             if pts:
                 last_pt = pts[-1]
                 model_times, model_values = time_series_at_point(tf, var, last_pt[0], last_pt[1])
-                model_interp = np.interp(obs_times, model_times, model_values)
-                rmse = compute_rmse(model_interp, obs_values)
-                nse = compute_nse(model_interp, obs_values)
-                fig.add_annotation(
-                    text=f"RMSE={rmse:.4f}  NSE={nse:.4f}",
-                    xref="paper", yref="paper",
-                    x=0.02, y=0.98,
-                    showarrow=False,
-                    font=dict(size=11, color="red"),
-                    bgcolor="rgba(255,255,255,0.8)",
-                )
+                # Crop to overlapping time window to avoid clamped interpolation
+                t_lo = max(float(obs_times[0]), float(model_times[0]))
+                t_hi = min(float(obs_times[-1]), float(model_times[-1]))
+                if t_hi > t_lo:
+                    mask = (obs_times >= t_lo) & (obs_times <= t_hi)
+                    obs_t_overlap = obs_times[mask]
+                    obs_v_overlap = obs_values[mask]
+                    if len(obs_t_overlap) >= 2:
+                        model_interp = np.interp(obs_t_overlap, model_times, model_values)
+                        rmse = compute_rmse(model_interp, obs_v_overlap)
+                        nse = compute_nse(model_interp, obs_v_overlap)
+                        partial = "" if mask.all() else " (overlap only)"
+                        fig.add_annotation(
+                            text=f"RMSE={rmse:.4f}  NSE={nse:.4f}{partial}",
+                            xref="paper", yref="paper",
+                            x=0.02, y=0.98,
+                            showarrow=False,
+                            font=dict(size=11, color="red"),
+                            bgcolor="rgba(255,255,255,0.8)",
+                        )
+                    else:
+                        fig.add_annotation(
+                            text="Too few overlapping points for metrics",
+                            xref="paper", yref="paper",
+                            x=0.02, y=0.98,
+                            showarrow=False,
+                            font=dict(size=11, color="orange"),
+                            bgcolor="rgba(255,255,255,0.8)",
+                        )
+                else:
+                    fig.add_annotation(
+                        text="No time overlap between model and obs",
+                        xref="paper", yref="paper",
+                        x=0.02, y=0.98,
+                        showarrow=False,
+                        font=dict(size=11, color="orange"),
+                        bgcolor="rgba(255,255,255,0.8)",
+                    )
         fig.update_layout(
             xaxis_title="Time (s)", yaxis_title=var,
             margin=dict(l=50, r=20, t=10, b=40), height=220,
@@ -377,8 +404,18 @@ def register_analysis_handlers(
                                      duration=None, id="particle_notif")
                 loop = asyncio.get_running_loop()
                 x_off, y_off = geom.x_off, geom.y_off
-                paths = await loop.run_in_executor(
-                    None, _run_with_lock, compute_particle_paths, tf, seeds, x_off, y_off)
+                try:
+                    paths = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None, _run_with_lock, compute_particle_paths,
+                            tf, seeds, x_off, y_off),
+                        timeout=300)
+                except asyncio.TimeoutError:
+                    ui.notification_remove("particle_notif")
+                    ui.notification_show(
+                        "Particle tracing timed out after 5 minutes",
+                        type="error", duration=8)
+                    return
                 particle_paths.set(paths)
                 ui.notification_remove("particle_notif")
                 ui.notification_show(f"Computed {len(paths)} particle paths", duration=3)

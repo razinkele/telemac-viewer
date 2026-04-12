@@ -612,8 +612,7 @@ def polygon_zonal_stats(
         n0, n1, n2 = ikle[ei]
         if n0 in inside_set and n1 in inside_set and n2 in inside_set:
             a = float(elem_areas[ei])
-            v_avg = (float(vals_inside[0]) if False else
-                     float(values[n0] + values[n1] + values[n2]) / 3.0)
+            v_avg = float(values[n0] + values[n1] + values[n2]) / 3.0
             weighted_sum += v_avg * a
             total_area_elem += a
     weighted_mean = weighted_sum / total_area_elem if total_area_elem > 0 else float(np.nanmean(vals_inside))

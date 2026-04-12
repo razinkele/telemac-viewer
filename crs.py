@@ -62,6 +62,9 @@ _NUMZONE_KEYWORDS = re.compile(
 
 def _geosyst_to_epsg(geosyst: int, numzone: int) -> int | None:
     """Map TELEMAC GEOGRAPHIC SYSTEM code to EPSG."""
+    if geosyst in (2, 3) and not (1 <= numzone <= 60):
+        _logger.warning("UTM zone %d out of range [1,60] for geosyst %d", numzone, geosyst)
+        return None
     _GEOSYST_MAP: dict[int, int | None] = {
         1: 4326,
         2: 32600 + numzone,  # UTM North
@@ -99,6 +102,8 @@ def detect_crs_from_cas(cas_path: str) -> CRS | None:
     geosyst = int(geo_match.group(1))
     zone_match = _NUMZONE_KEYWORDS.search(clean)
     numzone = int(zone_match.group(1)) if zone_match else 0
+    if geosyst in (2, 3) and numzone == 0:
+        _logger.warning("UTM geosyst %d found but ZONE NUMBER is missing in .cas", geosyst)
 
     epsg = _geosyst_to_epsg(geosyst, numzone)
     if epsg is None:
@@ -139,7 +144,8 @@ def click_to_native(lon: float, lat: float, geom: Any) -> tuple[float, float]:
     """Convert deck.gl click coordinates to native CRS meters.
 
     When CRS is set, deck.gl reports real lon/lat — use pyproj inverse.
-    When CRS is None, fall back to _M2D approximation (old behavior).
+    When CRS is None, fall back to _M2D approximation which reverses
+    the meters-to-degrees scaling applied in build_mesh_geometry.
     """
     crs = geom.crs
     if crs is not None:

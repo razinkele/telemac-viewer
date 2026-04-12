@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 import functools
+import logging
 import numpy as np
 
 _HOMETEL = os.environ.get("HOMETEL", "/home/razinka/telemac/telemac-v8p5r1")
@@ -128,7 +129,11 @@ def cached_palette_arr(palette_id: str, reverse: bool = False) -> np.ndarray:
     if palette_id == "_diverging":
         arr = np.array(color_range(256, PALETTE_DIVERGING), dtype=np.uint8)
     else:
-        palette = PALETTES[palette_id]
+        palette = PALETTES.get(palette_id)
+        if palette is None:
+            _logger = logging.getLogger(__name__)
+            _logger.warning("Unknown palette '%s', falling back to 'Viridis'", palette_id)
+            palette = PALETTES["Viridis"]
         arr = np.array(color_range(256, palette), dtype=np.uint8)
     if reverse:
         arr = arr[::-1].copy()

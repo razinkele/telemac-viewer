@@ -6,6 +6,7 @@ import math
 import os as _os
 import shutil
 
+import numpy as np
 from shiny import reactive, render, ui
 from shinywidgets import render_widget
 from shiny_deckgl import (
@@ -141,8 +142,12 @@ def register_import_handlers(input, output, session):
         layers = []
 
         for reach in model.rivers:
-            # River alignment (cyan path)
-            path = [[float(p[0] - x_off), float(p[1] - y_off)] for p in reach.alignment]
+            # River alignment (cyan path) — skip NaN/Inf coordinates
+            path = []
+            for p in reach.alignment:
+                px, py = float(p[0] - x_off), float(p[1] - y_off)
+                if np.isfinite(px) and np.isfinite(py):
+                    path.append([px, py])
             layers.append(path_layer(
                 f"alignment-{reach.name}",
                 [{"path": path}],
@@ -347,9 +352,11 @@ def register_import_handlers(input, output, session):
             # Count mesh stats
             from data_manip.extraction.telemac_file import TelemacFile
             tf = TelemacFile(_os.path.join(out_dir, f"{hdf_name}.slf"))
-            _append_log(f"\nMesh: {tf.npoin2} nodes, {tf.nelem2} elements")
-            _append_log(f"Variables: {', '.join(tf.varnames)}")
-            tf.close()
+            try:
+                _append_log(f"\nMesh: {tf.npoin2} nodes, {tf.nelem2} elements")
+                _append_log(f"Variables: {', '.join(tf.varnames)}")
+            finally:
+                tf.close()
 
             _append_log("\nConversion complete. Use Download buttons below.")
 

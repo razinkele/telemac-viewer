@@ -1,6 +1,7 @@
 """Domain builder: HEC-RAS model + DEM -> TelemacDomain."""
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 
 import numpy as np
@@ -95,7 +96,13 @@ def sample_dem(
         fill_value=np.nan,
     )
     pts = np.column_stack([y, x])
-    return interp(pts)
+    z = interp(pts)
+    n_nan = int(np.isnan(z).sum())
+    if n_nan > 0:
+        logging.getLogger(__name__).warning(
+            "DEM sampling: %d of %d points outside raster extent (NaN)",
+            n_nan, len(z))
+    return z
 
 
 # ---------------------------------------------------------------------------

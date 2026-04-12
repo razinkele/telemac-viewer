@@ -40,6 +40,7 @@ def register_playback_handlers(input, output, session, playing, tel_file, curren
         if not playing.get():
             return
         speed = input.speed() if input.speed() is not None else 0.5
+        speed = max(0.1, min(10.0, float(speed)))
         reactive.invalidate_later(speed)
         tf = tel_file()
         n = len(tf.times)

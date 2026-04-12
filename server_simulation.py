@@ -95,6 +95,11 @@ def register_simulation_handlers(input, output, session, use_upload=None):
                 sim_running.set(False)
                 return
             env_script = _os.path.join(hometel, "configs/pysource.local.sh")
+            if not _os.path.isfile(env_script):
+                sim_output.set(sim_output.get() +
+                               f"ERROR: pysource.local.sh not found at {env_script}\n")
+                sim_running.set(False)
+                return
             shell_cmd = (f"source {shlex.quote(env_script)} && "
                          f"cd {shlex.quote(cas_dir)} && "
                          f"{shlex.quote(runner)} {shlex.quote(cas_name)} "
@@ -107,35 +112,53 @@ def register_simulation_handlers(input, output, session, use_upload=None):
             sim_process.set(proc)
 
             # Read output incrementally, capped at 500 lines
+            _READLINE_TIMEOUT = 120  # seconds of inactivity before timeout
             lines_buf = [sim_output.get()]
             line_count = 0
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                lines_buf.append(line.decode())
-                line_count += 1
-                if len(lines_buf) > 500:
-                    lines_buf = lines_buf[-500:]
-                if line_count % 10 == 0:
-                    sim_output.set("".join(lines_buf))
-                    await reactive.flush()
+            try:
+                while True:
+                    line = await asyncio.wait_for(
+                        proc.stdout.readline(), timeout=_READLINE_TIMEOUT)
+                    if not line:
+                        break
+                    lines_buf.append(line.decode())
+                    line_count += 1
+                    if len(lines_buf) > 500:
+                        lines_buf = lines_buf[-500:]
+                    if line_count % 10 == 0:
+                        sim_output.set("".join(lines_buf))
+                        await reactive.flush()
+            except asyncio.TimeoutError:
+                lines_buf.append(
+                    f"\n--- No output for {_READLINE_TIMEOUT}s, killing process ---\n")
+                proc.kill()
             await proc.wait()
             lines_buf.append(f"\n--- Process exited with code {proc.returncode} ---\n")
             sim_output.set("".join(lines_buf))
         except Exception as e:
             sim_output.set(sim_output.get() + f"\nERROR: {e}\n")
+            # Kill process on any exception to avoid orphans
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                await proc.wait()
         finally:
             sim_running.set(False)
             sim_process.set(None)
 
     @reactive.effect
     @reactive.event(input.stop_sim)
-    def handle_stop_sim():
+    async def handle_stop_sim():
         proc = sim_process.get()
         if proc and proc.returncode is None:
             proc.terminate()
-            sim_output.set(sim_output.get() + "\n--- Terminated by user ---\n")
+            sim_output.set(sim_output.get() + "\n--- Terminating... ---\n")
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                sim_output.set(sim_output.get() + "--- Force killed ---\n")
+            sim_output.set(sim_output.get() + "--- Terminated by user ---\n")
             sim_running.set(False)
             sim_process.set(None)
         else:

@@ -84,7 +84,10 @@ def _enrich_bc_timeseries(model, hecras_path: str) -> None:
     try:
         from telemac_tools.hecras.parser_bc import parse_bc_timeseries
         parsed_bcs = parse_bc_timeseries(candidates[0])
-    except Exception:
+    except (OSError, ImportError, ValueError, KeyError) as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Could not parse BC timeseries from %s: %s", candidates[0], exc)
         return
 
     if not parsed_bcs:

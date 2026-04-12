@@ -1,6 +1,8 @@
 """Parse 2D HEC-RAS geometry from HDF5 (.g01.hdf) files."""
 from __future__ import annotations
 
+import logging
+
 import h5py
 import numpy as np
 from scipy.interpolate import NearestNDInterpolator
@@ -12,6 +14,8 @@ from telemac_tools.model import (
     HecRasParseError,
     Mesh2D,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def parse_hecras_2d(path: str) -> HecRasModel:
@@ -62,7 +66,16 @@ def parse_hecras_2d(path: str) -> HecRasModel:
             # Cell face point indices: may be a padded 2D array (N, max_faces)
             # with -1 sentinels, or a flat 1D array read via offset/count.
             if "Cells FacePoint Indexes" in item:
-                raw_cfpi = item["Cells FacePoint Indexes"][:].astype(int)
+                raw_idx = item["Cells FacePoint Indexes"][:]
+                # Validate uint64 won't overflow int32
+                if raw_idx.dtype == np.uint64 and raw_idx.size > 0:
+                    max_val = int(raw_idx.max())
+                    if max_val >= 2**31:
+                        _logger.warning(
+                            "Area %s: face-point index %d overflows int32, skipping",
+                            name, max_val)
+                        continue
+                raw_cfpi = raw_idx.astype(int)
             elif "Faces FacePoint Indexes" in item:
                 raw_cfpi = None  # will use face-based reconstruction below
             else:
@@ -169,14 +182,21 @@ def triangulate_2d_area(area: HecRas2DArea) -> Mesh2D:
     # Fan-triangulate each cell
     triangles: list[list[int]] = []
     for cell_idx, cell in enumerate(area.cells):
+        if cell_idx >= n_cc:
+            break  # more cells than cell_centers
         center_node = n_fp + cell_idx  # index into nodes array
         fp_indices = cell.face_point_indices
         n = len(fp_indices)
+        if n < 3:
+            continue
+        # Validate all face-point indices are in range
+        if any(idx < 0 or idx >= n_fp for idx in fp_indices):
+            continue
         for j in range(n):
             j_next = (j + 1) % n
             triangles.append([center_node, fp_indices[j], fp_indices[j_next]])
 
-    elements = np.array(triangles, dtype=np.int32)
+    elements = np.array(triangles, dtype=np.int32) if triangles else np.empty((0, 3), dtype=np.int32)
 
     # Interpolate elevation from cell centers to all nodes
     if area.elevation is not None:

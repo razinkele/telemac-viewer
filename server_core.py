@@ -217,9 +217,9 @@ def register_core_handlers(
         tf = tel_file()
         crs = current_crs.get()
         try:
-            x_offset = input.crs_x_offset() or 0
-            y_offset = input.crs_y_offset() or 0
-        except (TypeError, AttributeError, KeyError):
+            x_offset = float(input.crs_x_offset() or 0)
+            y_offset = float(input.crs_y_offset() or 0)
+        except (TypeError, AttributeError, KeyError, ValueError):
             x_offset, y_offset = 0, 0
         origin_offset = (x_offset, y_offset)
         if is_3d_mode.get() and tf.nplan > 1:
@@ -282,6 +282,8 @@ def register_core_handlers(
             ui.notification_show(
                 f"Could not extract layer {layer} — showing full data",
                 type="warning", duration=5)
+            # Return truncated 2D slice to avoid shape mismatch downstream
+            return vals[:tf.npoin2] if len(vals) > tf.npoin2 else vals
         return vals
 
     # -- Topology-only reactive calcs (independent of timestep) --

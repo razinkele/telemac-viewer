@@ -74,6 +74,8 @@ class Mesh2D:
             raise ValueError(f"mannings_n length {len(self.mannings_n)} != node count {n}")
         if self.elements.size > 0 and int(self.elements.max()) >= n:
             raise ValueError(f"element index {int(self.elements.max())} >= node count {n}")
+        if self.elements.size > 0 and int(self.elements.min()) < 0:
+            raise ValueError(f"negative element index {int(self.elements.min())}")
 
 
 @dataclass
