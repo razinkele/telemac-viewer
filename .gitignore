@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+
+.coverage
+nid4ocean.nginx
+shiny-server.conf
+telemac.pth
+twoprod.o
