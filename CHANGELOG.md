@@ -4,6 +4,40 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-04-17
+
+### Added
+- **Mesh identity hash** (`mesh_identity_hash`) for compare-overlay: SHA1 over node coordinates and connectivity rejects files whose mesh differs beyond count, preventing silent rendering of file B values on file A geometry.
+- **Barycentric point sampling for derived variables** in `time_series_at_point`: computes the derived field (e.g. VELOCITY MAGNITUDE) at all mesh nodes per timestep, then barycentric-interpolates at the point — matching map-layer semantics. Falls back to nearest node when the point lies outside the mesh.
+- **Volume fallback** `depth = FREE SURFACE − BOTTOM`: when no water-depth variable is present, `compute_volume_timeseries` now computes depth from available FS and BOTTOM variables (logged once). Previously FREE SURFACE was incorrectly used as depth directly.
+- **French depth variable fallback** (`HAUTEUR D'EAU`) for volume conservation on French TELEMAC outputs (Round 11).
+- **`.liq` liquid boundary file writer** for the HEC-RAS import pipeline.
+- **`release.py` CLI** for version bumping, commit parsing, and git tagging (supersedes legacy `bump_version.py`).
+
+### Fixed
+- FREE SURFACE no longer treated as water depth in volume computations or polygon flooded-fraction stats.
+- `compute_flood_duration` no longer double-counts the last interval (Round 11).
+- Parser bounds and OOB guards across HEC-RAS 1D/2D parsers (Rounds 7, 9, 12): `n_fp` undefined fix in `parser_2d`, 1D CFPI path bounds check, `fp < n_fp` in faces reconstruction, required-dataset validation, polyline offset/count bounds.
+- Alignment guard against fewer-than-2 points; cross-section profile guard against empty/sparse polylines (Round 13).
+- Apostrophes in `.cas` string values now properly escaped (Round 13).
+- NaN prescribed head replaced with 0.0 in `.cli` writer to avoid invalid output (Round 12).
+- Filter UI handles infinite values gracefully — falls back to 0–1 (Round 12).
+- Mesh edge cases hardened: empty mesh, all-NaN extrema, empty time-series, empty polygon zonal stats (Round 8).
+- Notification leaks, empty-dict guards, ConvexHull OOB, out-of-bounds filter behavior (Round 7).
+- Path-traversal fix in file-selection; element-area-weighted flooded stats; list-growth cap (Round 6).
+- `writer_cas` now skips `None` overrides and auto-quotes unquoted string values (Round 9).
+- Rounds 2–5 also addressed 48 additional issues across the viewer (detail preserved in commit history).
+
+### Changed
+- `_silent_div` / `_silent_mod` / `_silent_floordiv` wrap `np.errstate` so user expressions like `Q / 0` yield `inf` silently instead of emitting `RuntimeWarning`.
+- `polygon_zonal_stats` silences expected all-NaN and empty-slice warnings where the existing fallback is correct.
+- `build_mesh_layer` silences expected all-NaN slice warning when coloring inactive/empty meshes.
+- `bump_version.py` removed (superseded by `release.py`).
+
+### Tests
+- Added `tests/test_round14_review_fixes.py`: 8 tests covering mesh identity hash, volume FS/BOTTOM fallback, and barycentric-vs-nearest derived point sampling.
+- Total suite: **429 tests**. `pytest -W error::RuntimeWarning` is now clean apart from one external `shinywidgets` DeprecationWarning.
+
 ## [3.1.0] - 2026-04-09
 
 ### Refactored

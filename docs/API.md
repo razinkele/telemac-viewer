@@ -128,13 +128,14 @@ All layer builders return dict-based layer specifications for shiny-deckgl's `Ma
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `nearest_node` | `(tf, x_m, y_m) -> (idx, x, y)` | Find nearest mesh node to a point. |
-| `time_series_at_point` | `(tf, varname, x_m, y_m) -> (times, values)` | Extract time series at nearest node. |
+| `time_series_at_point` | `(tf, varname, x_m, y_m) -> (times, values)` | Extract time series at a point. Raw variables use TELEMAC's built-in interpolation; derived variables (since 3.2.0) use barycentric interpolation within the enclosing triangle — consistent with the map layer. Falls back to nearest node outside the mesh. |
 | `cross_section_profile` | `(tf, varname, record, polyline_m) -> (abscissa, values)` | Interpolate values along a polyline. |
 | `vertical_profile_at_point` | `(tf, varname, tidx, x_m, y_m) -> (elevations, values, layer_name)` | Extract vertical profile for 3D results. |
 | `polygon_zonal_stats` | `(tf, values, polygon_m) -> dict` | Compute min, max, mean, std, area within a polygon. |
 | `find_boundary_nodes` | `(tf) -> list[int]` | Identify boundary nodes from mesh topology. |
 | `find_boundary_edges` | `(tf) -> (keys, nodes_a, nodes_b)` | Find boundary edges with node indices. |
 | `find_extrema` | `(tf, values) -> dict` | Locate min and max value positions on mesh. |
+| `mesh_identity_hash` | `(tf) -> str` | 12-char SHA1 digest over `(x, y, ikle)`. Identical meshes produce identical hashes; any difference — including float noise from re-export — yields a different hash. Used by compare-overlay to reject non-identical geometry (added 3.2.0). |
 
 ### Discharge and Volume
 
@@ -142,7 +143,7 @@ All layer builders return dict-based layer specifications for shiny-deckgl's `Ma
 |----------|-----------|-------------|
 | `compute_discharge` | `(tf, tidx, polyline_m) -> dict` | Integrate flow rate (Q) across a polyline. Returns dict with `discharge`, `width`, `mean_depth`, `mean_velocity`. |
 | `compute_mesh_integral` | `(tf, values, threshold) -> dict` | Area-weighted integral over mesh. Returns `integral`, `area`, `mean`. |
-| `compute_volume_timeseries` | `(tf, compute_integral_fn) -> (times, volumes)` | Water volume at each timestep (in `validation.py`). |
+| `compute_volume_timeseries` | `(tf, compute_integral_fn) -> (times, volumes)` | Water volume at each timestep (in `validation.py`). Searches `WATER DEPTH` / `HAUTEUR D'EAU` / `WATER DEPTH M`; falls back to `FREE SURFACE − BOTTOM` (logged once) if no depth variable is present. Never treats `FREE SURFACE` alone as depth — that is bottom + depth, not depth (since 3.2.0). |
 
 ### Mesh Diagnostics
 
