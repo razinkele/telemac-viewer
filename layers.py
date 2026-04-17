@@ -1,5 +1,6 @@
 # layers.py
 from __future__ import annotations
+import warnings
 import numpy as np
 from viewer_types import MeshGeometry, TelemacFileProtocol
 from shiny_deckgl import (
@@ -21,16 +22,27 @@ _GRAY = np.array([0.85, 0.85, 0.85], dtype=np.float32)
 _WIRE_COLOR = [100, 100, 100, 80]
 
 
-def build_mesh_layer(geom: MeshGeometry, values: np.ndarray, palette_id: str,
-                     filter_range: tuple[float, float] | None = None,
-                     color_range_override: tuple[float, float] | None = None,
-                     log_scale: bool = False,
-                     reverse_palette: bool = False,
-                     origin: list[float] | None = None) -> tuple[dict, float, float, bool]:
+def build_mesh_layer(
+    geom: MeshGeometry,
+    values: np.ndarray,
+    palette_id: str,
+    filter_range: tuple[float, float] | None = None,
+    color_range_override: tuple[float, float] | None = None,
+    log_scale: bool = False,
+    reverse_palette: bool = False,
+    origin: list[float] | None = None,
+) -> tuple[dict, float, float, bool]:
     """Build SimpleMeshLayer with per-vertex coloring and optional value filter."""
     npoin = geom.npoin
 
-    vmin, vmax = float(np.nanmin(values[:npoin])), float(np.nanmax(values[:npoin]))
+    # All-NaN slice is valid input (empty/inactive mesh coloring) — the
+    # isnan fallback below handles it, so silence the warning.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="All-NaN slice encountered")
+        vmin, vmax = (
+            float(np.nanmin(values[:npoin])),
+            float(np.nanmax(values[:npoin])),
+        )
     if np.isnan(vmin):
         vmin, vmax = 0.0, 1.0
     if color_range_override is not None:
@@ -78,8 +90,12 @@ def build_mesh_layer(geom: MeshGeometry, values: np.ndarray, palette_id: str,
     return lyr, vmin, vmax, log_applied
 
 
-def build_velocity_layer(tf: TelemacFileProtocol, time_idx: int, geom: MeshGeometry,
-                         origin: list[float] | None = None) -> dict | None:
+def build_velocity_layer(
+    tf: TelemacFileProtocol,
+    time_idx: int,
+    geom: MeshGeometry,
+    origin: list[float] | None = None,
+) -> dict | None:
     """Build velocity arrow layer from U/V components."""
     pair = find_velocity_pair(tf.varnames)
     if pair is None:
@@ -91,7 +107,7 @@ def build_velocity_layer(tf: TelemacFileProtocol, time_idx: int, geom: MeshGeome
     npoin = tf.npoin2
     x_off, y_off = geom.x_off, geom.y_off
 
-    mag = np.sqrt(u[:npoin]**2 + v[:npoin]**2)
+    mag = np.sqrt(u[:npoin] ** 2 + v[:npoin] ** 2)
     max_mag = float(mag.max())
     if max_mag < 1e-10:
         return None
@@ -99,8 +115,11 @@ def build_velocity_layer(tf: TelemacFileProtocol, time_idx: int, geom: MeshGeome
     step = max(1, npoin // 1500)
     idx = np.arange(0, npoin, step)
 
-    extent = max(float(x[:npoin].max() - x[:npoin].min()),
-                 float(y[:npoin].max() - y[:npoin].min()), 1.0)
+    extent = max(
+        float(x[:npoin].max() - x[:npoin].min()),
+        float(y[:npoin].max() - y[:npoin].min()),
+        1.0,
+    )
     # Scale arrows so the longest is ~1/30th of the mesh extent
     arrow_scale = extent / (max_mag * 30)
 
@@ -110,11 +129,15 @@ def build_velocity_layer(tf: TelemacFileProtocol, time_idx: int, geom: MeshGeome
             continue
         sx = float(x[i] - x_off)
         sy = float(y[i] - y_off)
-        arrows.append({
-            "sourcePosition": [sx, sy],
-            "targetPosition": [sx + float(u[i] * arrow_scale),
-                               sy + float(v[i] * arrow_scale)],
-        })
+        arrows.append(
+            {
+                "sourcePosition": [sx, sy],
+                "targetPosition": [
+                    sx + float(u[i] * arrow_scale),
+                    sy + float(v[i] * arrow_scale),
+                ],
+            }
+        )
 
     if not arrows:
         return None
@@ -132,10 +155,15 @@ def build_velocity_layer(tf: TelemacFileProtocol, time_idx: int, geom: MeshGeome
     )
 
 
-def build_contour_layer_fn(tf: TelemacFileProtocol, values: np.ndarray, geom: MeshGeometry,
-                           n_contours: int = 6, layer_id: str = "contours",
-                           contour_color: list[int] | None = None,
-                           origin: list[float] | None = None) -> dict | None:
+def build_contour_layer_fn(
+    tf: TelemacFileProtocol,
+    values: np.ndarray,
+    geom: MeshGeometry,
+    n_contours: int = 6,
+    layer_id: str = "contours",
+    contour_color: list[int] | None = None,
+    origin: list[float] | None = None,
+) -> dict | None:
     """Build FEM-exact contour lines using marching triangles.
 
     Walks each triangle to find edges where the field value crosses
@@ -196,7 +224,7 @@ def build_contour_layer_fn(tf: TelemacFileProtocol, values: np.ndarray, geom: Me
         # Collect crossing coordinates for each edge at contour triangles
         pts_x = np.column_stack([px01[idx], px12[idx], px20[idx]])  # (n, 3)
         pts_y = np.column_stack([py01[idx], py12[idx], py20[idx]])  # (n, 3)
-        mask = np.column_stack([c01[idx], c12[idx], c20[idx]])      # (n, 3) bool
+        mask = np.column_stack([c01[idx], c12[idx], c20[idx]])  # (n, 3) bool
 
         # For each row, pick the 2 True columns.
         # Since exactly 2 are True (normal case), argmax on cumsum gives the first,
@@ -219,8 +247,10 @@ def build_contour_layer_fn(tf: TelemacFileProtocol, values: np.ndarray, geom: Me
     if not all_src:
         return None
 
-    lines = [{"sourcePosition": list(s), "targetPosition": list(t)}
-             for s, t in zip(all_src, all_tgt)]
+    lines = [
+        {"sourcePosition": list(s), "targetPosition": list(t)}
+        for s, t in zip(all_src, all_tgt)
+    ]
 
     return line_layer(
         layer_id,
@@ -235,8 +265,9 @@ def build_contour_layer_fn(tf: TelemacFileProtocol, values: np.ndarray, geom: Me
     )
 
 
-def build_marker_layer(x_m: float, y_m: float, layer_id: str = "marker",
-                       origin: list[float] | None = None) -> dict:
+def build_marker_layer(
+    x_m: float, y_m: float, layer_id: str = "marker", origin: list[float] | None = None
+) -> dict:
     """Build a single-point scatterplot layer to mark clicked location."""
     return scatterplot_layer(
         layer_id,
@@ -252,8 +283,9 @@ def build_marker_layer(x_m: float, y_m: float, layer_id: str = "marker",
     )
 
 
-def build_cross_section_layer(points_m: list[list[float]],
-                              origin: list[float] | None = None) -> dict:
+def build_cross_section_layer(
+    points_m: list[list[float]], origin: list[float] | None = None
+) -> dict:
     """Build a path layer showing the cross-section polyline on the map.
 
     points_m: list of [x, y] in meters relative to mesh center.
@@ -272,8 +304,12 @@ def build_cross_section_layer(points_m: list[list[float]],
     )
 
 
-def build_particle_layer(paths: list[list[list[float]]], current_time: float, trail_length: float,
-                         origin: list[float] | None = None) -> dict:
+def build_particle_layer(
+    paths: list[list[list[float]]],
+    current_time: float,
+    trail_length: float,
+    origin: list[float] | None = None,
+) -> dict:
     """Build a TripsLayer for particle trace animation.
 
     paths: list of particle trajectories, each is list of [x, y, timestamp].
@@ -292,8 +328,9 @@ def build_particle_layer(paths: list[list[list[float]]], current_time: float, tr
     )
 
 
-def build_wireframe_layer(tf: TelemacFileProtocol, geom: MeshGeometry,
-                          origin: list[float] | None = None) -> dict:
+def build_wireframe_layer(
+    tf: TelemacFileProtocol, geom: MeshGeometry, origin: list[float] | None = None
+) -> dict:
     """Build mesh wireframe as line segments (triangle edges)."""
     from analysis import compute_unique_edges
 
@@ -313,8 +350,10 @@ def build_wireframe_layer(tf: TelemacFileProtocol, geom: MeshGeometry,
     src_y = (y[a_idx] - y_off).tolist()
     tgt_x = (x[b_idx] - x_off).tolist()
     tgt_y = (y[b_idx] - y_off).tolist()
-    lines = [{"sourcePosition": [sx, sy], "targetPosition": [tx, ty]}
-             for sx, sy, tx, ty in zip(src_x, src_y, tgt_x, tgt_y)]
+    lines = [
+        {"sourcePosition": [sx, sy], "targetPosition": [tx, ty]}
+        for sx, sy, tx, ty in zip(src_x, src_y, tgt_x, tgt_y)
+    ]
 
     return line_layer(
         "wireframe",
@@ -329,69 +368,84 @@ def build_wireframe_layer(tf: TelemacFileProtocol, geom: MeshGeometry,
     )
 
 
-def build_extrema_markers(extrema: dict[str, tuple], x_off: float, y_off: float,
-                          origin: list[float] | None = None) -> list[dict]:
+def build_extrema_markers(
+    extrema: dict[str, tuple],
+    x_off: float,
+    y_off: float,
+    origin: list[float] | None = None,
+) -> list[dict]:
     """Build scatterplot markers for min/max value locations."""
     _colors = {"min": [0, 100, 255, 220], "max": [255, 50, 0, 220]}
     layers = []
     for key in ("min", "max"):
         _, x_m, y_m, val = extrema[key]
         color = _colors[key]
-        layers.append(scatterplot_layer(
-            f"extrema-{key}",
-            [{"position": [float(x_m - x_off), float(y_m - y_off)]}],
-            getPosition="@@=d.position",
-            getColor=color,
-            getRadius=12,
-            radiusMinPixels=8,
-            radiusMaxPixels=16,
-            stroked=True,
-            lineWidthMinPixels=2,
-            getFillColor=[255, 255, 255, 180],
-            getLineColor=color,
-            pickable=False,
-            coordinateSystem=_COORD_METER_OFFSETS,
-            coordinateOrigin=origin or [0, 0],
-        ))
+        layers.append(
+            scatterplot_layer(
+                f"extrema-{key}",
+                [{"position": [float(x_m - x_off), float(y_m - y_off)]}],
+                getPosition="@@=d.position",
+                getColor=color,
+                getRadius=12,
+                radiusMinPixels=8,
+                radiusMaxPixels=16,
+                stroked=True,
+                lineWidthMinPixels=2,
+                getFillColor=[255, 255, 255, 180],
+                getLineColor=color,
+                pickable=False,
+                coordinateSystem=_COORD_METER_OFFSETS,
+                coordinateOrigin=origin or [0, 0],
+            )
+        )
     return layers
 
 
-def build_measurement_layer(points_m: list[list[float]],
-                            origin: list[float] | None = None) -> list[dict]:
+def build_measurement_layer(
+    points_m: list[list[float]], origin: list[float] | None = None
+) -> list[dict]:
     """Build a line + endpoint markers for distance measurement."""
     layers = []
     if len(points_m) >= 2:
-        layers.append(line_layer(
-            "measurement-line",
-            [{"sourcePosition": points_m[0], "targetPosition": points_m[1]}],
-            getColor=[255, 165, 0, 220],
-            getWidth=3,
-            widthMinPixels=2,
-            widthMaxPixels=4,
-            pickable=False,
-            coordinateSystem=_COORD_METER_OFFSETS,
-            coordinateOrigin=origin or [0, 0],
-        ))
+        layers.append(
+            line_layer(
+                "measurement-line",
+                [{"sourcePosition": points_m[0], "targetPosition": points_m[1]}],
+                getColor=[255, 165, 0, 220],
+                getWidth=3,
+                widthMinPixels=2,
+                widthMaxPixels=4,
+                pickable=False,
+                coordinateSystem=_COORD_METER_OFFSETS,
+                coordinateOrigin=origin or [0, 0],
+            )
+        )
     for i, pt in enumerate(points_m):
-        layers.append(scatterplot_layer(
-            f"measure-pt-{i}",
-            [{"position": pt}],
-            getPosition="@@=d.position",
-            getColor=[255, 165, 0, 220],
-            getRadius=6,
-            radiusMinPixels=5,
-            radiusMaxPixels=10,
-            pickable=False,
-            coordinateSystem=_COORD_METER_OFFSETS,
-            coordinateOrigin=origin or [0, 0],
-        ))
+        layers.append(
+            scatterplot_layer(
+                f"measure-pt-{i}",
+                [{"position": pt}],
+                getPosition="@@=d.position",
+                getColor=[255, 165, 0, 220],
+                getRadius=6,
+                radiusMinPixels=5,
+                radiusMaxPixels=10,
+                pickable=False,
+                coordinateSystem=_COORD_METER_OFFSETS,
+                coordinateOrigin=origin or [0, 0],
+            )
+        )
     return layers
 
 
-def build_boundary_layer(tf: TelemacFileProtocol, geom: MeshGeometry, boundary_nodes: list[int],
-                         bc_types: dict[int, int] | None = None,
-                         boundary_edges: tuple | None = None,
-                         origin: list[float] | None = None) -> list[dict]:
+def build_boundary_layer(
+    tf: TelemacFileProtocol,
+    geom: MeshGeometry,
+    boundary_nodes: list[int],
+    bc_types: dict[int, int] | None = None,
+    boundary_edges: tuple | None = None,
+    origin: list[float] | None = None,
+) -> list[dict]:
     """Build boundary edge lines color-coded by hydrodynamic type.
 
     Returns a list of layers: one line layer per boundary type plus
@@ -411,9 +465,9 @@ def build_boundary_layer(tf: TelemacFileProtocol, geom: MeshGeometry, boundary_n
         _, nodes_a, nodes_b = _find_edges(tf)
 
     _BC_COLORS = {
-        2: [160, 160, 170, 220],   # wall — light gray
-        4: [0, 200, 80, 220],      # free/Neumann — green
-        5: [40, 120, 255, 240],    # prescribed H or Q — blue
+        2: [160, 160, 170, 220],  # wall — light gray
+        4: [0, 200, 80, 220],  # free/Neumann — green
+        5: [40, 120, 255, 240],  # prescribed H or Q — blue
     }
     _BC_LABELS = {2: "Wall", 4: "Free", 5: "Prescribed"}
     default_color = [255, 100, 255, 180]  # magenta fallback
@@ -431,33 +485,39 @@ def build_boundary_layer(tf: TelemacFileProtocol, geom: MeshGeometry, boundary_n
         if bc_type == 0:
             bc_type = 2  # default to wall if no .cli data
 
-        edges_by_type.setdefault(bc_type, []).append({
-            "sourcePosition": [float(x[na] - x_off), float(y[na] - y_off)],
-            "targetPosition": [float(x[nb] - x_off), float(y[nb] - y_off)],
-        })
+        edges_by_type.setdefault(bc_type, []).append(
+            {
+                "sourcePosition": [float(x[na] - x_off), float(y[na] - y_off)],
+                "targetPosition": [float(x[nb] - x_off), float(y[nb] - y_off)],
+            }
+        )
 
         # Collect prescribed nodes for marker display
         if bc_type == 5:
             for n in (na, nb):
-                prescribed_nodes.append({
-                    "position": [float(x[n] - x_off), float(y[n] - y_off)],
-                })
+                prescribed_nodes.append(
+                    {
+                        "position": [float(x[n] - x_off), float(y[n] - y_off)],
+                    }
+                )
 
     layers = []
     for bc_type, edges in edges_by_type.items():
         color = _BC_COLORS.get(bc_type, default_color)
         label = _BC_LABELS.get(bc_type, f"BC {bc_type}")
-        layers.append(line_layer(
-            f"boundary-{label.lower()}",
-            edges,
-            getColor=color,
-            getWidth=3,
-            widthMinPixels=2,
-            widthMaxPixels=5,
-            pickable=False,
-            coordinateSystem=_COORD_METER_OFFSETS,
-            coordinateOrigin=origin or [0, 0],
-        ))
+        layers.append(
+            line_layer(
+                f"boundary-{label.lower()}",
+                edges,
+                getColor=color,
+                getWidth=3,
+                widthMinPixels=2,
+                widthMaxPixels=5,
+                pickable=False,
+                coordinateSystem=_COORD_METER_OFFSETS,
+                coordinateOrigin=origin or [0, 0],
+            )
+        )
 
     # Add diamond markers at prescribed boundary nodes (inlets/outlets)
     if prescribed_nodes:
@@ -469,27 +529,30 @@ def build_boundary_layer(tf: TelemacFileProtocol, geom: MeshGeometry, boundary_n
             if key not in seen:
                 seen.add(key)
                 unique.append(p)
-        layers.append(scatterplot_layer(
-            "boundary-prescribed-markers",
-            unique,
-            getPosition="@@=d.position",
-            getFillColor=[40, 120, 255, 180],
-            getLineColor=[255, 255, 255, 220],
-            getRadius=6,
-            radiusMinPixels=4,
-            radiusMaxPixels=10,
-            stroked=True,
-            lineWidthMinPixels=1,
-            pickable=False,
-            coordinateSystem=_COORD_METER_OFFSETS,
-            coordinateOrigin=origin or [0, 0],
-        ))
+        layers.append(
+            scatterplot_layer(
+                "boundary-prescribed-markers",
+                unique,
+                getPosition="@@=d.position",
+                getFillColor=[40, 120, 255, 180],
+                getLineColor=[255, 255, 255, 220],
+                getRadius=6,
+                radiusMinPixels=4,
+                radiusMaxPixels=10,
+                stroked=True,
+                lineWidthMinPixels=1,
+                pickable=False,
+                coordinateSystem=_COORD_METER_OFFSETS,
+                coordinateOrigin=origin or [0, 0],
+            )
+        )
 
     return layers
 
 
-def build_polygon_layer(polygon_coords: list[list[float]],
-                        origin: list[float] | None = None) -> dict:
+def build_polygon_layer(
+    polygon_coords: list[list[float]], origin: list[float] | None = None
+) -> dict:
     """Build a GeoJsonLayer outlining the user-drawn polygon.
 
     polygon_coords: list of [x_m, y_m] points in mesh-offset coordinates.
@@ -500,14 +563,16 @@ def build_polygon_layer(polygon_coords: list[list[float]],
 
     geojson = {
         "type": "FeatureCollection",
-        "features": [{
-            "type": "Feature",
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [coords],
-            },
-            "properties": {},
-        }],
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [coords],
+                },
+                "properties": {},
+            }
+        ],
     }
 
     return layer(

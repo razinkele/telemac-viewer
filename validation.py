@@ -50,7 +50,11 @@ def parse_observation_csv(file_path: str) -> tuple[ndarray, ndarray, str]:
             values.append(v_val)
     if not times:
         raise ValueError("CSV contains no data rows")
-    return np.array(times, dtype=np.float64), np.array(values, dtype=np.float64), varname
+    return (
+        np.array(times, dtype=np.float64),
+        np.array(values, dtype=np.float64),
+        varname,
+    )
 
 
 def compute_rmse(model: ndarray, observed: ndarray) -> float:
@@ -110,16 +114,44 @@ def compute_volume_timeseries(tf, compute_integral_fn):
     """Compute total water volume at each timestep.
 
     Uses compute_integral_fn(tf, values, threshold) for area-weighted integration.
+    Depth source, in priority order:
+      1. A direct depth variable (WATER DEPTH / HAUTEUR D'EAU / WATER DEPTH M).
+      2. Fallback: FREE SURFACE - BOTTOM per timestep (logged once).
+      3. Last resort: first variable in the file (preserves old behaviour).
+
+    FREE SURFACE alone is NOT water depth (it is bottom + depth), so it must
+    not be integrated directly as volume. See docs/codebase-review-findings.md.
     Returns (times: ndarray, volumes: ndarray).
     """
     npoin = tf.npoin2
     varnames = [v.strip() for v in tf.varnames]
-    _DEPTH_ALIASES = ["WATER DEPTH", "HAUTEUR D'EAU", "WATER DEPTH M", "FREE SURFACE"]
-    depth_var = next((v for v in _DEPTH_ALIASES if v in varnames), tf.varnames[0])
+    _DEPTH_ALIASES = ["WATER DEPTH", "HAUTEUR D'EAU", "WATER DEPTH M"]
+    _FREE_SURFACE_ALIASES = ["FREE SURFACE", "SURFACE LIBRE"]
+    _BOTTOM_ALIASES = ["BOTTOM", "FOND"]
+
+    depth_var = next((v for v in _DEPTH_ALIASES if v in varnames), None)
+    fs_var = next((v for v in _FREE_SURFACE_ALIASES if v in varnames), None)
+    bot_var = next((v for v in _BOTTOM_ALIASES if v in varnames), None)
+    use_fallback = depth_var is None and fs_var is not None and bot_var is not None
+
+    if use_fallback:
+        _logger.warning(
+            "compute_volume_timeseries: no depth variable found; "
+            "falling back to depth = %s - %s",
+            fs_var,
+            bot_var,
+        )
+        bottom = tf.get_data_value(bot_var, 0)[:npoin]
+    elif depth_var is None:
+        depth_var = tf.varnames[0]  # last-resort legacy behaviour
+
     times = []
     volumes = []
     for t in range(len(tf.times)):
-        vals = tf.get_data_value(depth_var, t)[:npoin]
+        if use_fallback:
+            vals = tf.get_data_value(fs_var, t)[:npoin] - bottom
+        else:
+            vals = tf.get_data_value(depth_var, t)[:npoin]
         result = compute_integral_fn(tf, vals, threshold=0.001)
         times.append(float(tf.times[t]))
         volumes.append(result["integral"])
@@ -138,7 +170,9 @@ def parse_liq_file(liq_path):
     """
     try:
         with open(liq_path) as f:
-            lines = [l.strip() for l in f if l.strip() and not l.strip().startswith('#')]
+            lines = [
+                l.strip() for l in f if l.strip() and not l.strip().startswith("#")
+            ]
     except OSError:
         return None
     if len(lines) < 3:
@@ -152,8 +186,12 @@ def parse_liq_file(liq_path):
         for line in data_lines:
             parts = line.split()
             if len(parts) < ncols:
-                _logger.warning("Skipping .liq row with %d columns (expected %d): %s",
-                                len(parts), ncols, line[:60])
+                _logger.warning(
+                    "Skipping .liq row with %d columns (expected %d): %s",
+                    len(parts),
+                    ncols,
+                    line[:60],
+                )
                 continue
             try:
                 row_vals = [float(x) for x in parts[:ncols]]
@@ -162,7 +200,9 @@ def parse_liq_file(liq_path):
                     continue
                 rows.append(row_vals)
             except ValueError:
-                _logger.warning("Skipping .liq row with non-numeric value: %s", line[:60])
+                _logger.warning(
+                    "Skipping .liq row with non-numeric value: %s", line[:60]
+                )
                 continue
         data = np.array(rows) if rows else np.empty((0, ncols))
         if data.size == 0:

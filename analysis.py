@@ -6,6 +6,7 @@ import ast
 import glob
 import operator
 import re
+import warnings
 import numpy as np
 from typing import Any
 from constants import _M2D
@@ -183,6 +184,28 @@ def compute_discharge(
     return {"total_q": total_q, "segments": segments, "skipped": skipped}
 
 
+def mesh_identity_hash(tf: TelemacFileProtocol) -> str:
+    """Short SHA1 digest identifying mesh geometry (x, y, ikle).
+
+    Two files with bit-identical 2D coordinates and connectivity produce the
+    same hash; any difference — including float noise from re-export — yields
+    a different hash. This is intentional: compare-overlay must reject any
+    non-identical mesh to avoid rendering file B's values on file A's geometry.
+    """
+    import hashlib
+
+    npoin = tf.npoin2
+    nelem = tf.nelem2
+    x = np.ascontiguousarray(tf.meshx[:npoin], dtype=np.float32)
+    y = np.ascontiguousarray(tf.meshy[:npoin], dtype=np.float32)
+    ikle = np.ascontiguousarray(tf.ikle2[:nelem], dtype=np.int32)
+    h = hashlib.sha1()
+    h.update(x.tobytes())
+    h.update(y.tobytes())
+    h.update(ikle.tobytes())
+    return h.hexdigest()[:12]
+
+
 def _element_areas(tf: TelemacFileProtocol) -> np.ndarray:
     """Vectorized element area computation. Returns (nelem,) float64 array."""
     x, y = tf.meshx, tf.meshy
@@ -310,15 +333,34 @@ _SAFE_MATH = {
     "where": np.where,
 }
 
+
+def _silent_div(a, b):
+    """Division that yields inf/nan without emitting RuntimeWarnings.
+    User expressions like "Q / 0" should produce inf silently — the caller
+    already handles inf/nan downstream."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return operator.truediv(a, b)
+
+
+def _silent_mod(a, b):
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return operator.mod(a, b)
+
+
+def _silent_floordiv(a, b):
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return operator.floordiv(a, b)
+
+
 _SAFE_OPS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
+    ast.Div: _silent_div,
     ast.Pow: operator.pow,
     ast.USub: operator.neg,
-    ast.Mod: operator.mod,
-    ast.FloorDiv: operator.floordiv,
+    ast.Mod: _silent_mod,
+    ast.FloorDiv: _silent_floordiv,
 }
 
 _SAFE_COMPARE = {
@@ -569,7 +611,9 @@ def extract_layer_2d(values_3d: np.ndarray, npoin2: int, layer_k: int) -> np.nda
 
 
 def polygon_zonal_stats(
-    tf: TelemacFileProtocol, values: np.ndarray, polygon_m: list[list[float]],
+    tf: TelemacFileProtocol,
+    values: np.ndarray,
+    polygon_m: list[list[float]],
     flood_threshold: float = 0.01,
     var_name: str = "",
 ) -> dict[str, float]:
@@ -584,8 +628,13 @@ def polygon_zonal_stats(
 
     if not polygon_m or len(polygon_m) < 3:
         return {
-            "area": 0.0, "mean": 0.0, "min": 0.0, "max": 0.0,
-            "count": 0, "flooded_area": 0.0, "flooded_fraction": 0.0,
+            "area": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "count": 0,
+            "flooded_area": 0.0,
+            "flooded_fraction": 0.0,
         }
 
     x, y = tf.meshx, tf.meshy
@@ -627,7 +676,16 @@ def polygon_zonal_stats(
             v_avg = float(v0 + v1 + v2) / 3.0
             weighted_sum += v_avg * a
             total_area_elem += a
-    weighted_mean = weighted_sum / total_area_elem if total_area_elem > 0 else float(np.nanmean(vals_inside))
+    # When total_area_elem == 0 (no whole triangle inside polygon), fall back
+    # to nanmean of the inside-node values. vals_inside may be empty or all-NaN
+    # in edge cases — the returned NaN is an acceptable signal to the UI.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Mean of empty slice")
+        weighted_mean = (
+            weighted_sum / total_area_elem
+            if total_area_elem > 0
+            else float(np.nanmean(vals_inside))
+        )
 
     # Estimate area using Shoelace formula on the polygon
     poly = np.array(polygon_m)
@@ -639,8 +697,10 @@ def polygon_zonal_stats(
         )
     )
 
-    # Flooded fraction — only meaningful for depth-like variables
-    _DEPTH_KEYWORDS = {"DEPTH", "HAUTEUR", "WATER DEPTH", "FREE SURFACE"}
+    # Flooded fraction — only meaningful for depth-like variables.
+    # FREE SURFACE is intentionally excluded: its magnitude is bottom + depth,
+    # so thresholding it does not identify wet/dry cells.
+    _DEPTH_KEYWORDS = {"DEPTH", "HAUTEUR"}
     is_depth = any(kw in var_name.upper() for kw in _DEPTH_KEYWORDS)
     flooded_area_elem = 0.0
     if is_depth:
@@ -652,20 +712,31 @@ def polygon_zonal_stats(
                 v0, v1, v2 = values[n0], values[n1], values[n2]
                 if np.isnan(v0) or np.isnan(v1) or np.isnan(v2):
                     continue
-                if (v0 > flood_threshold and v1 > flood_threshold
-                        and v2 > flood_threshold):
+                if (
+                    v0 > flood_threshold
+                    and v1 > flood_threshold
+                    and v2 > flood_threshold
+                ):
                     flooded_area_elem += float(elem_areas[ei])
     else:
         flooded = 0
 
+    # vals_inside may be all-NaN (e.g. dry polygon) — nanmin/nanmax return NaN
+    # which the UI displays as "—". Silence the All-NaN warning.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="All-NaN slice encountered")
+        vmin_inside = float(np.nanmin(vals_inside))
+        vmax_inside = float(np.nanmax(vals_inside))
     return {
         "area": float(area),
         "mean": float(weighted_mean),
-        "min": float(np.nanmin(vals_inside)),
-        "max": float(np.nanmax(vals_inside)),
+        "min": vmin_inside,
+        "max": vmax_inside,
         "count": n_inside,
         "flooded_area": flooded_area_elem if is_depth else 0.0,
-        "flooded_fraction": float(flooded_area_elem / total_area_elem) if total_area_elem > 0 and is_depth else 0.0,
+        "flooded_fraction": float(flooded_area_elem / total_area_elem)
+        if total_area_elem > 0 and is_depth
+        else 0.0,
     }
 
 
@@ -685,17 +756,61 @@ def nearest_node(
     return idx, float(x[idx]), float(y[idx])
 
 
+def _locate_triangle(
+    tf: TelemacFileProtocol, x_m: float, y_m: float
+) -> tuple[int | None, tuple[float, float, float] | None]:
+    """Find enclosing 2D triangle and barycentric weights for (x_m, y_m).
+
+    Returns (elem_index, (w0, w1, w2)) or (None, None) if outside the mesh.
+    Brute force O(nelem2) — fine for occasional point lookups.
+    """
+    npoin = tf.npoin2
+    nelem = tf.nelem2
+    if npoin == 0 or nelem == 0:
+        return None, None
+    x = tf.meshx[:npoin]
+    y = tf.meshy[:npoin]
+    ikle = tf.ikle2[:nelem]
+    x0, x1, x2 = x[ikle[:, 0]], x[ikle[:, 1]], x[ikle[:, 2]]
+    y0, y1, y2 = y[ikle[:, 0]], y[ikle[:, 1]], y[ikle[:, 2]]
+    denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        w0 = ((y1 - y2) * (x_m - x2) + (x2 - x1) * (y_m - y2)) / denom
+        w1 = ((y2 - y0) * (x_m - x2) + (x0 - x2) * (y_m - y2)) / denom
+    w2 = 1.0 - w0 - w1
+    tol = -1e-9
+    inside = (w0 >= tol) & (w1 >= tol) & (w2 >= tol) & np.isfinite(denom)
+    if not inside.any():
+        return None, None
+    ei = int(np.argmax(inside))
+    return ei, (float(w0[ei]), float(w1[ei]), float(w2[ei]))
+
+
 def time_series_at_point(
     tf: TelemacFileProtocol, varname: str, x_m: float, y_m: float
 ) -> tuple[np.ndarray, np.ndarray]:
     """Extract time series for a variable at a mesh point.
 
-    Returns (times, values) arrays.  Supports derived variables.
+    Returns (times, values) arrays. Supports derived variables via barycentric
+    interpolation within the enclosing triangle, matching the semantics of
+    raw `tf.get_timeseries_on_points`. Falls back to nearest node if the
+    point lies outside the mesh.
     """
     if varname in DERIVED_VARIABLES and varname in get_available_derived(tf):
-        idx, _, _ = nearest_node(tf, x_m, y_m)
-        vals = np.array([compute_derived(tf, varname, t)[idx]
-                         for t in range(len(tf.times))])
+        ei, w = _locate_triangle(tf, x_m, y_m)
+        if ei is None:
+            idx, _, _ = nearest_node(tf, x_m, y_m)
+            vals = np.array(
+                [compute_derived(tf, varname, t)[idx] for t in range(len(tf.times))]
+            )
+            return np.array(tf.times), vals
+        nodes = tf.ikle2[ei]
+        vals = np.empty(len(tf.times))
+        for t in range(len(tf.times)):
+            field = compute_derived(tf, varname, t)
+            vals[t] = (
+                w[0] * field[nodes[0]] + w[1] * field[nodes[1]] + w[2] * field[nodes[2]]
+            )
         return np.array(tf.times), vals
     ts = tf.get_timeseries_on_points(varname, [[x_m, y_m]])
     if not ts:
@@ -714,13 +829,15 @@ def cross_section_profile(
     if varname in DERIVED_VARIABLES and varname in get_available_derived(tf):
         vals_full = compute_derived(tf, varname, record)
         points, abscissa, values = tf.get_data_on_polyline(
-            tf.varnames[0], record, polyline_m)
+            tf.varnames[0], record, polyline_m
+        )
         if not points or len(points) < 3:
             return np.array(abscissa), np.array(values)
         # Re-interpolate derived values at the polyline nodes
         from scipy.interpolate import LinearNDInterpolator
-        mesh_pts = np.column_stack((tf.meshx[:tf.npoin2], tf.meshy[:tf.npoin2]))
-        interp = LinearNDInterpolator(mesh_pts, vals_full[:tf.npoin2])
+
+        mesh_pts = np.column_stack((tf.meshx[: tf.npoin2], tf.meshy[: tf.npoin2]))
+        interp = LinearNDInterpolator(mesh_pts, vals_full[: tf.npoin2])
         pts_arr = np.array(points)
         derived_vals = interp(pts_arr[:, 0], pts_arr[:, 1])
         return np.array(abscissa), derived_vals
@@ -1066,7 +1183,9 @@ def compute_all_temporal_stats(
         "mean_values": (running_sum / ntimes).astype(np.float32),
         "envelope": peak.astype(np.float32),
         "arrival": arrival,
-        "duration": (np.maximum(wet_count - 1, 0).astype(np.float64) * avg_dt).astype(np.float32),
+        "duration": (np.maximum(wet_count - 1, 0).astype(np.float64) * avg_dt).astype(
+            np.float32
+        ),
     }
 
 

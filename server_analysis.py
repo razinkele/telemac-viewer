@@ -32,6 +32,7 @@ from analysis import (
     polygon_zonal_stats,
     vertical_profile_at_point,
     get_var_values,
+    mesh_identity_hash,
 )
 from constants import format_time
 from crs import click_to_native, meters_to_wgs84
@@ -51,14 +52,34 @@ _logger = logging.getLogger(__name__)
 
 
 def register_analysis_handlers(
-    input, output, session, map_widget,
+    input,
+    output,
+    session,
+    map_widget,
     # shared reactive calcs
-    tel_file, mesh_geom, current_var, current_tidx, current_values, effective_values,
+    tel_file,
+    mesh_geom,
+    current_var,
+    current_tidx,
+    current_values,
+    effective_values,
     # shared reactive values
-    analysis_mode, clicked_points, cross_section_points, particle_paths,
-    temporal_stats_cache, measure_points, measure_mode, obs_data, compare_tf,
-    recording, polygon_mode, polygon_stats_data, polygon_geom, volume_cache,
-    expr_result, integral_result,
+    analysis_mode,
+    clicked_points,
+    cross_section_points,
+    particle_paths,
+    temporal_stats_cache,
+    measure_points,
+    measure_mode,
+    obs_data,
+    compare_tf,
+    recording,
+    polygon_mode,
+    polygon_stats_data,
+    polygon_geom,
+    volume_cache,
+    expr_result,
+    integral_result,
     current_crs,
     use_upload,
     is_3d_mode,
@@ -75,24 +96,38 @@ def register_analysis_handlers(
         mode = analysis_mode.get()
         if mode == "none":
             return ui.div()
-        titles = {"timeseries": "Time Series", "crosssection": "Cross-Section",
-                  "vertprofile": "Vertical Profile", "histogram": "Value Histogram",
-                  "multivar": "All Variables", "rating": "Rating Curve (h-Q)",
-                  "volume": "Volume Conservation", "boundary_ts": "Boundary Time Series"}
+        titles = {
+            "timeseries": "Time Series",
+            "crosssection": "Cross-Section",
+            "vertprofile": "Vertical Profile",
+            "histogram": "Value Histogram",
+            "multivar": "All Variables",
+            "rating": "Rating Curve (h-Q)",
+            "volume": "Volume Conservation",
+            "boundary_ts": "Boundary Time Series",
+        }
         title = titles.get(mode, mode)
         n_pts = len(clicked_points.get()) if mode == "timeseries" else 0
         subtitle = f" ({n_pts} point{'s' if n_pts != 1 else ''})" if n_pts else ""
         return ui.div(
             ui.div(
                 ui.strong(title + subtitle, style="color: #00b4d8;"),
-                ui.download_button("download_csv", "CSV",
-                                   class_="btn-sm btn-outline-success ms-2"),
-                ui.download_button("download_all_vars", "All Vars",
-                                   class_="btn-sm btn-outline-info ms-1"),
-                ui.input_action_button("undo_point", "Undo",
-                                       class_="btn-sm btn-outline-warning ms-1"),
-                ui.input_action_button("close_analysis", "Close",
-                                       class_="btn-sm btn-outline-secondary ms-1"),
+                ui.download_button(
+                    "download_csv", "CSV", class_="btn-sm btn-outline-success ms-2"
+                ),
+                ui.download_button(
+                    "download_all_vars",
+                    "All Vars",
+                    class_="btn-sm btn-outline-info ms-1",
+                ),
+                ui.input_action_button(
+                    "undo_point", "Undo", class_="btn-sm btn-outline-warning ms-1"
+                ),
+                ui.input_action_button(
+                    "close_analysis",
+                    "Close",
+                    class_="btn-sm btn-outline-secondary ms-1",
+                ),
                 class_="d-flex align-items-center p-2",
                 style="background: rgba(15, 25, 35, 0.92); border-top: 1px solid rgba(13, 115, 119, 0.3);",
             ),
@@ -109,25 +144,35 @@ def register_analysis_handlers(
         fig = go.Figure()
         for i, pt in enumerate(pts):
             times, values = time_series_at_point(tf, var, pt[0], pt[1])
-            fig.add_trace(go.Scatter(
-                x=times, y=values, mode="lines",
-                name=f"Pt {i+1} ({pt[0]:.0f}, {pt[1]:.0f})",
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=times,
+                    y=values,
+                    mode="lines",
+                    name=f"Pt {i + 1} ({pt[0]:.0f}, {pt[1]:.0f})",
+                )
+            )
         if tidx < len(tf.times):
             fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
         # Overlay observation data if available
         obs = obs_data.get()
         if obs is not None:
             obs_times, obs_values, obs_varname = obs
-            fig.add_trace(go.Scatter(
-                x=obs_times, y=obs_values, mode="lines",
-                name=f"Obs: {obs_varname}",
-                line=dict(color="red", dash="dash"),
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=obs_times,
+                    y=obs_values,
+                    mode="lines",
+                    name=f"Obs: {obs_varname}",
+                    line=dict(color="red", dash="dash"),
+                )
+            )
             # Compare with the last clicked point's model trace
             if pts:
                 last_pt = pts[-1]
-                model_times, model_values = time_series_at_point(tf, var, last_pt[0], last_pt[1])
+                model_times, model_values = time_series_at_point(
+                    tf, var, last_pt[0], last_pt[1]
+                )
                 # Crop to overlapping time window to avoid clamped interpolation
                 t_lo = max(float(obs_times[0]), float(model_times[0]))
                 t_hi = min(float(obs_times[-1]), float(model_times[-1]))
@@ -136,14 +181,18 @@ def register_analysis_handlers(
                     obs_t_overlap = obs_times[mask]
                     obs_v_overlap = obs_values[mask]
                     if len(obs_t_overlap) >= 2:
-                        model_interp = np.interp(obs_t_overlap, model_times, model_values)
+                        model_interp = np.interp(
+                            obs_t_overlap, model_times, model_values
+                        )
                         rmse = compute_rmse(model_interp, obs_v_overlap)
                         nse = compute_nse(model_interp, obs_v_overlap)
                         partial = "" if mask.all() else " (overlap only)"
                         fig.add_annotation(
                             text=f"RMSE={rmse:.4f}  NSE={nse:.4f}{partial}",
-                            xref="paper", yref="paper",
-                            x=0.02, y=0.98,
+                            xref="paper",
+                            yref="paper",
+                            x=0.02,
+                            y=0.98,
                             showarrow=False,
                             font=dict(size=11, color="red"),
                             bgcolor="rgba(255,255,255,0.8)",
@@ -151,8 +200,10 @@ def register_analysis_handlers(
                     else:
                         fig.add_annotation(
                             text="Too few overlapping points for metrics",
-                            xref="paper", yref="paper",
-                            x=0.02, y=0.98,
+                            xref="paper",
+                            yref="paper",
+                            x=0.02,
+                            y=0.98,
                             showarrow=False,
                             font=dict(size=11, color="orange"),
                             bgcolor="rgba(255,255,255,0.8)",
@@ -160,15 +211,19 @@ def register_analysis_handlers(
                 else:
                     fig.add_annotation(
                         text="No time overlap between model and obs",
-                        xref="paper", yref="paper",
-                        x=0.02, y=0.98,
+                        xref="paper",
+                        yref="paper",
+                        x=0.02,
+                        y=0.98,
                         showarrow=False,
                         font=dict(size=11, color="orange"),
                         bgcolor="rgba(255,255,255,0.8)",
                     )
         fig.update_layout(
-            xaxis_title="Time (s)", yaxis_title=var,
-            margin=dict(l=50, r=20, t=10, b=40), height=220,
+            xaxis_title="Time (s)",
+            yaxis_title=var,
+            margin=dict(l=50, r=20, t=10, b=40),
+            height=220,
         )
         return fig
 
@@ -180,8 +235,10 @@ def register_analysis_handlers(
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=abscissa, y=values, mode="lines", name=var))
         fig.update_layout(
-            xaxis_title="Distance (m)", yaxis_title=var,
-            margin=dict(l=50, r=20, t=10, b=40), height=220,
+            xaxis_title="Distance (m)",
+            yaxis_title=var,
+            margin=dict(l=50, r=20, t=10, b=40),
+            height=220,
         )
         return fig
 
@@ -192,15 +249,23 @@ def register_analysis_handlers(
         fig = go.Figure()
         elev_label = "Elevation (m)"
         for i, pt in enumerate(pts):
-            elevations, values, elev_label = vertical_profile_at_point(tf, var, tidx, pt[0], pt[1])
+            elevations, values, elev_label = vertical_profile_at_point(
+                tf, var, tidx, pt[0], pt[1]
+            )
             if len(elevations) > 0:
-                fig.add_trace(go.Scatter(
-                    x=values, y=elevations, mode="lines+markers",
-                    name=f"Pt {i+1} ({pt[0]:.0f}, {pt[1]:.0f})",
-                ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=values,
+                        y=elevations,
+                        mode="lines+markers",
+                        name=f"Pt {i + 1} ({pt[0]:.0f}, {pt[1]:.0f})",
+                    )
+                )
         fig.update_layout(
-            xaxis_title=var, yaxis_title=elev_label,
-            margin=dict(l=50, r=20, t=10, b=40), height=220,
+            xaxis_title=var,
+            yaxis_title=elev_label,
+            margin=dict(l=50, r=20, t=10, b=40),
+            height=220,
         )
         return fig
 
@@ -210,8 +275,10 @@ def register_analysis_handlers(
         fig = go.Figure()
         fig.add_trace(go.Histogram(x=vals[:npoin], nbinsx=50, name=var))
         fig.update_layout(
-            xaxis_title=var, yaxis_title="Count",
-            margin=dict(l=50, r=20, t=10, b=40), height=220,
+            xaxis_title=var,
+            yaxis_title="Count",
+            margin=dict(l=50, r=20, t=10, b=40),
+            height=220,
         )
         return fig
 
@@ -223,14 +290,21 @@ def register_analysis_handlers(
         fig = go.Figure()
         for vname in tf.varnames:
             times, values = time_series_at_point(tf, vname, px_coord, py_coord)
-            fig.add_trace(go.Scatter(
-                x=times, y=values, mode="lines", name=vname,
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=times,
+                    y=values,
+                    mode="lines",
+                    name=vname,
+                )
+            )
         if tidx < len(tf.times):
             fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
         fig.update_layout(
-            xaxis_title="Time (s)", yaxis_title="Value",
-            margin=dict(l=50, r=20, t=10, b=40), height=220,
+            xaxis_title="Time (s)",
+            yaxis_title="Value",
+            margin=dict(l=50, r=20, t=10, b=40),
+            height=220,
         )
         return fig
 
@@ -260,16 +334,25 @@ def register_analysis_handlers(
                     h_values.append(h_val)
                     q_values.append(result["total_q"])
         if skipped_h > 0:
-            _logger.warning("Rating curve: %d timesteps skipped (no water level data)", skipped_h)
+            _logger.warning(
+                "Rating curve: %d timesteps skipped (no water level data)", skipped_h
+            )
         fig = go.Figure()
         if h_values and q_values:
-            fig.add_trace(go.Scatter(
-                x=h_values, y=q_values, mode="lines+markers",
-                name="h-Q", marker=dict(size=4),
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=h_values,
+                    y=q_values,
+                    mode="lines+markers",
+                    name="h-Q",
+                    marker=dict(size=4),
+                )
+            )
         fig.update_layout(
-            xaxis_title="Water level (m)", yaxis_title="Discharge (m\u00b3/s)",
-            margin=dict(l=50, r=20, t=10, b=40), height=220,
+            xaxis_title="Water level (m)",
+            yaxis_title="Discharge (m\u00b3/s)",
+            margin=dict(l=50, r=20, t=10, b=40),
+            height=220,
         )
         return fig
 
@@ -278,11 +361,14 @@ def register_analysis_handlers(
         if vc is None:
             return go.Figure()
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=vc["times"], y=vc["volumes"], mode="lines", name="Volume"))
+        fig.add_trace(
+            go.Scatter(x=vc["times"], y=vc["volumes"], mode="lines", name="Volume")
+        )
         fig.update_layout(
-            xaxis_title="Time (s)", yaxis_title="Volume (m³)",
-            margin=dict(l=50, r=20, t=10, b=40), height=220,
+            xaxis_title="Time (s)",
+            yaxis_title="Volume (m³)",
+            margin=dict(l=50, r=20, t=10, b=40),
+            height=220,
         )
         return fig
 
@@ -293,22 +379,27 @@ def register_analysis_handlers(
         fig = go.Figure()
         for name, entry in data.items():
             label = f"{name} ({entry['unit']})" if entry.get("unit") else name
-            fig.add_trace(go.Scatter(
-                x=entry["times"], y=entry["values"], mode="lines", name=label))
+            fig.add_trace(
+                go.Scatter(
+                    x=entry["times"], y=entry["values"], mode="lines", name=label
+                )
+            )
         fig.update_layout(
-            xaxis_title="Time (s)", yaxis_title="Value",
-            margin=dict(l=50, r=20, t=10, b=40), height=220,
+            xaxis_title="Time (s)",
+            yaxis_title="Value",
+            margin=dict(l=50, r=20, t=10, b=40),
+            height=220,
         )
         return fig
 
     _CHART_DISPATCH = {
-        "timeseries":  lambda tf, var, tidx: _chart_timeseries(tf, var, tidx),
+        "timeseries": lambda tf, var, tidx: _chart_timeseries(tf, var, tidx),
         "crosssection": lambda tf, var, tidx: _chart_crosssection(tf, var, tidx),
         "vertprofile": lambda tf, var, tidx: _chart_vertprofile(tf, var, tidx),
-        "histogram":   lambda tf, var, tidx: _chart_histogram(tf, var),
-        "multivar":    lambda tf, var, tidx: _chart_multivar(tf, tidx),
-        "rating":      lambda tf, var, tidx: _chart_rating(tf),
-        "volume":      lambda tf, var, tidx: _chart_volume(),
+        "histogram": lambda tf, var, tidx: _chart_histogram(tf, var),
+        "multivar": lambda tf, var, tidx: _chart_multivar(tf, tidx),
+        "rating": lambda tf, var, tidx: _chart_rating(tf),
+        "volume": lambda tf, var, tidx: _chart_volume(),
         "boundary_ts": lambda tf, var, tidx: _chart_boundary_ts(),
     }
 
@@ -383,11 +474,11 @@ def register_analysis_handlers(
             if geom_type == "Polygon" and polygon_mode.get():
                 coords = feat["geometry"]["coordinates"][0]  # outer ring
                 geom = mesh_geom()
-                poly_m = [list(click_to_native(c[0], c[1], geom))
-                          for c in coords]
+                poly_m = [list(click_to_native(c[0], c[1], geom)) for c in coords]
                 values = effective_values()
-                stats = polygon_zonal_stats(tel_file(), values, poly_m,
-                                            var_name=current_var())
+                stats = polygon_zonal_stats(
+                    tel_file(), values, poly_m, var_name=current_var()
+                )
                 polygon_stats_data.set(stats)
                 polygon_geom.set(poly_m)
                 polygon_mode.set(False)
@@ -397,38 +488,51 @@ def register_analysis_handlers(
                 continue
             coords = feat["geometry"]["coordinates"]
             geom = mesh_geom()
-            poly_m = [list(click_to_native(c[0], c[1], geom))
-                      for c in coords]
+            poly_m = [list(click_to_native(c[0], c[1], geom)) for c in coords]
 
             if input.particles():
                 seeds = distribute_seeds_along_line(poly_m, n_seeds=100)
                 tf = tel_file()
-                ui.notification_show("Computing particle paths from seed line...",
-                                     duration=None, id="particle_notif")
+                ui.notification_show(
+                    "Computing particle paths from seed line...",
+                    duration=None,
+                    id="particle_notif",
+                )
                 loop = asyncio.get_running_loop()
                 x_off, y_off = geom.x_off, geom.y_off
                 try:
                     paths = await asyncio.wait_for(
                         loop.run_in_executor(
-                            None, _run_with_lock, compute_particle_paths,
-                            tf, seeds, x_off, y_off),
-                        timeout=300)
+                            None,
+                            _run_with_lock,
+                            compute_particle_paths,
+                            tf,
+                            seeds,
+                            x_off,
+                            y_off,
+                        ),
+                        timeout=300,
+                    )
                 except asyncio.TimeoutError:
                     ui.notification_remove("particle_notif")
                     ui.notification_show(
                         "Particle tracing timed out after 5 minutes",
-                        type="error", duration=8)
+                        type="error",
+                        duration=8,
+                    )
                     return
                 except Exception as e:
                     ui.notification_remove("particle_notif")
                     _logger.warning("Seed-line particle tracing failed: %s", e)
                     ui.notification_show(
-                        f"Particle tracing failed: {e}",
-                        type="warning", duration=6)
+                        f"Particle tracing failed: {e}", type="warning", duration=6
+                    )
                     return
                 particle_paths.set(paths)
                 ui.notification_remove("particle_notif")
-                ui.notification_show(f"Computed {len(paths)} particle paths", duration=3)
+                ui.notification_show(
+                    f"Computed {len(paths)} particle paths", duration=3
+                )
             else:
                 # Cross-section mode
                 cross_section_points.set(poly_m)
@@ -454,27 +558,42 @@ def register_analysis_handlers(
             tf = tel_file()
             geom = mesh_geom()
             from telemac_defaults import find_velocity_pair
+
             pair = find_velocity_pair(tf.varnames)
             if pair is None:
                 ui.notification_show(
                     "No velocity variables found for particle tracing. "
                     "Expected: VELOCITY U/V, UX/UY, or QSBLX/QSBLY.",
-                    type="warning", duration=6)
+                    type="warning",
+                    duration=6,
+                )
                 particle_paths.set(None)
                 return
-            ui.notification_show("Computing particle trajectories...",
-                                 duration=None, id="particle_notif")
+            ui.notification_show(
+                "Computing particle trajectories...", duration=None, id="particle_notif"
+            )
             try:
                 seeds = generate_seed_grid(tf, n_target=500)
                 x_off, y_off = geom.x_off, geom.y_off
                 loop = asyncio.get_running_loop()
                 paths = await loop.run_in_executor(
-                    None, _run_with_lock, compute_particle_paths, tf, seeds, x_off, y_off)
+                    None,
+                    _run_with_lock,
+                    compute_particle_paths,
+                    tf,
+                    seeds,
+                    x_off,
+                    y_off,
+                )
                 particle_paths.set(paths)
-                ui.notification_show(f"Computed {len(paths)} particle paths", duration=3)
+                ui.notification_show(
+                    f"Computed {len(paths)} particle paths", duration=3
+                )
             except Exception as e:
                 _logger.warning("Particle computation failed: %s", e)
-                ui.notification_show(f"Particle tracing failed: {e}", type="warning", duration=6)
+                ui.notification_show(
+                    f"Particle tracing failed: {e}", type="warning", duration=6
+                )
             finally:
                 ui.notification_remove("particle_notif")
         else:
@@ -502,8 +621,10 @@ def register_analysis_handlers(
             return ui.div()
         if result["total_q"] is None:
             return ui.div(
-                ui.span(result.get("error", "Cannot compute discharge"),
-                        class_="text-warning small"),
+                ui.span(
+                    result.get("error", "Cannot compute discharge"),
+                    class_="text-warning small",
+                ),
                 class_="mb-1",
             )
         q = result["total_q"]
@@ -511,8 +632,10 @@ def register_analysis_handlers(
         skip_text = f", {skipped} skipped" if skipped else ""
         return ui.div(
             ui.strong(f"Q = {q:.4f} m\u00b3/s", class_="small"),
-            ui.span(f" ({len(result['segments'])} segments{skip_text})",
-                    class_="text-muted small"),
+            ui.span(
+                f" ({len(result['segments'])} segments{skip_text})",
+                class_="text-muted small",
+            ),
             class_="mb-1",
         )
 
@@ -524,8 +647,11 @@ def register_analysis_handlers(
         xsec = cross_section_points.get()
         if xsec is None:
             return ui.div()
-        return ui.input_action_button("show_rating", "Rating Curve (h-Q)",
-                                      class_="btn-sm btn-outline-info w-100 mb-1")
+        return ui.input_action_button(
+            "show_rating",
+            "Rating Curve (h-Q)",
+            class_="btn-sm btn-outline-info w-100 mb-1",
+        )
 
     @reactive.effect
     @reactive.event(input.show_rating)
@@ -581,8 +707,7 @@ def register_analysis_handlers(
         return ui.div(
             ui.strong(f"{var}: {val:.4f}"),
             ui.br(),
-            ui.span(f"Node {idx} ({nx:.1f}, {ny:.1f})",
-                     class_="text-muted small"),
+            ui.span(f"Node {idx} ({nx:.1f}, {ny:.1f})", class_="text-muted small"),
         )
 
     # -- Temporal statistics --
@@ -592,25 +717,36 @@ def register_analysis_handlers(
     async def handle_compute_temporal():
         tf = tel_file()
         var = current_var()
-        ui.notification_show(f"Computing temporal stats for {var}...",
-                             duration=None, id="temporal_notif")
+        ui.notification_show(
+            f"Computing temporal stats for {var}...", duration=None, id="temporal_notif"
+        )
         loop = asyncio.get_running_loop()
+
         def _compute_all_temporal(tf, var):
             stats = compute_temporal_stats(tf, var)
             if stats is not None:
                 # Flood metrics always use WATER DEPTH when available
-                flood_var = "WATER DEPTH" if "WATER DEPTH" in [v.strip() for v in tf.varnames] else var
+                flood_var = (
+                    "WATER DEPTH"
+                    if "WATER DEPTH" in [v.strip() for v in tf.varnames]
+                    else var
+                )
                 stats["envelope"] = compute_flood_envelope(tf, flood_var)
                 stats["arrival"] = compute_flood_arrival(tf, flood_var)
                 stats["duration"] = compute_flood_duration(tf, flood_var)
             return stats
+
         try:
-            stats = await loop.run_in_executor(None, _run_with_lock, _compute_all_temporal, tf, var)
+            stats = await loop.run_in_executor(
+                None, _run_with_lock, _compute_all_temporal, tf, var
+            )
             temporal_stats_cache.set(stats)
             ui.notification_show("Temporal statistics computed", duration=3)
         except Exception as exc:
             _logger.warning("Temporal stats failed: %s", exc)
-            ui.notification_show(f"Temporal stats failed: {exc}", type="error", duration=5)
+            ui.notification_show(
+                f"Temporal stats failed: {exc}", type="error", duration=5
+            )
         finally:
             ui.notification_remove("temporal_notif")
 
@@ -620,17 +756,25 @@ def register_analysis_handlers(
     @reactive.event(input.compute_volume)
     async def handle_compute_volume():
         tf = tel_file()
-        ui.notification_show("Computing volume over time...",
-                             duration=None, id="volume_notif")
+        ui.notification_show(
+            "Computing volume over time...", duration=None, id="volume_notif"
+        )
         loop = asyncio.get_running_loop()
         try:
             times, vols = await loop.run_in_executor(
-                None, _run_with_lock, compute_volume_timeseries, tf, compute_mesh_integral)
+                None,
+                _run_with_lock,
+                compute_volume_timeseries,
+                tf,
+                compute_mesh_integral,
+            )
             volume_cache.set({"times": times, "volumes": vols})
             analysis_mode.set("volume")
         except Exception as exc:
             _logger.warning("Volume computation failed: %s", exc)
-            ui.notification_show(f"Volume computation failed: {exc}", type="error", duration=5)
+            ui.notification_show(
+                f"Volume computation failed: {exc}", type="error", duration=5
+            )
         finally:
             ui.notification_remove("volume_notif")
 
@@ -640,6 +784,7 @@ def register_analysis_handlers(
     def liq_data():
         """Auto-detect and parse .liq file from the same directory as .slf."""
         from constants import EXAMPLES
+
         uploaded = input.upload()
         if uploaded and use_upload.get():
             return None
@@ -653,8 +798,11 @@ def register_analysis_handlers(
         data = liq_data()
         if data is None:
             return ui.div()
-        return ui.input_action_button("show_liq", "Show boundary time series",
-                                      class_="btn-sm btn-outline-primary w-100 mb-1")
+        return ui.input_action_button(
+            "show_liq",
+            "Show boundary time series",
+            class_="btn-sm btn-outline-primary w-100 mb-1",
+        )
 
     @reactive.effect
     @reactive.event(input.show_liq)
@@ -671,21 +819,35 @@ def register_analysis_handlers(
         return ui.div(
             ui.span("Temporal envelope:", class_="text-muted small"),
             ui.div(
-                ui.span(f"Global min: {float(stats['min'][:npoin].min()):.4f}", class_="small"),
+                ui.span(
+                    f"Global min: {float(stats['min'][:npoin].min()):.4f}",
+                    class_="small",
+                ),
                 ui.br(),
-                ui.span(f"Global max: {float(stats['max'][:npoin].max()):.4f}", class_="small"),
+                ui.span(
+                    f"Global max: {float(stats['max'][:npoin].max()):.4f}",
+                    class_="small",
+                ),
                 ui.br(),
-                ui.span(f"Mean range: {float(stats['mean'][:npoin].min()):.4f} – {float(stats['mean'][:npoin].max()):.4f}", class_="small"),
+                ui.span(
+                    f"Mean range: {float(stats['mean'][:npoin].min()):.4f} – {float(stats['mean'][:npoin].max()):.4f}",
+                    class_="small",
+                ),
             ),
-            ui.input_select("temporal_display", "Show", choices={
-                "none": "Current timestep",
-                "min": "Temporal min",
-                "max": "Temporal max",
-                "mean": "Temporal mean",
-                "envelope": "Flood envelope (max depth)",
-                "arrival": "Flood arrival time (s)",
-                "duration": "Flood duration (s)",
-            }, selected="none"),
+            ui.input_select(
+                "temporal_display",
+                "Show",
+                choices={
+                    "none": "Current timestep",
+                    "min": "Temporal min",
+                    "max": "Temporal max",
+                    "mean": "Temporal mean",
+                    "envelope": "Flood envelope (max depth)",
+                    "arrival": "Flood arrival time (s)",
+                    "duration": "Flood duration (s)",
+                },
+                selected="none",
+            ),
             class_="mt-2",
         )
 
@@ -707,7 +869,7 @@ def register_analysis_handlers(
             val = float(get_var_values(tf, var, tidx)[idx])
             rows.append(
                 ui.tags.tr(
-                    ui.tags.td(f"P{i+1}", style="font-weight:bold;"),
+                    ui.tags.td(f"P{i + 1}", style="font-weight:bold;"),
                     ui.tags.td(f"{nx:.0f}", class_="text-muted"),
                     ui.tags.td(f"{ny:.0f}", class_="text-muted"),
                     ui.tags.td(f"{val:.4f}"),
@@ -791,8 +953,10 @@ def register_analysis_handlers(
             ui.br(),
             ui.span(f"Area mean: {result['mean']:.4f}", class_="small"),
             ui.br(),
-            ui.span(f"Wetted: {result['wetted_fraction']*100:.1f}% ({result['wetted_area']:.1f} m²)",
-                     class_="small"),
+            ui.span(
+                f"Wetted: {result['wetted_fraction'] * 100:.1f}% ({result['wetted_area']:.1f} m²)",
+                class_="small",
+            ),
             class_="mt-1 mb-1",
         )
 
@@ -803,7 +967,9 @@ def register_analysis_handlers(
     def handle_measure_btn():
         measure_points.set([])
         measure_mode.set(True)
-        ui.notification_show("Click two points on the mesh to measure distance", duration=3)
+        ui.notification_show(
+            "Click two points on the mesh to measure distance", duration=3
+        )
 
     @output
     @render.ui
@@ -811,14 +977,18 @@ def register_analysis_handlers(
         pts = measure_points.get()
         if len(pts) < 2:
             if measure_mode.get():
-                return ui.p(f"Click point {len(pts)+1} of 2...", class_="text-muted small mb-1")
+                return ui.p(
+                    f"Click point {len(pts) + 1} of 2...",
+                    class_="text-muted small mb-1",
+                )
             return ui.div()
         p1, p2 = pts[0], pts[1]
-        dist = np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+        dist = np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
         return ui.div(
             ui.strong(f"Distance: {dist:.2f} m", class_="small"),
-            ui.input_action_button("clear_measure", "Clear",
-                                   class_="btn-sm btn-outline-secondary ms-2"),
+            ui.input_action_button(
+                "clear_measure", "Clear", class_="btn-sm btn-outline-secondary ms-2"
+            ),
             class_="d-flex align-items-center mb-1",
         )
 
@@ -844,7 +1014,9 @@ def register_analysis_handlers(
     @reactive.effect
     @reactive.event(input.record_error)
     def handle_record_error():
-        ui.notification_show(f"Recording failed: {input.record_error()}", type="error", duration=5)
+        ui.notification_show(
+            f"Recording failed: {input.record_error()}", type="error", duration=5
+        )
 
     @reactive.effect
     @reactive.event(input.recording_active)
@@ -871,36 +1043,64 @@ def register_analysis_handlers(
             if tf2.npoin2 != tf1.npoin2:
                 ui.notification_show(
                     f"Mesh mismatch: {tf2.npoin2} vs {tf1.npoin2} nodes",
-                    type="error", duration=5)
+                    type="error",
+                    duration=5,
+                )
                 tf2.close()
                 return
             if tf2.nelem2 != tf1.nelem2:
                 ui.notification_show(
                     f"Element count mismatch: {tf2.nelem2} vs {tf1.nelem2} elements",
-                    type="error", duration=5)
+                    type="error",
+                    duration=5,
+                )
+                tf2.close()
+                return
+            # Identity check beyond counts — coordinates + connectivity must
+            # match exactly. Two meshes with equal node/element counts but
+            # different geometry would otherwise render file B's values on
+            # file A's triangles (see codebase-review-findings.md H#3).
+            h1 = mesh_identity_hash(tf1)
+            h2 = mesh_identity_hash(tf2)
+            if h1 != h2:
+                ui.notification_show(
+                    f"Mesh geometry differs (hashes {h1} vs {h2}). "
+                    "Counts match but node coordinates or connectivity do not.",
+                    type="error",
+                    duration=8,
+                )
                 tf2.close()
                 return
             if len(tf2.times) != len(tf1.times):
                 ui.notification_show(
                     f"Timestep count differs: {len(tf2.times)} vs {len(tf1.times)}. "
                     "Using min of both ranges.",
-                    type="warning", duration=5)
+                    type="warning",
+                    duration=5,
+                )
             # Close previous comparison file to avoid FD leak
             old_tf = compare_tf.get()
             if old_tf is not None:
                 try:
                     old_tf.close()
                 except Exception:
-                    _logger.warning("Failed to close previous compare file", exc_info=True)
+                    _logger.warning(
+                        "Failed to close previous compare file", exc_info=True
+                    )
             compare_tf.set(tf2)
-            ui.notification_show(f"Comparison file loaded: {tf2.npoin2} nodes, {len(tf2.varnames)} vars", duration=3)
+            ui.notification_show(
+                f"Comparison file loaded: {tf2.npoin2} nodes, {len(tf2.varnames)} vars",
+                duration=3,
+            )
         except Exception as e:
             if tf2 is not None:
                 try:
                     tf2.close()
                 except Exception:
                     pass
-            ui.notification_show(f"Failed to open comparison file: {e}", type="error", duration=5)
+            ui.notification_show(
+                f"Failed to open comparison file: {e}", type="error", duration=5
+            )
 
     # -- Polygon zonal statistics --
 
@@ -917,16 +1117,26 @@ def register_analysis_handlers(
         if stats is None:
             return ui.div()
         items = [
-            ui.span(f"Area: {stats['area']:.0f} m²", class_="small"), ui.br(),
-            ui.span(f"Nodes inside: {stats['count']}", class_="small"), ui.br(),
-            ui.span(f"Mean: {stats['mean']:.4f}", class_="small"), ui.br(),
-            ui.span(f"Min: {stats['min']:.4f}  Max: {stats['max']:.4f}", class_="small"),
+            ui.span(f"Area: {stats['area']:.0f} m²", class_="small"),
+            ui.br(),
+            ui.span(f"Nodes inside: {stats['count']}", class_="small"),
+            ui.br(),
+            ui.span(f"Mean: {stats['mean']:.4f}", class_="small"),
+            ui.br(),
+            ui.span(
+                f"Min: {stats['min']:.4f}  Max: {stats['max']:.4f}", class_="small"
+            ),
         ]
         if stats.get("flooded_fraction", 0) > 0 or stats.get("flooded_area", 0) > 0:
-            items.extend([
-                ui.br(),
-                ui.span(f"Flooded: {stats['flooded_fraction']*100:.1f}%", class_="small"),
-            ])
+            items.extend(
+                [
+                    ui.br(),
+                    ui.span(
+                        f"Flooded: {stats['flooded_fraction'] * 100:.1f}%",
+                        class_="small",
+                    ),
+                ]
+            )
         return ui.div(
             ui.strong("Polygon Statistics", class_="small"),
             ui.div(*items),
@@ -945,8 +1155,9 @@ def register_analysis_handlers(
         if ctf is not None:
             for v in ctf.varnames:
                 choices[f"(2) {v}"] = f"(2) {v}"
-        return ui.input_select("compare_var", "Contour overlay variable",
-                               choices=choices, selected="")
+        return ui.input_select(
+            "compare_var", "Contour overlay variable", choices=choices, selected=""
+        )
 
     # -- File info --
 
@@ -955,14 +1166,14 @@ def register_analysis_handlers(
     def file_info_ui():
         tf = tel_file()
         dt = tf.times[1] - tf.times[0] if len(tf.times) > 1 else 0
-        precision = "Double" if getattr(tf, 'float_type', 'f') == 'd' else "Single"
-        nplan = getattr(tf, 'nplan', 0)
+        precision = "Double" if getattr(tf, "float_type", "f") == "d" else "Single"
+        nplan = getattr(tf, "nplan", 0)
         dim = "3D" if nplan > 1 else "2D"
         module = "TELEMAC-3D" if nplan > 1 else detect_module_from_vars(tf.varnames)
         date_info = ""
-        if hasattr(tf, 'datetime') and tf.datetime is not None:
+        if hasattr(tf, "datetime") and tf.datetime is not None:
             dt_val = tf.datetime
-            if hasattr(dt_val, '__len__') and len(dt_val) > 0:
+            if hasattr(dt_val, "__len__") and len(dt_val) > 0:
                 date_info = str(dt_val[0])
             else:
                 date_info = str(dt_val)
@@ -975,24 +1186,36 @@ def register_analysis_handlers(
             ("Variables", f"{len(tf.varnames)}"),
             ("Time steps", f"{len(tf.times)}"),
             ("dt", f"{dt:.2f} s" if dt else "N/A"),
-            ("Duration", format_time(float(tf.times[-1] - tf.times[0])) if len(tf.times) > 1 else "N/A"),
+            (
+                "Duration",
+                format_time(float(tf.times[-1] - tf.times[0]))
+                if len(tf.times) > 1
+                else "N/A",
+            ),
             ("Precision", precision),
         ]
         if date_info:
             rows.append(("Start date", date_info))
 
-        items = [ui.div(
-            ui.span(label, class_="text-muted", style="width:80px;display:inline-block;"),
-            ui.strong(value),
-            class_="small mb-1",
-        ) for label, value in rows]
+        items = [
+            ui.div(
+                ui.span(
+                    label, class_="text-muted", style="width:80px;display:inline-block;"
+                ),
+                ui.strong(value),
+                class_="small mb-1",
+            )
+            for label, value in rows
+        ]
 
         var_list = ", ".join(tf.varnames)
-        items.append(ui.div(
-            ui.span("Vars: ", class_="text-muted small"),
-            ui.span(var_list, class_="small"),
-            class_="mt-1",
-        ))
+        items.append(
+            ui.div(
+                ui.span("Vars: ", class_="text-muted small"),
+                ui.span(var_list, class_="small"),
+                class_="mt-1",
+            )
+        )
         return ui.div(*items)
 
     # -- CSV download --
@@ -1007,8 +1230,11 @@ def register_analysis_handlers(
         if mode == "timeseries":
             pts = clicked_points.get()
             if not pts:
-                ui.notification_show("No points selected — click the map first",
-                                     type="warning", duration=3)
+                ui.notification_show(
+                    "No points selected — click the map first",
+                    type="warning",
+                    duration=3,
+                )
                 yield ""
                 return
             # Export all points as columns
@@ -1026,9 +1252,11 @@ def register_analysis_handlers(
                 wgs84 = meters_to_wgs84(pt[0], pt[1], geom)
                 if wgs84:
                     lon, lat = wgs84
-                    buf.write(f",Pt{i+1} ({pt[0]:.0f} {pt[1]:.0f} | {lon:.6f}E {lat:.6f}N)")
+                    buf.write(
+                        f",Pt{i + 1} ({pt[0]:.0f} {pt[1]:.0f} | {lon:.6f}E {lat:.6f}N)"
+                    )
                 else:
-                    buf.write(f",Pt{i+1} ({pt[0]:.0f} {pt[1]:.0f})")
+                    buf.write(f",Pt{i + 1} ({pt[0]:.0f} {pt[1]:.0f})")
             buf.write("\n")
             for j in range(len(times_arr)):
                 buf.write(f"{times_arr[j]}")
@@ -1040,8 +1268,11 @@ def register_analysis_handlers(
         elif mode == "crosssection":
             xsec_pts = cross_section_points.get()
             if xsec_pts is None:
-                ui.notification_show("No cross-section defined — draw a polyline first",
-                                     type="warning", duration=3)
+                ui.notification_show(
+                    "No cross-section defined — draw a polyline first",
+                    type="warning",
+                    duration=3,
+                )
                 yield ""
                 return
             abscissa, values = cross_section_profile(tf, var, tidx, xsec_pts)
@@ -1096,7 +1327,9 @@ def register_analysis_handlers(
                 yield ""
                 return
             pt = pts[-1]
-            elevations, values, elev_label = vertical_profile_at_point(tf, var, tidx, pt[0], pt[1])
+            elevations, values, elev_label = vertical_profile_at_point(
+                tf, var, tidx, pt[0], pt[1]
+            )
             buf = io.StringIO()
             buf.write(f"{elev_label},{var}\n")
             for e, v in zip(elevations, values):
@@ -1154,4 +1387,6 @@ def register_analysis_handlers(
             )
         except Exception as e:
             obs_data.set(None)
-            ui.notification_show(f"Failed to parse observations: {e}", type="error", duration=6)
+            ui.notification_show(
+                f"Failed to parse observations: {e}", type="error", duration=6
+            )
