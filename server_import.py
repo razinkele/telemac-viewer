@@ -8,16 +8,26 @@ import shutil
 
 import numpy as np
 from shiny import reactive, render, ui
-from shinywidgets import render_widget
 from shiny_deckgl import (
     MapWidget,
     line_layer,
     scatterplot_layer,
     path_layer,
 )
+from constants import MAP_BG_DARK
 from layers import _COORD_METER_OFFSETS
 
 _logger = logging.getLogger(__name__)
+
+
+# shiny_deckgl.MapWidget is a native Shiny component (not an ipywidget),
+# so it is embedded via its .ui() method directly in app.py — it must NOT
+# be wrapped with shinywidgets.render_widget/output_widget.
+import_map_widget = MapWidget(
+    "import_map",
+    view_state={"longitude": 0, "latitude": 0, "zoom": 0},
+    style=MAP_BG_DARK,
+)
 
 
 def register_import_handlers(input, output, session):
@@ -27,20 +37,9 @@ def register_import_handlers(input, output, session):
     main server, because the import tab is fully self-contained.
     """
 
-    import_model = reactive.value(None)      # parsed HecRasModel
-    import_output_dir = reactive.value(None) # path to generated files
+    import_model = reactive.value(None)  # parsed HecRasModel
+    import_output_dir = reactive.value(None)  # path to generated files
     import_log_text = reactive.value("")
-
-    import_map_widget = MapWidget(
-        "import_map",
-        view_state={"longitude": 0, "latitude": 0, "zoom": 0},
-        style=(
-            "data:application/json;charset=utf-8,"
-            "%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A"
-            "%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C"
-            "%22paint%22%3A%7B%22background-color%22%3A%22%230f1923%22%7D%7D%5D%7D"
-        ),
-    )
 
     # -- helpers --
 
@@ -62,10 +61,6 @@ def register_import_handlers(input, output, session):
         return path if _os.path.isfile(path) else None
 
     # -- outputs --
-
-    @render_widget
-    def import_map():
-        return import_map_widget
 
     @output
     @render.text
@@ -96,14 +91,22 @@ def register_import_handlers(input, output, session):
         if out is None:
             return ui.span("No output yet", class_="small text-muted")
         buttons = [
-            ui.download_button("dl_slf", "Download .slf", class_="btn-sm btn-outline-primary me-1"),
-            ui.download_button("dl_cli", "Download .cli", class_="btn-sm btn-outline-primary me-1"),
-            ui.download_button("dl_cas", "Download .cas", class_="btn-sm btn-outline-primary me-1"),
+            ui.download_button(
+                "dl_slf", "Download .slf", class_="btn-sm btn-outline-primary me-1"
+            ),
+            ui.download_button(
+                "dl_cli", "Download .cli", class_="btn-sm btn-outline-primary me-1"
+            ),
+            ui.download_button(
+                "dl_cas", "Download .cas", class_="btn-sm btn-outline-primary me-1"
+            ),
         ]
         liq_path = _import_file_path(".liq")
         if liq_path:
             buttons.append(
-                ui.download_button("dl_liq", "Download .liq", class_="btn-sm btn-outline-success"),
+                ui.download_button(
+                    "dl_liq", "Download .liq", class_="btn-sm btn-outline-success"
+                ),
             )
         return ui.div(*buttons, class_="d-flex gap-1")
 
@@ -148,73 +151,106 @@ def register_import_handlers(input, output, session):
                 px, py = float(p[0] - x_off), float(p[1] - y_off)
                 if np.isfinite(px) and np.isfinite(py):
                     path.append([px, py])
-            layers.append(path_layer(
-                f"alignment-{reach.name}",
-                [{"path": path}],
-                getPath="@@=d.path",
-                getColor=[0, 200, 255, 200],
-                getWidth=4,
-                widthMinPixels=2,
-                widthMaxPixels=6,
-                pickable=False,
-                coordinateSystem=_COORD_METER_OFFSETS,
-                coordinateOrigin=[0, 0],
-            ))
+            layers.append(
+                path_layer(
+                    f"alignment-{reach.name}",
+                    [{"path": path}],
+                    getPath="@@=d.path",
+                    getColor=[0, 200, 255, 200],
+                    getWidth=4,
+                    widthMinPixels=2,
+                    widthMaxPixels=6,
+                    pickable=False,
+                    coordinateSystem=_COORD_METER_OFFSETS,
+                    coordinateOrigin=[0, 0],
+                )
+            )
 
             # Cross-section lines (yellow)
             xs_lines = []
             for xs in reach.cross_sections:
                 if xs.coords.shape[0] >= 2:
-                    xs_lines.append({
-                        "sourcePosition": [float(xs.coords[0, 0] - x_off), float(xs.coords[0, 1] - y_off)],
-                        "targetPosition": [float(xs.coords[-1, 0] - x_off), float(xs.coords[-1, 1] - y_off)],
-                    })
+                    xs_lines.append(
+                        {
+                            "sourcePosition": [
+                                float(xs.coords[0, 0] - x_off),
+                                float(xs.coords[0, 1] - y_off),
+                            ],
+                            "targetPosition": [
+                                float(xs.coords[-1, 0] - x_off),
+                                float(xs.coords[-1, 1] - y_off),
+                            ],
+                        }
+                    )
             if xs_lines:
-                layers.append(line_layer(
-                    f"cross-sections-{reach.name}",
-                    xs_lines,
-                    getColor=[255, 220, 0, 180],
-                    getWidth=2,
-                    widthMinPixels=1,
-                    widthMaxPixels=3,
-                    pickable=False,
-                    coordinateSystem=_COORD_METER_OFFSETS,
-                    coordinateOrigin=[0, 0],
-                ))
+                layers.append(
+                    line_layer(
+                        f"cross-sections-{reach.name}",
+                        xs_lines,
+                        getColor=[255, 220, 0, 180],
+                        getWidth=2,
+                        widthMinPixels=1,
+                        widthMaxPixels=3,
+                        pickable=False,
+                        coordinateSystem=_COORD_METER_OFFSETS,
+                        coordinateOrigin=[0, 0],
+                    )
+                )
 
         # BC lines
         for i, bc in enumerate(model.boundaries):
             if bc.line_coords is not None and len(bc.line_coords) >= 2:
-                color = [40, 120, 255, 220] if bc.location == "upstream" else [0, 200, 80, 220]
-                layers.append(line_layer(
-                    f"bc-{i}",
-                    [{"sourcePosition": [float(bc.line_coords[0, 0] - x_off), float(bc.line_coords[0, 1] - y_off)],
-                      "targetPosition": [float(bc.line_coords[-1, 0] - x_off), float(bc.line_coords[-1, 1] - y_off)]}],
-                    getColor=color,
-                    getWidth=4,
-                    widthMinPixels=2,
-                    widthMaxPixels=5,
-                    pickable=False,
-                    coordinateSystem=_COORD_METER_OFFSETS,
-                    coordinateOrigin=[0, 0],
-                ))
+                color = (
+                    [40, 120, 255, 220]
+                    if bc.location == "upstream"
+                    else [0, 200, 80, 220]
+                )
+                layers.append(
+                    line_layer(
+                        f"bc-{i}",
+                        [
+                            {
+                                "sourcePosition": [
+                                    float(bc.line_coords[0, 0] - x_off),
+                                    float(bc.line_coords[0, 1] - y_off),
+                                ],
+                                "targetPosition": [
+                                    float(bc.line_coords[-1, 0] - x_off),
+                                    float(bc.line_coords[-1, 1] - y_off),
+                                ],
+                            }
+                        ],
+                        getColor=color,
+                        getWidth=4,
+                        widthMinPixels=2,
+                        widthMaxPixels=5,
+                        pickable=False,
+                        coordinateSystem=_COORD_METER_OFFSETS,
+                        coordinateOrigin=[0, 0],
+                    )
+                )
 
         # 2D area face points (scatter, subsampled)
         for area in model.areas_2d:
             step = max(1, len(area.face_points) // 2000)
-            pts = [{"position": [float(p[0] - x_off), float(p[1] - y_off)]} for p in area.face_points[::step]]
-            layers.append(scatterplot_layer(
-                f"2d-{area.name}",
-                pts,
-                getPosition="@@=d.position",
-                getColor=[0, 200, 255, 120],
-                getRadius=3,
-                radiusMinPixels=1,
-                radiusMaxPixels=4,
-                pickable=False,
-                coordinateSystem=_COORD_METER_OFFSETS,
-                coordinateOrigin=[0, 0],
-            ))
+            pts = [
+                {"position": [float(p[0] - x_off), float(p[1] - y_off)]}
+                for p in area.face_points[::step]
+            ]
+            layers.append(
+                scatterplot_layer(
+                    f"2d-{area.name}",
+                    pts,
+                    getPosition="@@=d.position",
+                    getColor=[0, 200, 255, 120],
+                    getRadius=3,
+                    radiusMinPixels=1,
+                    radiusMaxPixels=4,
+                    pickable=False,
+                    coordinateSystem=_COORD_METER_OFFSETS,
+                    coordinateOrigin=[0, 0],
+                )
+            )
 
         return layers
 
@@ -235,6 +271,7 @@ def register_import_handlers(input, output, session):
 
         try:
             from telemac_tools.hecras import parse_hecras
+
             model = parse_hecras(hdf_path)
             import_model.set(model)
 
@@ -244,7 +281,9 @@ def register_import_handlers(input, output, session):
                     _append_log(f"    Cross-sections: {len(r.cross_sections)}")
                     if r.cross_sections:
                         stations = [xs.station for xs in r.cross_sections]
-                        _append_log(f"    Station range: {min(stations):.0f} – {max(stations):.0f} m")
+                        _append_log(
+                            f"    Station range: {min(stations):.0f} – {max(stations):.0f} m"
+                        )
                     _append_log(f"    Alignment points: {r.alignment.shape[0]}")
             if model.areas_2d:
                 for a in model.areas_2d:
@@ -268,7 +307,11 @@ def register_import_handlers(input, output, session):
                 x_off = (min(all_x) + max(all_x)) / 2
                 y_off = (min(all_y) + max(all_y)) / 2
                 extent = max(max(all_x) - min(all_x), max(all_y) - min(all_y), 1.0)
-                zoom = math.log2(600 * 360 / (256 * (extent / 111320))) if extent > 0 else 10
+                zoom = (
+                    math.log2(600 * 360 / (256 * (extent / 111320)))
+                    if extent > 0
+                    else 10
+                )
 
                 preview_layers = _build_import_preview_layers(model, x_off, y_off)
                 await import_map_widget.update(
@@ -277,7 +320,9 @@ def register_import_handlers(input, output, session):
                     view_state={"longitude": 0, "latitude": 0, "zoom": zoom},
                 )
 
-            _append_log("\nReady to convert. Click 'Convert' to generate TELEMAC files.")
+            _append_log(
+                "\nReady to convert. Click 'Convert' to generate TELEMAC files."
+            )
 
         except Exception as e:
             _append_log(f"ERROR: {e}")
@@ -312,6 +357,7 @@ def register_import_handlers(input, output, session):
             return
 
         import tempfile
+
         # Clean up previous temp dir
         old_dir = _import_out_dir.get()
         if old_dir and _os.path.isdir(old_dir):
@@ -329,9 +375,13 @@ def register_import_handlers(input, output, session):
                 cas_overrides["EQUATIONS"] = "'SAINT-VENANT FE'"
                 cas_overrides["FINITE VOLUME SCHEME"] = None
 
-            channel_refine = float(input.channel_refine()) if input.channel_refine() else 10.0
-            fp_refine = float(input.floodplain_refine()) if input.floodplain_refine() else None
-            channel_spacing = max(1.0, channel_refine ** 0.5)
+            channel_refine = (
+                float(input.channel_refine()) if input.channel_refine() else 10.0
+            )
+            fp_refine = (
+                float(input.floodplain_refine()) if input.floodplain_refine() else None
+            )
+            channel_spacing = max(1.0, channel_refine**0.5)
 
             hecras_to_telemac(
                 hecras_path=hdf_path,
@@ -355,6 +405,7 @@ def register_import_handlers(input, output, session):
 
             # Count mesh stats
             from data_manip.extraction.telemac_file import TelemacFile
+
             tf = TelemacFile(_os.path.join(out_dir, f"{hdf_name}.slf"))
             try:
                 _append_log(f"\nMesh: {tf.npoin2} nodes, {tf.nelem2} elements")
@@ -367,8 +418,11 @@ def register_import_handlers(input, output, session):
         except Exception as e:
             _append_log(f"ERROR: {e}")
             import traceback
+
             _append_log(traceback.format_exc())
-            ui.notification_show(f"Import conversion failed: {e}", type="error", duration=8)
+            ui.notification_show(
+                f"Import conversion failed: {e}", type="error", duration=8
+            )
             shutil.rmtree(out_dir, ignore_errors=True)
             _import_out_dir.set(None)
             import_output_dir.set(None)

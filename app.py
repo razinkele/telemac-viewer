@@ -6,7 +6,7 @@ from __version__ import __version__
 
 import numpy as np
 from shiny import App, reactive, render, ui
-from shinywidgets import output_widget
+from server_import import import_map_widget
 from shiny_deckgl import (
     MapWidget,
     head_includes,
@@ -28,8 +28,14 @@ from shiny_deckgl import (
 _logger = logging.getLogger(__name__)
 
 from constants import (
-    EXAMPLES, EXAMPLE_CHOICES, PALETTES,
-    cached_gradient_colors, format_time,
+    EXAMPLES,
+    EXAMPLE_CHOICES,
+    PALETTES,
+    BASEMAP_STYLES,
+    MAP_BG_DARK,
+    MAP_TOOLTIP,
+    cached_gradient_colors,
+    format_time,
 )
 from layers import (
     build_mesh_layer,
@@ -60,20 +66,9 @@ from telemac_defaults import is_bipolar
 map_widget = MapWidget(
     "map",
     view_state={"longitude": 0, "latitude": 0, "zoom": 0},
-    style="data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%230f1923%22%7D%7D%5D%7D",
+    style=MAP_BG_DARK,
     cooperative_gestures=True,
-    tooltip={
-        "html": "<b>{layerType}</b><br/>{info}",
-        "style": {
-            "backgroundColor": "rgba(15, 25, 35, 0.92)",
-            "color": "#c8dce8",
-            "fontSize": "12px",
-            "borderRadius": "6px",
-            "border": "1px solid rgba(13, 115, 119, 0.5)",
-            "padding": "6px 10px",
-            "boxShadow": "0 2px 8px rgba(0,0,0,0.3)",
-        },
-    },
+    tooltip=MAP_TOOLTIP,
 )
 
 # ---------------------------------------------------------------------------
@@ -96,17 +91,29 @@ _HELP_MODAL = ui.modal(
                 ui.h6("Modules"),
                 ui.tags.dl(
                     ui.tags.dt("TELEMAC-2D"),
-                    ui.tags.dd("Depth-averaged shallow water equations — river flows, dam breaks, flood propagation."),
+                    ui.tags.dd(
+                        "Depth-averaged shallow water equations — river flows, dam breaks, flood propagation."
+                    ),
                     ui.tags.dt("TELEMAC-3D"),
-                    ui.tags.dd("Three-dimensional hydrodynamics — estuaries, stratified flows, thermal plumes."),
+                    ui.tags.dd(
+                        "Three-dimensional hydrodynamics — estuaries, stratified flows, thermal plumes."
+                    ),
                     ui.tags.dt("TOMAWAC"),
-                    ui.tags.dd("Spectral wave modelling — nearshore wave transformation, refraction, breaking."),
+                    ui.tags.dd(
+                        "Spectral wave modelling — nearshore wave transformation, refraction, breaking."
+                    ),
                     ui.tags.dt("ARTEMIS"),
-                    ui.tags.dd("Harbour wave agitation — short-wave diffraction and reflection in port areas."),
+                    ui.tags.dd(
+                        "Harbour wave agitation — short-wave diffraction and reflection in port areas."
+                    ),
                     ui.tags.dt("SISYPHE / GAIA"),
-                    ui.tags.dd("Sediment transport and morphodynamics — bedload, suspended load, bed evolution."),
+                    ui.tags.dd(
+                        "Sediment transport and morphodynamics — bedload, suspended load, bed evolution."
+                    ),
                     ui.tags.dt("WAQTEL"),
-                    ui.tags.dd("Water quality — pollutant dispersion, dissolved oxygen, thermal modelling."),
+                    ui.tags.dd(
+                        "Water quality — pollutant dispersion, dissolved oxygen, thermal modelling."
+                    ),
                 ),
                 ui.h6("SELAFIN format"),
                 ui.p(
@@ -126,13 +133,23 @@ _HELP_MODAL = ui.modal(
                 ui.h6("Typical workflow"),
                 ui.tags.ol(
                     ui.tags.li("Create geometry and mesh (BlueKenue, SALOME, or QGIS)"),
-                    ui.tags.li("Write a steering file (.cas) with parameters and boundary conditions"),
-                    ui.tags.li("Run the simulation (e.g. telemac2d.py case.cas --ncsize=4)"),
-                    ui.tags.li("Visualize results in this viewer or ParaView/BlueKenue"),
+                    ui.tags.li(
+                        "Write a steering file (.cas) with parameters and boundary conditions"
+                    ),
+                    ui.tags.li(
+                        "Run the simulation (e.g. telemac2d.py case.cas --ncsize=4)"
+                    ),
+                    ui.tags.li(
+                        "Visualize results in this viewer or ParaView/BlueKenue"
+                    ),
                 ),
                 ui.h6("Learn more"),
                 ui.p(
-                    ui.a("opentelemac.org", href="https://www.opentelemac.org", target="_blank"),
+                    ui.a(
+                        "opentelemac.org",
+                        href="https://www.opentelemac.org",
+                        target="_blank",
+                    ),
                     " — Official documentation, tutorials, and source code.",
                 ),
                 style="padding:8px 4px; font-size:13px;",
@@ -144,58 +161,169 @@ _HELP_MODAL = ui.modal(
                 ui.h5("Viewer Interface Guide"),
                 ui.h6("Data Panel"),
                 ui.tags.ul(
-                    ui.tags.li(ui.tags.b("Example case"), " — Load a built-in example from TELEMAC-2D, 3D, TOMAWAC, ARTEMIS, SISYPHE, or GAIA."),
-                    ui.tags.li(ui.tags.b("Upload .slf"), " — Load your own SELAFIN result file."),
-                    ui.tags.li(ui.tags.b("Dark map background"), " — Toggle between light and dark map canvas."),
+                    ui.tags.li(
+                        ui.tags.b("Example case"),
+                        " — Load a built-in example from TELEMAC-2D, 3D, TOMAWAC, ARTEMIS, SISYPHE, or GAIA.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Upload .slf"),
+                        " — Load your own SELAFIN result file.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Dark map background"),
+                        " — Toggle between light and dark map canvas.",
+                    ),
                 ),
                 ui.h6("Visualization Panel"),
                 ui.tags.ul(
-                    ui.tags.li(ui.tags.b("Variable"), " — Select which result variable to display (e.g. WATER DEPTH, VELOCITY U)."),
-                    ui.tags.li(ui.tags.b("Color palette"), " — Choose from Viridis, Plasma, Ocean, Thermal, or Chlorophyll color maps."),
-                    ui.tags.li(ui.tags.b("Velocity vectors"), " — Overlay arrow glyphs showing flow direction and magnitude."),
-                    ui.tags.li(ui.tags.b("Contour lines"), " — Show iso-value contour lines on the mesh."),
-                    ui.tags.li(ui.tags.b("Mesh wireframe"), " — Display the triangular mesh edges."),
-                    ui.tags.li(ui.tags.b("Boundary nodes"), " — Highlight nodes on the domain boundary."),
-                    ui.tags.li(ui.tags.b("Min/Max locations"), " — Mark the locations of extreme values on the mesh."),
-                    ui.tags.li(ui.tags.b("Log scale"), " — Apply logarithmic color scaling for variables with large ranges."),
-                    ui.tags.li(ui.tags.b("Reverse palette"), " — Invert the color ramp direction."),
-                    ui.tags.li(ui.tags.b("Difference mode"), " — Show the difference between the current timestep and a reference."),
-                    ui.tags.li(ui.tags.b("Color range"), " — Manually set min/max values for the color scale."),
-                    ui.tags.li(ui.tags.b("Filter range"), " — Gray out values outside a specified range."),
-                    ui.tags.li(ui.tags.b("Cross-Section"), " — Click two points to create a profile line; view elevation/value cross-section plots."),
-                    ui.tags.li(ui.tags.b("Discharge"), " — Compute volumetric flow rate across the cross-section line."),
-                    ui.tags.li(ui.tags.b("Particle traces"), " — Animate flow pathlines from a seed grid."),
-                    ui.tags.li(ui.tags.b("Mesh quality"), " — Color the mesh by element quality (aspect ratio)."),
-                    ui.tags.li(ui.tags.b("Slope/gradient"), " — Visualize the spatial gradient magnitude of the selected variable."),
-                    ui.tags.li(ui.tags.b("Courant number"), " — Display the local CFL condition number."),
-                    ui.tags.li(ui.tags.b("Element area"), " — Color-code triangles by their area."),
-                    ui.tags.li(ui.tags.b("Measure Distance"), " — Click two points to measure Euclidean distance."),
-                    ui.tags.li(ui.tags.b("Custom expression"), " — Compute derived fields using math expressions (e.g. ", ui.tags.code("VELOCITY_U**2 + VELOCITY_V**2"), ")."),
-                    ui.tags.li(ui.tags.b("3D mode"), " — Switch to 3D perspective view for multi-layer (3D) result files."),
+                    ui.tags.li(
+                        ui.tags.b("Variable"),
+                        " — Select which result variable to display (e.g. WATER DEPTH, VELOCITY U).",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Color palette"),
+                        " — Choose from Viridis, Plasma, Ocean, Thermal, or Chlorophyll color maps.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Velocity vectors"),
+                        " — Overlay arrow glyphs showing flow direction and magnitude.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Contour lines"),
+                        " — Show iso-value contour lines on the mesh.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Mesh wireframe"),
+                        " — Display the triangular mesh edges.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Boundary nodes"),
+                        " — Highlight nodes on the domain boundary.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Min/Max locations"),
+                        " — Mark the locations of extreme values on the mesh.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Log scale"),
+                        " — Apply logarithmic color scaling for variables with large ranges.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Reverse palette"),
+                        " — Invert the color ramp direction.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Difference mode"),
+                        " — Show the difference between the current timestep and a reference.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Color range"),
+                        " — Manually set min/max values for the color scale.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Filter range"),
+                        " — Gray out values outside a specified range.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Cross-Section"),
+                        " — Click two points to create a profile line; view elevation/value cross-section plots.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Discharge"),
+                        " — Compute volumetric flow rate across the cross-section line.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Particle traces"),
+                        " — Animate flow pathlines from a seed grid.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Mesh quality"),
+                        " — Color the mesh by element quality (aspect ratio).",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Slope/gradient"),
+                        " — Visualize the spatial gradient magnitude of the selected variable.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Courant number"),
+                        " — Display the local CFL condition number.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Element area"),
+                        " — Color-code triangles by their area.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Measure Distance"),
+                        " — Click two points to measure Euclidean distance.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Custom expression"),
+                        " — Compute derived fields using math expressions (e.g. ",
+                        ui.tags.code("VELOCITY_U**2 + VELOCITY_V**2"),
+                        ").",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("3D mode"),
+                        " — Switch to 3D perspective view for multi-layer (3D) result files.",
+                    ),
                 ),
                 ui.h6("Playback Panel"),
                 ui.tags.ul(
-                    ui.tags.li(ui.tags.b("Time slider"), " — Scrub through simulation timesteps."),
-                    ui.tags.li(ui.tags.b("Play/Pause"), " — Animate through timesteps automatically."),
-                    ui.tags.li(ui.tags.b("Go to time"), " — Jump to a specific simulation time in seconds."),
-                    ui.tags.li(ui.tags.b("Speed"), " — Control animation speed (seconds per frame)."),
-                    ui.tags.li(ui.tags.b("Loop"), " — Restart animation from the beginning when it reaches the end."),
+                    ui.tags.li(
+                        ui.tags.b("Time slider"),
+                        " — Scrub through simulation timesteps.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Play/Pause"),
+                        " — Animate through timesteps automatically.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Go to time"),
+                        " — Jump to a specific simulation time in seconds.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Speed"),
+                        " — Control animation speed (seconds per frame).",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Loop"),
+                        " — Restart animation from the beginning when it reaches the end.",
+                    ),
                 ),
                 ui.h6("Statistics Panel"),
                 ui.tags.ul(
-                    ui.tags.li(ui.tags.b("Stats"), " — Current timestep statistics: min, max, mean, std dev."),
-                    ui.tags.li(ui.tags.b("All Vars Time Series"), " — Plot all variables over time at a clicked node."),
-                    ui.tags.li(ui.tags.b("Value Histogram"), " — Distribution histogram of the current variable."),
-                    ui.tags.li(ui.tags.b("Compute Integral"), " — Area-weighted integral of the variable over the domain."),
-                    ui.tags.li(ui.tags.b("Temporal Stats"), " — Compute min/max/mean over all timesteps."),
+                    ui.tags.li(
+                        ui.tags.b("Stats"),
+                        " — Current timestep statistics: min, max, mean, std dev.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("All Vars Time Series"),
+                        " — Plot all variables over time at a clicked node.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Value Histogram"),
+                        " — Distribution histogram of the current variable.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Compute Integral"),
+                        " — Area-weighted integral of the variable over the domain.",
+                    ),
+                    ui.tags.li(
+                        ui.tags.b("Temporal Stats"),
+                        " — Compute min/max/mean over all timesteps.",
+                    ),
                 ),
                 ui.h6("File Info Panel"),
                 ui.tags.ul(
-                    ui.tags.li("View metadata: mesh size, variable count, time range, precision, module type."),
+                    ui.tags.li(
+                        "View metadata: mesh size, variable count, time range, precision, module type."
+                    ),
                 ),
                 ui.h6("Run Simulation Panel"),
                 ui.tags.ul(
-                    ui.tags.li("Select a .cas steering file and run TELEMAC directly from the viewer."),
+                    ui.tags.li(
+                        "Select a .cas steering file and run TELEMAC directly from the viewer."
+                    ),
                     ui.tags.li("Monitor console output in real time."),
                 ),
                 style="padding:8px 4px; font-size:13px;",
@@ -207,14 +335,31 @@ _HELP_MODAL = ui.modal(
                 ui.h5("Keyboard Shortcuts"),
                 ui.tags.table(
                     ui.tags.thead(
-                        ui.tags.tr(ui.tags.th("Key", style="width:140px"), ui.tags.th("Action")),
+                        ui.tags.tr(
+                            ui.tags.th("Key", style="width:140px"), ui.tags.th("Action")
+                        ),
                     ),
                     ui.tags.tbody(
-                        ui.tags.tr(ui.tags.td(ui.tags.kbd("Space")), ui.tags.td("Play / Pause animation")),
-                        ui.tags.tr(ui.tags.td(ui.tags.kbd("\u2192 Right Arrow")), ui.tags.td("Next timestep")),
-                        ui.tags.tr(ui.tags.td(ui.tags.kbd("\u2190 Left Arrow")), ui.tags.td("Previous timestep")),
-                        ui.tags.tr(ui.tags.td(ui.tags.kbd("Page Down")), ui.tags.td("Next variable")),
-                        ui.tags.tr(ui.tags.td(ui.tags.kbd("Page Up")), ui.tags.td("Previous variable")),
+                        ui.tags.tr(
+                            ui.tags.td(ui.tags.kbd("Space")),
+                            ui.tags.td("Play / Pause animation"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td(ui.tags.kbd("\u2192 Right Arrow")),
+                            ui.tags.td("Next timestep"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td(ui.tags.kbd("\u2190 Left Arrow")),
+                            ui.tags.td("Previous timestep"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td(ui.tags.kbd("Page Down")),
+                            ui.tags.td("Next variable"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td(ui.tags.kbd("Page Up")),
+                            ui.tags.td("Previous variable"),
+                        ),
                     ),
                     class_="table table-sm table-striped",
                     style="max-width:400px;",
@@ -222,14 +367,28 @@ _HELP_MODAL = ui.modal(
                 ui.h6("Map controls"),
                 ui.tags.table(
                     ui.tags.thead(
-                        ui.tags.tr(ui.tags.th("Action", style="width:180px"), ui.tags.th("How")),
+                        ui.tags.tr(
+                            ui.tags.th("Action", style="width:180px"), ui.tags.th("How")
+                        ),
                     ),
                     ui.tags.tbody(
                         ui.tags.tr(ui.tags.td("Pan"), ui.tags.td("Click and drag")),
-                        ui.tags.tr(ui.tags.td("Zoom"), ui.tags.td("Scroll wheel or +/- buttons")),
-                        ui.tags.tr(ui.tags.td("Reset view"), ui.tags.td("Reset View widget button")),
-                        ui.tags.tr(ui.tags.td("Screenshot"), ui.tags.td("Screenshot widget button")),
-                        ui.tags.tr(ui.tags.td("Fullscreen"), ui.tags.td("Fullscreen widget button")),
+                        ui.tags.tr(
+                            ui.tags.td("Zoom"),
+                            ui.tags.td("Scroll wheel or +/- buttons"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td("Reset view"),
+                            ui.tags.td("Reset View widget button"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td("Screenshot"),
+                            ui.tags.td("Screenshot widget button"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td("Fullscreen"),
+                            ui.tags.td("Fullscreen widget button"),
+                        ),
                     ),
                     class_="table table-sm table-striped",
                     style="max-width:400px;",
@@ -491,7 +650,9 @@ app_ui = ui.page_navbar(
         ui.div(
             ui.div(
                 ui.span("Variable ", class_="stat-label"),
-                ui.span(ui.output_text("stat_var_name", inline=True), class_="stat-val"),
+                ui.span(
+                    ui.output_text("stat_var_name", inline=True), class_="stat-val"
+                ),
                 class_="stat-chip stat-var",
             ),
             ui.div(
@@ -542,18 +703,35 @@ app_ui = ui.page_navbar(
         ui.layout_columns(
             ui.card(
                 ui.card_header("Analysis Tools"),
-                ui.input_file("obs_upload", "Upload observations (.csv)", accept=[".csv"]),
+                ui.input_file(
+                    "obs_upload", "Upload observations (.csv)", accept=[".csv"]
+                ),
                 ui.div(
-                    ui.input_action_button("show_multivar", "All Vars Time Series",
-                                           class_="btn-sm btn-outline-primary mb-1"),
-                    ui.input_action_button("show_histogram", "Value Histogram",
-                                           class_="btn-sm btn-outline-primary mb-1"),
-                    ui.input_action_button("compute_integral", "Compute Integral",
-                                           class_="btn-sm btn-outline-info mb-1"),
-                    ui.input_action_button("compute_temporal", "Temporal Stats",
-                                           class_="btn-sm btn-outline-info mb-1"),
-                    ui.input_action_button("compute_volume", "Volume over time",
-                                           class_="btn-sm btn-outline-info mb-1"),
+                    ui.input_action_button(
+                        "show_multivar",
+                        "All Vars Time Series",
+                        class_="btn-sm btn-outline-primary mb-1",
+                    ),
+                    ui.input_action_button(
+                        "show_histogram",
+                        "Value Histogram",
+                        class_="btn-sm btn-outline-primary mb-1",
+                    ),
+                    ui.input_action_button(
+                        "compute_integral",
+                        "Compute Integral",
+                        class_="btn-sm btn-outline-info mb-1",
+                    ),
+                    ui.input_action_button(
+                        "compute_temporal",
+                        "Temporal Stats",
+                        class_="btn-sm btn-outline-info mb-1",
+                    ),
+                    ui.input_action_button(
+                        "compute_volume",
+                        "Volume over time",
+                        class_="btn-sm btn-outline-info mb-1",
+                    ),
                     class_="d-flex flex-wrap gap-2 mb-2",
                 ),
                 ui.output_ui("integral_ui"),
@@ -581,10 +759,12 @@ app_ui = ui.page_navbar(
                 ui.output_ui("cas_select_ui"),
                 ui.input_numeric("ncores", "CPU cores", value=4, min=0, max=28, step=1),
                 ui.div(
-                    ui.input_action_button("run_sim", "Run",
-                                           class_="btn-sm btn-success me-2"),
-                    ui.input_action_button("stop_sim", "Stop",
-                                           class_="btn-sm btn-danger"),
+                    ui.input_action_button(
+                        "run_sim", "Run", class_="btn-sm btn-success me-2"
+                    ),
+                    ui.input_action_button(
+                        "stop_sim", "Stop", class_="btn-sm btn-danger"
+                    ),
                     class_="d-flex gap-2 mb-2",
                 ),
                 ui.output_ui("sim_status_ui"),
@@ -606,34 +786,70 @@ app_ui = ui.page_navbar(
         ui.layout_columns(
             ui.card(
                 ui.card_header("HEC-RAS → TELEMAC Import"),
-                ui.input_select("import_source", "Source format", choices={
-                    "hecras6": "HEC-RAS 6.x (.hdf)",
-                }),
-                ui.input_file("import_hdf", "HEC-RAS geometry file (.hdf)",
-                              accept=[".hdf", ".hdf5"]),
-                ui.input_file("import_dem", "DEM file (.tif)",
-                              accept=[".tif", ".tiff"]),
+                ui.input_select(
+                    "import_source",
+                    "Source format",
+                    choices={
+                        "hecras6": "HEC-RAS 6.x (.hdf)",
+                    },
+                ),
+                ui.input_file(
+                    "import_hdf",
+                    "HEC-RAS geometry file (.hdf)",
+                    accept=[".hdf", ".hdf5"],
+                ),
+                ui.input_file(
+                    "import_dem", "DEM file (.tif)", accept=[".tif", ".tiff"]
+                ),
                 ui.tags.details(
                     ui.tags.summary("1D Options"),
-                    ui.input_numeric("fp_width", "Floodplain width (m)",
-                                     value=500, min=50, max=5000, step=50),
-                    ui.input_numeric("channel_refine", "Channel refinement (m²)",
-                                     value=10, min=1, max=100, step=1),
-                    ui.input_numeric("floodplain_refine", "Floodplain refinement (m²)",
-                                     value=200, min=10, max=1000, step=10),
+                    ui.input_numeric(
+                        "fp_width",
+                        "Floodplain width (m)",
+                        value=500,
+                        min=50,
+                        max=5000,
+                        step=50,
+                    ),
+                    ui.input_numeric(
+                        "channel_refine",
+                        "Channel refinement (m²)",
+                        value=10,
+                        min=1,
+                        max=100,
+                        step=1,
+                    ),
+                    ui.input_numeric(
+                        "floodplain_refine",
+                        "Floodplain refinement (m²)",
+                        value=200,
+                        min=10,
+                        max=1000,
+                        step=10,
+                    ),
                 ),
-                ui.input_select("import_mesher", "Mesher", choices={
-                    "triangle": "Triangle (default)",
-                }),
-                ui.input_select("import_scheme", "Numerical scheme", choices={
-                    "finite_volume": "Finite Volume (robust)",
-                    "finite_element": "Finite Element (accurate)",
-                }),
+                ui.input_select(
+                    "import_mesher",
+                    "Mesher",
+                    choices={
+                        "triangle": "Triangle (default)",
+                    },
+                ),
+                ui.input_select(
+                    "import_scheme",
+                    "Numerical scheme",
+                    choices={
+                        "finite_volume": "Finite Volume (robust)",
+                        "finite_element": "Finite Element (accurate)",
+                    },
+                ),
                 ui.div(
-                    ui.input_action_button("import_preview", "Preview",
-                                           class_="btn-sm btn-primary me-2"),
-                    ui.input_action_button("import_convert", "Convert",
-                                           class_="btn-sm btn-success"),
+                    ui.input_action_button(
+                        "import_preview", "Preview", class_="btn-sm btn-primary me-2"
+                    ),
+                    ui.input_action_button(
+                        "import_convert", "Convert", class_="btn-sm btn-success"
+                    ),
                     class_="d-flex gap-2 mb-2",
                 ),
                 ui.output_ui("import_status_ui"),
@@ -643,7 +859,7 @@ app_ui = ui.page_navbar(
             ),
             ui.card(
                 ui.card_header("Preview"),
-                output_widget("import_map", height="400px"),
+                import_map_widget.ui(width="100%", height="400px"),
                 ui.tags.pre(
                     ui.output_text_verbatim("import_log"),
                     class_="sim-console",
@@ -662,23 +878,32 @@ app_ui = ui.page_navbar(
     # ── Sidebar ────────────────────────────────────────────────────────
     sidebar=ui.sidebar(
         # ── Tier 1: Always visible ──
-        ui.h6(f"TELEMAC Viewer v{__version__}", style="margin:0 0 8px; color: var(--coastal-text);"),
+        ui.h6(
+            f"TELEMAC Viewer v{__version__}",
+            style="margin:0 0 8px; color: var(--coastal-text);",
+        ),
         ui.input_select("example", "Example case", choices=EXAMPLE_CHOICES),
         ui.input_file("upload", "Or upload .slf file", accept=[".slf"]),
         ui.output_ui("clear_upload_ui"),
-        ui.input_select("basemap", "Background", choices={
-            "dark": "Dark (ocean)",
-            "light": "Light (blank)",
-            "osm": "CartoDB Dark",
-            "satellite": "Satellite (ESRI)",
-        }),
+        ui.input_select(
+            "basemap",
+            "Background",
+            choices={
+                "dark": "Dark (ocean)",
+                "light": "Light (blank)",
+                "osm": "CartoDB Dark",
+                "satellite": "Satellite (ESRI)",
+            },
+        ),
         ui.output_ui("var_select_ui"),
         ui.output_ui("time_slider_ui"),
         # ── Tier 2: Collapsed accordions ──
         ui.accordion(
             ui.accordion_panel(
                 "Display",
-                ui.input_select("palette", "Color palette", choices=list(PALETTES.keys())),
+                ui.input_select(
+                    "palette", "Color palette", choices=list(PALETTES.keys())
+                ),
                 ui.input_switch("log_scale", "Log scale coloring", value=False),
                 ui.input_switch("reverse_palette", "Reverse palette", value=False),
                 ui.input_switch("diff_mode", "Difference mode", value=False),
@@ -696,28 +921,46 @@ app_ui = ui.page_navbar(
                 ui.input_switch("particles", "Particle traces", value=False),
                 ui.output_ui("compare_var_ui"),
                 ui.output_ui("compare_upload_ui"),
-                ui.input_select("diagnostic", "Mesh diagnostic", choices={
-                    "none": "None",
-                    "mesh_quality": "Mesh quality",
-                    "slope": "Slope/gradient",
-                    "courant": "Courant number",
-                    "elem_area": "Element area",
-                }),
-                ui.input_action_button("draw_xsec", "Draw Cross-Section",
-                                       class_="btn-sm btn-outline-primary w-100 mb-1"),
+                ui.input_select(
+                    "diagnostic",
+                    "Mesh diagnostic",
+                    choices={
+                        "none": "None",
+                        "mesh_quality": "Mesh quality",
+                        "slope": "Slope/gradient",
+                        "courant": "Courant number",
+                        "elem_area": "Element area",
+                    },
+                ),
+                ui.input_action_button(
+                    "draw_xsec",
+                    "Draw Cross-Section",
+                    class_="btn-sm btn-outline-primary w-100 mb-1",
+                ),
                 ui.output_ui("clear_xsec_ui"),
                 ui.output_ui("discharge_ui"),
                 ui.output_ui("rating_curve_ui"),
-                ui.input_action_button("measure_btn", "Measure Distance",
-                                       class_="btn-sm btn-outline-warning w-100 mb-1"),
+                ui.input_action_button(
+                    "measure_btn",
+                    "Measure Distance",
+                    class_="btn-sm btn-outline-warning w-100 mb-1",
+                ),
                 ui.output_ui("measure_info_ui"),
-                ui.input_action_button("draw_polygon", "Draw Polygon",
-                                       class_="btn-sm btn-outline-success w-100 mb-1"),
+                ui.input_action_button(
+                    "draw_polygon",
+                    "Draw Polygon",
+                    class_="btn-sm btn-outline-success w-100 mb-1",
+                ),
                 ui.output_ui("polygon_stats_ui"),
                 ui.div(
-                    ui.input_text("expr_input", "Custom expression", placeholder="VELOCITY_U**2 + VELOCITY_V**2"),
-                    ui.input_action_button("eval_expr", "Eval",
-                                           class_="btn-sm btn-outline-secondary"),
+                    ui.input_text(
+                        "expr_input",
+                        "Custom expression",
+                        placeholder="VELOCITY_U**2 + VELOCITY_V**2",
+                    ),
+                    ui.input_action_button(
+                        "eval_expr", "Eval", class_="btn-sm btn-outline-secondary"
+                    ),
                     class_="d-flex align-items-end gap-1 mb-1",
                 ),
                 ui.output_ui("toggle_3d_ui"),
@@ -738,16 +981,27 @@ app_ui = ui.page_navbar(
                     ),
                     class_="mb-2",
                 ),
-                ui.input_action_button("record_btn", "Record", class_="btn-sm btn-outline-danger w-100 mb-1"),
+                ui.input_action_button(
+                    "record_btn",
+                    "Record",
+                    class_="btn-sm btn-outline-danger w-100 mb-1",
+                ),
                 ui.div(
-                    ui.input_numeric("goto_time", "Go to time (s)", value=0, min=0, step=1),
-                    ui.input_action_button("goto_btn", "Go",
-                                           class_="btn-sm btn-outline-primary"),
+                    ui.input_numeric(
+                        "goto_time", "Go to time (s)", value=0, min=0, step=1
+                    ),
+                    ui.input_action_button(
+                        "goto_btn", "Go", class_="btn-sm btn-outline-primary"
+                    ),
                     class_="d-flex align-items-end gap-1 mb-2",
                 ),
                 ui.input_slider(
-                    "speed", "Speed (s/frame)",
-                    min=0.1, max=2.0, value=0.5, step=0.1,
+                    "speed",
+                    "Speed (s/frame)",
+                    min=0.1,
+                    max=2.0,
+                    value=0.5,
+                    step=0.1,
                 ),
                 ui.input_switch("loop", "Loop animation", value=True),
                 ui.output_ui("trail_length_ui"),
@@ -880,14 +1134,16 @@ def server(input, output, session):
     measure_points = reactive.value([])  # list of [x_mesh_m, y_mesh_m] (max 2)
     measure_mode = reactive.value(False)  # True when waiting for measurement clicks
     use_upload = reactive.value(False)  # True when uploaded file should be used
-    obs_data = reactive.value(None)  # parsed observation CSV: (times, values, varname) or None
+    obs_data = reactive.value(
+        None
+    )  # parsed observation CSV: (times, values, varname) or None
     compare_tf = reactive.value(None)  # secondary TelemacFile for comparison
     recording = reactive.value(False)  # animation recording state
     polygon_mode = reactive.value(False)  # polygon drawing mode
     polygon_stats_data = reactive.value(None)  # polygon zonal stats result
     polygon_geom = reactive.value(None)  # list of [x,y] polygon coords or None
     volume_cache = reactive.value(None)  # {"times": ndarray, "volumes": ndarray}
-    expr_result = reactive.value(None)   # numpy array or None (custom expression result)
+    expr_result = reactive.value(None)  # numpy array or None (custom expression result)
     integral_result = reactive.value(None)  # mesh integral result dict or None
 
     # -- Help modal --
@@ -935,13 +1191,28 @@ def server(input, output, session):
 
     # -- Core reactive calcs (tel_file, mesh_geom, current_var, etc.) --
     from server_core import register_core_handlers
+
     _core = register_core_handlers(
-        input, output, session, _tf_lock,
-        particle_paths, cross_section_points, clicked_points,
-        temporal_stats_cache, integral_result, expr_result,
-        measure_points, measure_mode, analysis_mode,
-        obs_data, compare_tf, volume_cache, polygon_stats_data, polygon_geom,
-        use_upload, is_3d_mode,
+        input,
+        output,
+        session,
+        _tf_lock,
+        particle_paths,
+        cross_section_points,
+        clicked_points,
+        temporal_stats_cache,
+        integral_result,
+        expr_result,
+        measure_points,
+        measure_mode,
+        analysis_mode,
+        obs_data,
+        compare_tf,
+        volume_cache,
+        polygon_stats_data,
+        polygon_geom,
+        use_upload,
+        is_3d_mode,
     )
     tel_file = _core["tel_file"]
     mesh_geom = _core["mesh_geom"]
@@ -972,8 +1243,12 @@ def server(input, output, session):
             cfl = compute_courant_number(tel_file(), current_tidx())
             if cfl is not None:
                 return cfl
-            ui.notification_show("Courant number requires VELOCITY U/V variables",
-                                 type="warning", duration=4, id="cfl_warn")
+            ui.notification_show(
+                "Courant number requires VELOCITY U/V variables",
+                type="warning",
+                duration=4,
+                id="cfl_warn",
+            )
             return current_values()
         elif diag == "elem_area":
             return elem_area_values()
@@ -996,25 +1271,79 @@ def server(input, output, session):
             return compute_difference(tf, var, tidx, ref)
         return current_values()
 
+    # -- Cached static overlay layers --
+    # These depend only on the file + their toggle; caching them here keeps
+    # expensive topology work (compute_unique_edges, find_boundary_edges) off
+    # the hot path during timestep scrubbing or palette changes. Shiny's
+    # @reactive.calc invalidates only when a read dep changes, so the cached
+    # dict is reused verbatim across ticks.
+
+    @reactive.calc
+    def wireframe_layer_cached():
+        if not input.wireframe():
+            return None
+        geom = mesh_geom()
+        return build_wireframe_layer(
+            tel_file(), geom, origin=[geom.lon_off, geom.lat_off]
+        )
+
+    @reactive.calc
+    def boundary_layers_cached():
+        if not input.boundary_nodes():
+            return []
+        geom = mesh_geom()
+        return build_boundary_layer(
+            tel_file(),
+            geom,
+            boundary_nodes_cached(),
+            bc_types=cli_data(),
+            origin=[geom.lon_off, geom.lat_off],
+        )
+
     # -- Analysis panel, charts, stats, CSV downloads, overlays --
     from server_analysis import register_analysis_handlers
+
     register_analysis_handlers(
-        input, output, session, map_widget,
-        tel_file, mesh_geom, current_var, current_tidx, current_values, effective_values,
-        analysis_mode, clicked_points, cross_section_points, particle_paths,
-        temporal_stats_cache, measure_points, measure_mode, obs_data, compare_tf,
-        recording, polygon_mode, polygon_stats_data, polygon_geom, volume_cache,
-        expr_result, integral_result,
-        current_crs, use_upload, is_3d_mode,
+        input,
+        output,
+        session,
+        map_widget,
+        tel_file,
+        mesh_geom,
+        current_var,
+        current_tidx,
+        current_values,
+        effective_values,
+        analysis_mode,
+        clicked_points,
+        cross_section_points,
+        particle_paths,
+        temporal_stats_cache,
+        measure_points,
+        measure_mode,
+        obs_data,
+        compare_tf,
+        recording,
+        polygon_mode,
+        polygon_stats_data,
+        polygon_geom,
+        volume_cache,
+        expr_result,
+        integral_result,
+        current_crs,
+        use_upload,
+        is_3d_mode,
         _run_with_lock,
     )
 
     # -- Simulation launcher --
     from server_simulation import register_simulation_handlers
+
     register_simulation_handlers(input, output, session, use_upload)
 
     # -- Playback controls, keyboard shortcuts, auto-advance --
     from server_playback import register_playback_handlers
+
     register_playback_handlers(input, output, session, playing, tel_file, current_var)
 
     # -- Map update helpers --
@@ -1083,23 +1412,27 @@ def server(input, output, session):
         """Build all optional overlay layers (wireframe, vectors, contours, markers, etc.)."""
         layers = []
 
-        if input.wireframe():
-            layers.append(build_wireframe_layer(tf, geom, origin=origin))
+        wlyr = wireframe_layer_cached()
+        if wlyr is not None:
+            layers.append(wlyr)
 
         # Boundary edges (color-coded by hydrodynamic type)
         if input.boundary_nodes():
-            bc = cli_data()
-            layers.extend(build_boundary_layer(tf, geom, boundary_nodes_cached(), bc_types=bc, origin=origin))
-            if bc is None:
+            layers.extend(boundary_layers_cached())
+            if cli_data() is None:
                 ui.notification_show(
                     "No .cli file found — boundary types shown as Wall (inferred).",
-                    type="message", duration=4, id="cli_warn",
+                    type="message",
+                    duration=4,
+                    id="cli_warn",
                 )
 
         # Min/max location markers
         if input.show_extrema():
             extrema = find_extrema(tf, values)
-            layers.extend(build_extrema_markers(extrema, geom.x_off, geom.y_off, origin=origin))
+            layers.extend(
+                build_extrema_markers(extrema, geom.x_off, geom.y_off, origin=origin)
+            )
 
         if input.vectors():
             vlyr = build_velocity_layer(tf, tidx, geom, origin=origin)
@@ -1125,10 +1458,15 @@ def server(input, output, session):
         elif compare:
             compare_vals = get_var_values(tf, compare, tidx)
         if compare_vals is not None:
-            clyr2 = build_contour_layer_fn(tf, compare_vals, geom, n_contours=8,
-                                           layer_id="compare-contours",
-                                           contour_color=[0, 0, 180],
-                                           origin=origin)
+            clyr2 = build_contour_layer_fn(
+                tf,
+                compare_vals,
+                geom,
+                n_contours=8,
+                layer_id="compare-contours",
+                contour_color=[0, 0, 180],
+                origin=origin,
+            )
             if clyr2 is not None:
                 layers.append(clyr2)
 
@@ -1136,7 +1474,9 @@ def server(input, output, session):
         pts = clicked_points.get()
         for i, pt in enumerate(pts):
             mx, my = float(pt[0] - geom.x_off), float(pt[1] - geom.y_off)
-            layers.append(build_marker_layer(mx, my, layer_id=f"marker-{i}", origin=origin))
+            layers.append(
+                build_marker_layer(mx, my, layer_id=f"marker-{i}", origin=origin)
+            )
 
         # Cross-section path
         xsec = cross_section_points.get()
@@ -1149,7 +1489,9 @@ def server(input, output, session):
         if paths and input.particles():
             current_time = float(tf.times[tidx])
             trail = input.trail_length() if input.trail_length() is not None else 1.0
-            layers.append(build_particle_layer(paths, current_time, trail, origin=origin))
+            layers.append(
+                build_particle_layer(paths, current_time, trail, origin=origin)
+            )
 
         # Measurement line (convert mesh-meter coords to centered for layer)
         mpts = measure_points.get()
@@ -1168,19 +1510,38 @@ def server(input, output, session):
     def _build_legend(display_var, vmin, vmax, palette_id, reverse):
         """Build the layer_legend_widget for the map."""
         gradient_colors = cached_gradient_colors(palette_id, reverse=reverse)
-        legend_entries = [{
-            "layer_id": "mesh",
-            "label": f"{display_var}  [{vmin:.3g} - {vmax:.3g}]",
-            "colors": gradient_colors,
-            "shape": "gradient",
-        }]
+        legend_entries = [
+            {
+                "layer_id": "mesh",
+                "label": f"{display_var}  [{vmin:.3g} - {vmax:.3g}]",
+                "colors": gradient_colors,
+                "shape": "gradient",
+            }
+        ]
         # Add boundary type entries to legend
         if input.boundary_nodes():
-            legend_entries.extend([
-                {"layer_id": "boundary-wall", "label": "Wall", "color": [160, 160, 170], "shape": "line"},
-                {"layer_id": "boundary-free", "label": "Free (Neumann)", "color": [0, 200, 80], "shape": "line"},
-                {"layer_id": "boundary-prescribed", "label": "Prescribed (H/Q)", "color": [40, 120, 255], "shape": "line"},
-            ])
+            legend_entries.extend(
+                [
+                    {
+                        "layer_id": "boundary-wall",
+                        "label": "Wall",
+                        "color": [160, 160, 170],
+                        "shape": "line",
+                    },
+                    {
+                        "layer_id": "boundary-free",
+                        "label": "Free (Neumann)",
+                        "color": [0, 200, 80],
+                        "shape": "line",
+                    },
+                    {
+                        "layer_id": "boundary-prescribed",
+                        "label": "Prescribed (H/Q)",
+                        "color": [40, 120, 255],
+                        "shape": "line",
+                    },
+                ]
+            )
         return layer_legend_widget(
             entries=legend_entries,
             placement="bottom-right",
@@ -1210,24 +1571,34 @@ def server(input, output, session):
         crange, filt, use_log, reverse = _compute_color_range(palette_id, values)
 
         origin = [geom.lon_off, geom.lat_off]
-        lyr, vmin, vmax, log_applied = build_mesh_layer(geom, values, palette_id,
-                                           filter_range=filt,
-                                           color_range_override=crange,
-                                           log_scale=use_log,
-                                           reverse_palette=reverse,
-                                           origin=origin)
+        lyr, vmin, vmax, log_applied = build_mesh_layer(
+            geom,
+            values,
+            palette_id,
+            filter_range=filt,
+            color_range_override=crange,
+            log_scale=use_log,
+            reverse_palette=reverse,
+            origin=origin,
+        )
         if use_log and not log_applied:
             ui.notification_show(
                 "Log scale requires positive values — using linear scale",
-                type="warning", duration=3, id="log_warn")
+                type="warning",
+                duration=3,
+                id="log_warn",
+            )
 
         layers = [lyr] + _build_overlay_layers(tf, geom, tidx, values, origin)
         legend = _build_legend(display_var, vmin, vmax, palette_id, reverse)
 
         # Only update view_state on file change
         uploaded = input.upload()
-        current_path = (uploaded[0]["datapath"] if uploaded and use_upload.get()
-                        else EXAMPLES.get(input.example(), ""))
+        current_path = (
+            uploaded[0]["datapath"]
+            if uploaded and use_upload.get()
+            else EXAMPLES.get(input.example(), "")
+        )
         kwargs = {}
         if current_path != last_file_path.get():
             last_file_path.set(current_path)
@@ -1249,34 +1620,31 @@ def server(input, output, session):
             legend,
         ]
 
-        # Map background / basemap
-        _DARK_BG = "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%230f1923%22%7D%7D%5D%7D"
-        _LIGHT_BG = "data:application/json;charset=utf-8,%7B%22version%22%3A8%2C%22sources%22%3A%7B%7D%2C%22layers%22%3A%5B%7B%22id%22%3A%22bg%22%2C%22type%22%3A%22background%22%2C%22paint%22%3A%7B%22background-color%22%3A%22%23f0f4f8%22%7D%7D%5D%7D"
+        # Map background / basemap — only send `style` on non-default to
+        # avoid churning the full style on every reactive tick.
         try:
             basemap = input.basemap() or "dark"
         except (TypeError, AttributeError, KeyError):
             basemap = "dark"
-        _BASEMAP_STYLES = {
-            "light": _LIGHT_BG,
-            "dark": _DARK_BG,
-            "osm": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-            "satellite": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        }
         if basemap != "dark":
-            kwargs["style"] = _BASEMAP_STYLES.get(basemap, _DARK_BG)
+            kwargs["style"] = BASEMAP_STYLES.get(basemap, MAP_BG_DARK)
 
         # 3D mode: add gimbal widget, first-person view, and lighting
         if is_3d_mode.get():
             widgets.append(gimbal_widget())
-            kwargs["views"] = [first_person_view(
-                focalDistance=10,
-                maxPitchAngle=80,
-            )]
-            kwargs["effects"] = [lighting_effect(
-                ambient_light(intensity=0.6),
-                directional_light(direction=[-1, -3, -1], intensity=0.8),
-                directional_light(direction=[1, 2, -0.5], intensity=0.3),
-            )]
+            kwargs["views"] = [
+                first_person_view(
+                    focalDistance=10,
+                    maxPitchAngle=80,
+                )
+            ]
+            kwargs["effects"] = [
+                lighting_effect(
+                    ambient_light(intensity=0.6),
+                    directional_light(direction=[-1, -3, -1], intensity=0.8),
+                    directional_light(direction=[1, 2, -0.5], intensity=0.3),
+                )
+            ]
 
         await map_widget.update(
             session,
@@ -1285,11 +1653,10 @@ def server(input, output, session):
             **kwargs,
         )
 
-
     # ── Import tab server logic ─────────────────────────────────────────
     from server_import import register_import_handlers
-    register_import_handlers(input, output, session)
 
+    register_import_handlers(input, output, session)
 
 
 app = App(app_ui, server)
