@@ -1271,6 +1271,47 @@ def server(input, output, session):
             return compute_difference(tf, var, tidx, ref)
         return current_values()
 
+    # -- Structural signature for map update dispatch --
+    # Full update (map_widget.update) fires when this tuple changes between
+    # ticks; otherwise we fall through to partial_update + set_widgets.
+    # KEEP THIS IN SYNC with app_dispatch.make_sig() in tests/test_map_dispatch.py.
+    @reactive.calc
+    def _structural_sig() -> tuple:
+        uploaded = input.upload()
+        file_path = (
+            uploaded[0]["datapath"]
+            if uploaded and use_upload.get()
+            else EXAMPLES.get(input.example(), "")
+        )
+        try:
+            basemap = input.basemap() or "dark"
+        except (TypeError, AttributeError, KeyError):
+            basemap = "dark"
+        try:
+            compare_var = input.compare_var() or ""
+        except (TypeError, AttributeError, KeyError):
+            compare_var = ""
+        overlay_counts = (
+            len(clicked_points.get()),
+            len(measure_points.get()),
+            1 if polygon_geom.get() is not None else 0,
+            1 if cross_section_points.get() is not None else 0,
+        )
+        return (
+            file_path,
+            bool(input.wireframe()),
+            bool(input.boundary_nodes()),
+            bool(input.vectors()),
+            bool(input.contours()),
+            bool(input.show_extrema()),
+            bool(input.particles()),
+            bool(input.diff_mode()),
+            bool(is_3d_mode.get()),
+            basemap,
+            compare_var,
+            overlay_counts,
+        )
+
     # -- Cached static overlay layers --
     # These depend only on the file + their toggle; caching them here keeps
     # expensive topology work (compute_unique_edges, find_boundary_edges) off

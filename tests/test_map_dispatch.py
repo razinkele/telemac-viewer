@@ -47,6 +47,19 @@ def make_sig(
     )
 
 
+def test_make_sig_shape_pinned():
+    """Guard against silent drift with app.py::_structural_sig.
+
+    If a new field is added there but not here, dispatch tests still
+    pass while production sends a longer tuple — which the reactive
+    calc and decide_dispatch would equate by element count, hiding
+    a real change. Keep both shapes pinned together.
+    """
+    sig = make_sig()
+    assert len(sig) == 12
+    assert isinstance(sig[-1], tuple) and len(sig[-1]) == 4  # overlay_counts
+
+
 def test_dispatch_returns_full_on_first_call():
     decision = decide_dispatch(prev_sig=None, curr_sig=make_sig())
     assert decision == "full"
