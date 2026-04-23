@@ -154,6 +154,52 @@ def build_mesh_color_patch(
     return patch, vmin, vmax, log_applied
 
 
+def build_velocity_patch(
+    tf: TelemacFileProtocol,
+    time_idx: int,
+    geom: MeshGeometry,
+    origin: list[float] | None = None,
+) -> dict | None:
+    """Partial-update patch for the velocity arrow layer.
+
+    Today this is a pass-through to ``build_velocity_layer`` — velocity
+    arrows are cheap relative to mesh colors, so we resend the full layer
+    dict. The wrapper exists so the fast path in ``update_map`` can call
+    ``build_*_patch`` uniformly; if we later introduce sparse attribute
+    updates for arrows, only this function changes.
+    """
+    return build_velocity_layer(tf, time_idx, geom, origin=origin)
+
+
+def build_contour_patch(
+    tf: TelemacFileProtocol,
+    values: np.ndarray,
+    geom: MeshGeometry,
+    n_contours: int = 6,
+    layer_id: str = "contours",
+    contour_color: list[int] | None = None,
+    origin: list[float] | None = None,
+) -> dict | None:
+    """Partial-update patch for a contour layer.
+
+    Today this is a pass-through to ``build_contour_layer_fn`` — contours
+    are recomputed from scratch when the field changes because the marching
+    triangles pass produces entirely new crossing points per tick. A true
+    sparse update would require segment-level diffing that isn't worth
+    the complexity yet; the seam exists so the map dispatcher can call
+    ``build_*_patch`` uniformly.
+    """
+    return build_contour_layer_fn(
+        tf,
+        values,
+        geom,
+        n_contours=n_contours,
+        layer_id=layer_id,
+        contour_color=contour_color,
+        origin=origin,
+    )
+
+
 def build_velocity_layer(
     tf: TelemacFileProtocol,
     time_idx: int,

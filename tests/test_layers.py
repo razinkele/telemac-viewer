@@ -333,3 +333,43 @@ class TestBuildMeshColorPatch:
         # filter_range must actually change the encoded color buffer
         # (vertices outside [0.3, 0.7] are greyed out).
         assert filtered["_meshColors"]["value"] != unfiltered["_meshColors"]["value"]
+
+
+class TestPartialUpdatePatches:
+    def test_velocity_patch_matches_full_layer(self, fake_tf, fake_geom):
+        from layers import build_velocity_layer, build_velocity_patch
+
+        full = build_velocity_layer(fake_tf, 0, fake_geom)
+        patch = build_velocity_patch(fake_tf, 0, fake_geom)
+        # Pass-through: full layer dict == patch dict
+        assert full == patch
+
+    def test_velocity_patch_none_when_no_velocity(self, fake_geom):
+        from layers import build_velocity_patch
+        from tests.helpers import FakeTF
+
+        class NoVelTF(FakeTF):
+            @property
+            def varnames(self):
+                return ["WATER DEPTH"]
+
+        assert build_velocity_patch(NoVelTF(), 0, fake_geom) is None
+
+    def test_contour_patch_matches_full_layer(self, fake_tf, fake_geom):
+        from layers import build_contour_layer_fn, build_contour_patch
+
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        full = build_contour_layer_fn(fake_tf, values, fake_geom)
+        patch = build_contour_patch(fake_tf, values, fake_geom)
+        assert full == patch
+
+    def test_contour_patch_forwards_kwargs(self, fake_tf, fake_geom):
+        """All non-default kwargs must reach build_contour_layer_fn."""
+        from layers import build_contour_layer_fn, build_contour_patch
+
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        kwargs = dict(n_contours=3, layer_id="custom", contour_color=[255, 0, 0])
+        full = build_contour_layer_fn(fake_tf, values, fake_geom, **kwargs)
+        patch = build_contour_patch(fake_tf, values, fake_geom, **kwargs)
+        assert full == patch
+        assert patch["id"] == "custom"
