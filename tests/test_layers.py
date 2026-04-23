@@ -1,13 +1,20 @@
 """Tests for layers.py -- deck.gl layer builders."""
+
 from __future__ import annotations
 import numpy as np
 import pytest
 from tests.helpers import FakeTF
 from geometry import build_mesh_geometry
 from layers import (
-    build_mesh_layer, build_velocity_layer, build_contour_layer_fn,
-    build_wireframe_layer, build_marker_layer, build_cross_section_layer,
-    build_boundary_layer, build_extrema_markers, build_measurement_layer,
+    build_mesh_layer,
+    build_velocity_layer,
+    build_contour_layer_fn,
+    build_wireframe_layer,
+    build_marker_layer,
+    build_cross_section_layer,
+    build_boundary_layer,
+    build_extrema_markers,
+    build_measurement_layer,
     build_particle_layer,
 )
 from analysis import find_boundary_nodes, find_extrema
@@ -41,25 +48,32 @@ class TestBuildMeshLayer:
 
     def test_log_scale_positive(self, fake_geom):
         values = np.array([1.0, 2.0, 5.0, 10.0])
-        _, vmin, vmax, log_applied = build_mesh_layer(fake_geom, values, "Viridis", log_scale=True)
+        _, vmin, vmax, log_applied = build_mesh_layer(
+            fake_geom, values, "Viridis", log_scale=True
+        )
         assert log_applied is True
         assert vmin > 0
 
     def test_log_scale_zero(self, fake_geom):
         values = np.array([0.0, 1.0, 2.0, 3.0])
-        _, vmin, vmax, log_applied = build_mesh_layer(fake_geom, values, "Viridis", log_scale=True)
+        _, vmin, vmax, log_applied = build_mesh_layer(
+            fake_geom, values, "Viridis", log_scale=True
+        )
         assert log_applied is False
 
     def test_custom_color_range(self, fake_tf, fake_geom):
         values = fake_tf.get_data_value("WATER DEPTH", 0)
-        _, vmin, vmax, _ = build_mesh_layer(fake_geom, values, "Viridis", color_range_override=(0, 10))
+        _, vmin, vmax, _ = build_mesh_layer(
+            fake_geom, values, "Viridis", color_range_override=(0, 10)
+        )
         assert vmin == 0.0
         assert vmax == 10.0
 
     def test_filter_range_grays_out_values(self, fake_geom):
         values = np.array([0.1, 0.5, 0.5, 1.0], dtype=np.float32)
         lyr, vmin, vmax, log_applied = build_mesh_layer(
-            fake_geom, values, "Viridis", filter_range=(0.3, 0.7))
+            fake_geom, values, "Viridis", filter_range=(0.3, 0.7)
+        )
         assert lyr is not None
         # Values outside [0.3, 0.7] should have alpha=0 in the color array
         # Check that the layer was built successfully
@@ -68,8 +82,7 @@ class TestBuildMeshLayer:
 
     def test_uniform_values(self, fake_geom):
         values = np.array([5.0, 5.0, 5.0, 5.0], dtype=np.float32)
-        lyr, vmin, vmax, log_applied = build_mesh_layer(
-            fake_geom, values, "Viridis")
+        lyr, vmin, vmax, log_applied = build_mesh_layer(fake_geom, values, "Viridis")
         assert lyr is not None
         # vmax should be adjusted to vmin + 1 to avoid division by zero
         assert vmax > vmin
@@ -80,6 +93,7 @@ class TestBuildVelocityLayer:
         class NoVelTF(FakeTF):
             varnames = ["WATER DEPTH"]
             _data = {"WATER DEPTH": np.array([0.1, 0.5, 0.5, 1.0])}
+
         tf = NoVelTF()
         result = build_velocity_layer(tf, 0, fake_geom)
         assert result is None
@@ -91,6 +105,7 @@ class TestBuildVelocityLayer:
                 "VELOCITY U": np.zeros(4),
                 "VELOCITY V": np.zeros(4),
             }
+
         tf = ZeroVelTF()
         result = build_velocity_layer(tf, 0, fake_geom)
         assert result is None
@@ -153,6 +168,7 @@ class TestOtherLayers:
     def test_boundary_with_bc_types_empty(self, fake_tf, fake_geom):
         from layers import build_boundary_layer
         from analysis import find_boundary_nodes
+
         bnodes = find_boundary_nodes(fake_tf)
         # Empty bc_types is valid — all default to wall
         bc_types = {}
@@ -163,6 +179,7 @@ class TestOtherLayers:
     def test_boundary_with_prescribed_bc(self, fake_tf, fake_geom):
         from layers import build_boundary_layer
         from analysis import find_boundary_nodes
+
         bnodes = find_boundary_nodes(fake_tf)
         # bc_types uses 1-based node keys (TELEMAC convention)
         # Node 1 (1-based) as prescribed (5), node 2 as wall (2)
@@ -202,7 +219,9 @@ class TestOriginParameter:
 
     def test_mesh_layer(self, fake_geom):
         values = np.array([0.1, 0.5, 0.5, 1.0])
-        lyr, _, _, _ = build_mesh_layer(fake_geom, values, "Viridis", origin=[24.0, 55.0])
+        lyr, _, _, _ = build_mesh_layer(
+            fake_geom, values, "Viridis", origin=[24.0, 55.0]
+        )
         assert lyr["coordinateOrigin"] == [24.0, 55.0]
 
     def test_velocity_layer(self, fake_tf, fake_geom):
@@ -236,7 +255,9 @@ class TestOriginParameter:
     def test_extrema_markers(self, fake_tf, fake_geom):
         values = fake_tf.get_data_value("WATER DEPTH", 0)
         extrema = find_extrema(fake_tf, values)
-        layers = build_extrema_markers(extrema, fake_geom.x_off, fake_geom.y_off, origin=[24.0, 55.0])
+        layers = build_extrema_markers(
+            extrema, fake_geom.x_off, fake_geom.y_off, origin=[24.0, 55.0]
+        )
         for lyr in layers:
             assert lyr["coordinateOrigin"] == [24.0, 55.0]
 
@@ -256,3 +277,59 @@ class TestOriginParameter:
         values = np.array([0.1, 0.5, 0.5, 1.0])
         lyr, _, _, _ = build_mesh_layer(fake_geom, values, "Viridis")
         assert lyr["coordinateOrigin"] == [0, 0]
+
+
+class TestBuildMeshColorPatch:
+    def test_patch_has_mesh_id(self, fake_geom):
+        from layers import build_mesh_color_patch
+
+        values = np.array([1.0, 2.0, 3.0, 4.0])
+        patch, _, _, _ = build_mesh_color_patch(fake_geom, values, "Viridis")
+        assert patch["id"] == "mesh"
+
+    def test_patch_contains_mesh_colors_only(self, fake_geom):
+        from layers import build_mesh_color_patch
+
+        values = np.array([1.0, 2.0, 3.0, 4.0])
+        patch, _, _, _ = build_mesh_color_patch(fake_geom, values, "Viridis")
+        # Patch must NOT include positions or indices (preserved by JS cache)
+        assert "_meshPositions" not in patch
+        assert "_meshIndices" not in patch
+        assert "mesh" not in patch  # no CustomGeometry ref needed
+        # Patch MUST include the new color array
+        assert "_meshColors" in patch
+
+    def test_patch_returns_same_vmin_vmax_as_full_build(self, fake_tf, fake_geom):
+        from layers import build_mesh_layer, build_mesh_color_patch
+
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        _, vmin_full, vmax_full, log_full = build_mesh_layer(
+            fake_geom, values, "Viridis"
+        )
+        _, vmin_patch, vmax_patch, log_patch = build_mesh_color_patch(
+            fake_geom, values, "Viridis"
+        )
+        assert vmin_full == vmin_patch
+        assert vmax_full == vmax_patch
+        assert log_full == log_patch
+
+    def test_patch_colors_match_full_build(self, fake_tf, fake_geom):
+        from layers import build_mesh_layer, build_mesh_color_patch
+
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        full, _, _, _ = build_mesh_layer(fake_geom, values, "Viridis")
+        patch, _, _, _ = build_mesh_color_patch(fake_geom, values, "Viridis")
+        # Same input → identical color buffer
+        assert patch["_meshColors"] == full["_meshColors"]
+
+    def test_patch_respects_filter_range(self, fake_geom):
+        from layers import build_mesh_color_patch
+
+        values = np.array([0.1, 0.5, 0.5, 1.0], dtype=np.float32)
+        unfiltered, _, _, _ = build_mesh_color_patch(fake_geom, values, "Viridis")
+        filtered, _, _, _ = build_mesh_color_patch(
+            fake_geom, values, "Viridis", filter_range=(0.3, 0.7)
+        )
+        # filter_range must actually change the encoded color buffer
+        # (vertices outside [0.3, 0.7] are greyed out).
+        assert filtered["_meshColors"]["value"] != unfiltered["_meshColors"]["value"]

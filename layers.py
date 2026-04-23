@@ -22,7 +22,7 @@ _GRAY = np.array([0.85, 0.85, 0.85], dtype=np.float32)
 _WIRE_COLOR = [100, 100, 100, 80]
 
 
-def build_mesh_layer(
+def _compute_mesh_colors(
     geom: MeshGeometry,
     values: np.ndarray,
     palette_id: str,
@@ -30,13 +30,16 @@ def build_mesh_layer(
     color_range_override: tuple[float, float] | None = None,
     log_scale: bool = False,
     reverse_palette: bool = False,
-    origin: list[float] | None = None,
-) -> tuple[dict, float, float, bool]:
-    """Build SimpleMeshLayer with per-vertex coloring and optional value filter."""
+) -> tuple[np.ndarray, float, float, bool]:
+    """Compute per-vertex colors (float32, flattened RGB) for the mesh.
+
+    Returns (colors_flat, vmin, vmax, log_applied). Shared between
+    build_mesh_layer (full-build) and build_mesh_color_patch (partial
+    update), so there is a single source of truth for the value→color
+    mapping.
+    """
     npoin = geom.npoin
 
-    # All-NaN slice is valid input (empty/inactive mesh coloring) — the
-    # isnan fallback below handles it, so silence the warning.
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="All-NaN slice encountered")
         vmin, vmax = (
@@ -66,11 +69,34 @@ def build_mesh_layer(
     vertex_colors_u8 = palette_arr[idx]
     colors_f32 = vertex_colors_u8[:, :3].astype(np.float32) / 255.0
 
-    # Apply value filter: gray out vertices outside range
     if filter_range is not None:
         lo, hi = filter_range
         mask = (values[:npoin] < lo) | (values[:npoin] > hi)
         colors_f32[mask] = _GRAY
+
+    return colors_f32.flatten(), vmin, vmax, log_applied
+
+
+def build_mesh_layer(
+    geom: MeshGeometry,
+    values: np.ndarray,
+    palette_id: str,
+    filter_range: tuple[float, float] | None = None,
+    color_range_override: tuple[float, float] | None = None,
+    log_scale: bool = False,
+    reverse_palette: bool = False,
+    origin: list[float] | None = None,
+) -> tuple[dict, float, float, bool]:
+    """Build SimpleMeshLayer with per-vertex coloring and optional value filter."""
+    colors_flat, vmin, vmax, log_applied = _compute_mesh_colors(
+        geom,
+        values,
+        palette_id,
+        filter_range=filter_range,
+        color_range_override=color_range_override,
+        log_scale=log_scale,
+        reverse_palette=reverse_palette,
+    )
 
     lyr = simple_mesh_layer(
         "mesh",
@@ -78,7 +104,7 @@ def build_mesh_layer(
         mesh="@@CustomGeometry",
         _meshPositions=geom.positions,
         _meshNormals=[],
-        _meshColors=encode_binary_attribute(colors_f32.flatten()),
+        _meshColors=encode_binary_attribute(colors_flat),
         _meshIndices=geom.indices,
         coordinateSystem=_COORD_METER_OFFSETS,
         coordinateOrigin=origin or [0, 0],
@@ -88,6 +114,44 @@ def build_mesh_layer(
         pickable=True,
     )
     return lyr, vmin, vmax, log_applied
+
+
+def build_mesh_color_patch(
+    geom: MeshGeometry,
+    values: np.ndarray,
+    palette_id: str,
+    filter_range: tuple[float, float] | None = None,
+    color_range_override: tuple[float, float] | None = None,
+    log_scale: bool = False,
+    reverse_palette: bool = False,
+) -> tuple[dict, float, float, bool]:
+    """Build a partial-update patch for the mesh layer (colors only).
+
+    Returns a dict suitable for ``map_widget.partial_update([patch])``.
+    The JS-side layer cache preserves positions, indices, origin, and
+    coordinate system — only the ``_meshColors`` binary attribute is
+    resent. For a 100k-node float32 mesh this cuts roughly ~60-70% of
+    the per-tick payload (positions + indices) when the user scrubs
+    through time or switches palette.
+    """
+    colors_flat, vmin, vmax, log_applied = _compute_mesh_colors(
+        geom,
+        values,
+        palette_id,
+        filter_range=filter_range,
+        color_range_override=color_range_override,
+        log_scale=log_scale,
+        reverse_palette=reverse_palette,
+    )
+    # Intentionally only `id` + `_meshColors`: partial_update merges by
+    # key, so every other layer prop (positions, indices, coordinate
+    # system, origin, pickable, sizeScale, ...) is preserved from the
+    # JS-side cache. Adding any of them here defeats the optimization.
+    patch = {
+        "id": "mesh",
+        "_meshColors": encode_binary_attribute(colors_flat),
+    }
+    return patch, vmin, vmax, log_applied
 
 
 def build_velocity_layer(
