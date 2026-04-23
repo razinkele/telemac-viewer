@@ -39,8 +39,11 @@ from constants import (
 )
 from layers import (
     build_mesh_layer,
+    build_mesh_color_patch,
     build_velocity_layer,
+    build_velocity_patch,
     build_contour_layer_fn,
+    build_contour_patch,
     build_marker_layer,
     build_cross_section_layer,
     build_particle_layer,
@@ -58,6 +61,7 @@ from analysis import (
     get_var_values,
 )
 from telemac_defaults import is_bipolar
+from app_dispatch import decide_dispatch
 
 # ---------------------------------------------------------------------------
 # Map widget
@@ -1125,6 +1129,7 @@ def server(input, output, session):
     # -----------------------------------------------------------------------
     playing = reactive.value(False)
     last_file_path = reactive.value("")
+    last_structural_sig = reactive.value(None)
     analysis_mode = reactive.value("none")
     clicked_points = reactive.value([])  # list of (x_meters, y_meters)
     cross_section_points = reactive.value(None)  # [[x_m, y_m], ...] or None
@@ -1601,7 +1606,6 @@ def server(input, output, session):
         values = effective_values()
         palette_id = input.palette() if input.palette() in PALETTES else "Viridis"
 
-        # Auto-switch to diverging palette for bipolar variables or difference mode
         diag = input.diagnostic() if input.diagnostic() else "none"
         if is_bipolar(var) and diag == "none" and not input.diff_mode():
             palette_id = "_diverging"
@@ -1610,8 +1614,74 @@ def server(input, output, session):
 
         display_var = _resolve_display_var(var, tidx, diag)
         crange, filt, use_log, reverse = _compute_color_range(palette_id, values)
-
         origin = [geom.lon_off, geom.lat_off]
+
+        curr_sig = _structural_sig()
+        prev_sig = last_structural_sig.get()
+        decision = decide_dispatch(prev_sig=prev_sig, curr_sig=curr_sig)
+
+        if decision == "partial":
+            # Fast path: mesh color patch + dynamic overlay patches + widgets.
+            # sig is unchanged by definition on this branch — do not re-set
+            # last_structural_sig. file_path is part of _structural_sig, so a
+            # file change forces the full path, which is also where
+            # last_file_path is maintained.
+            patch, vmin, vmax, log_applied = build_mesh_color_patch(
+                geom,
+                values,
+                palette_id,
+                filter_range=filt,
+                color_range_override=crange,
+                log_scale=use_log,
+                reverse_palette=reverse,
+            )
+            patches = [patch]
+            if input.vectors():
+                vpatch = build_velocity_patch(tf, tidx, geom, origin=origin)
+                if vpatch is not None:
+                    patches.append(vpatch)
+            if input.contours():
+                cpatch = build_contour_patch(tf, values, geom, origin=origin)
+                if cpatch is not None:
+                    patches.append(cpatch)
+            if input.show_extrema():
+                extrema = find_extrema(tf, values)
+                patches.extend(
+                    build_extrema_markers(
+                        extrema, geom.x_off, geom.y_off, origin=origin
+                    )
+                )
+            if use_log and not log_applied:
+                ui.notification_show(
+                    "Log scale requires positive values — using linear scale",
+                    type="warning",
+                    duration=3,
+                    id="log_warn",
+                )
+            legend = _build_legend(display_var, vmin, vmax, palette_id, reverse)
+            widgets = [
+                zoom_widget(placement="top-right"),
+                fullscreen_widget(placement="top-right"),
+                screenshot_widget(placement="top-right"),
+                compass_widget(placement="top-right"),
+                reset_view_widget(placement="top-right"),
+                scale_widget(placement="bottom-left"),
+                loading_widget(placement="top-left"),
+                legend,
+            ]
+            if is_3d_mode.get():
+                widgets.append(gimbal_widget())
+            try:
+                await map_widget.partial_update(session, patches)
+                await map_widget.set_widgets(session, widgets)
+            except Exception:
+                # Fast path failed — force the next tick to rebuild from
+                # scratch rather than retrying the same partial_update forever.
+                last_structural_sig.set(None)
+                raise
+            return
+
+        # Full path: structural change — rebuild everything
         lyr, vmin, vmax, log_applied = build_mesh_layer(
             geom,
             values,
@@ -1633,7 +1703,6 @@ def server(input, output, session):
         layers = [lyr] + _build_overlay_layers(tf, geom, tidx, values, origin)
         legend = _build_legend(display_var, vmin, vmax, palette_id, reverse)
 
-        # Only update view_state on file change
         uploaded = input.upload()
         current_path = (
             uploaded[0]["datapath"]
@@ -1649,7 +1718,6 @@ def server(input, output, session):
                 "zoom": geom.zoom,
             }
 
-        # Build widgets list
         widgets = [
             zoom_widget(placement="top-right"),
             fullscreen_widget(placement="top-right"),
@@ -1661,8 +1729,6 @@ def server(input, output, session):
             legend,
         ]
 
-        # Map background / basemap — only send `style` on non-default to
-        # avoid churning the full style on every reactive tick.
         try:
             basemap = input.basemap() or "dark"
         except (TypeError, AttributeError, KeyError):
@@ -1670,14 +1736,10 @@ def server(input, output, session):
         if basemap != "dark":
             kwargs["style"] = BASEMAP_STYLES.get(basemap, MAP_BG_DARK)
 
-        # 3D mode: add gimbal widget, first-person view, and lighting
         if is_3d_mode.get():
             widgets.append(gimbal_widget())
             kwargs["views"] = [
-                first_person_view(
-                    focalDistance=10,
-                    maxPitchAngle=80,
-                )
+                first_person_view(focalDistance=10, maxPitchAngle=80),
             ]
             kwargs["effects"] = [
                 lighting_effect(
@@ -1687,12 +1749,8 @@ def server(input, output, session):
                 )
             ]
 
-        await map_widget.update(
-            session,
-            layers=layers,
-            widgets=widgets,
-            **kwargs,
-        )
+        await map_widget.update(session, layers=layers, widgets=widgets, **kwargs)
+        last_structural_sig.set(curr_sig)
 
     # ── Import tab server logic ─────────────────────────────────────────
     from server_import import register_import_handlers
