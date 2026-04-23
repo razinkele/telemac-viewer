@@ -14,7 +14,7 @@ from shiny_deckgl import (
     scatterplot_layer,
     path_layer,
 )
-from constants import MAP_BG_DARK
+from constants import MAP_BG_LIGHT
 from layers import _COORD_METER_OFFSETS
 
 _logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ _logger = logging.getLogger(__name__)
 import_map_widget = MapWidget(
     "import_map",
     view_state={"longitude": 0, "latitude": 0, "zoom": 0},
-    style=MAP_BG_DARK,
+    style=MAP_BG_LIGHT,
 )
 
 

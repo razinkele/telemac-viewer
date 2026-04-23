@@ -32,7 +32,7 @@ from constants import (
     EXAMPLE_CHOICES,
     PALETTES,
     BASEMAP_STYLES,
-    MAP_BG_DARK,
+    MAP_BG_LIGHT,
     MAP_TOOLTIP,
     cached_gradient_colors,
     format_time,
@@ -70,7 +70,7 @@ from app_dispatch import decide_dispatch
 map_widget = MapWidget(
     "map",
     view_state={"longitude": 0, "latitude": 0, "zoom": 0},
-    style=MAP_BG_DARK,
+    style=MAP_BG_LIGHT,
     cooperative_gestures=True,
     tooltip=MAP_TOOLTIP,
 )
@@ -893,8 +893,8 @@ app_ui = ui.page_navbar(
             "basemap",
             "Background",
             choices={
-                "dark": "Dark (ocean)",
                 "light": "Light (blank)",
+                "dark": "Dark (ocean)",
                 "osm": "CartoDB Dark",
                 "satellite": "Satellite (ESRI)",
             },
@@ -1289,9 +1289,9 @@ def server(input, output, session):
             else EXAMPLES.get(input.example(), "")
         )
         try:
-            basemap = input.basemap() or "dark"
+            basemap = input.basemap() or "light"
         except (TypeError, AttributeError, KeyError):
-            basemap = "dark"
+            basemap = "light"
         try:
             compare_var = input.compare_var() or ""
         except (TypeError, AttributeError, KeyError):
@@ -1730,11 +1730,11 @@ def server(input, output, session):
         ]
 
         try:
-            basemap = input.basemap() or "dark"
+            basemap = input.basemap() or "light"
         except (TypeError, AttributeError, KeyError):
-            basemap = "dark"
-        if basemap != "dark":
-            kwargs["style"] = BASEMAP_STYLES.get(basemap, MAP_BG_DARK)
+            basemap = "light"
+        if basemap != "light":
+            kwargs["style"] = BASEMAP_STYLES.get(basemap, MAP_BG_LIGHT)
 
         if is_3d_mode.get():
             widgets.append(gimbal_widget())
