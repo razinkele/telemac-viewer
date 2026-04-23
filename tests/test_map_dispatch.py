@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+from shiny_deckgl import MapWidget, zoom_widget
+
 from app_dispatch import decide_dispatch
+from layers import build_mesh_color_patch
 
 
 class RecordingSession:
@@ -93,3 +97,43 @@ def test_dispatch_returns_full_when_overlay_count_changes():
     prev = make_sig(overlay_counts=(0, 0, 0, 0))
     curr = make_sig(overlay_counts=(1, 0, 0, 0))  # one cross-section added
     assert decide_dispatch(prev_sig=prev, curr_sig=curr) == "full"
+
+
+class TestWireFormatContract:
+    """Confirm patch dicts flow through MapWidget.partial_update correctly."""
+
+    @pytest.mark.asyncio
+    async def test_mesh_color_patch_sends_deck_partial_update(self, fake_geom, fake_tf):
+        session = RecordingSession()
+        widget = MapWidget("map")
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        patch, _, _, _ = build_mesh_color_patch(fake_geom, values, "Viridis")
+
+        await widget.partial_update(session, [patch])
+
+        assert len(session.messages) == 1
+        msg_type, payload = session.messages[0]
+        assert msg_type == "deck_partial_update"
+        assert payload["id"] == "map"
+        assert len(payload["layers"]) == 1
+        layer = payload["layers"][0]
+        assert layer["id"] == "mesh"
+        assert "_meshColors" in layer
+        # Geometry MUST NOT leak into the patch — the JS-side cache
+        # preserves it. Keep this list aligned with the one guarded in
+        # tests/test_layers.py::test_patch_contains_mesh_colors_only.
+        assert "_meshPositions" not in layer
+        assert "_meshIndices" not in layer
+        assert "mesh" not in layer
+
+    @pytest.mark.asyncio
+    async def test_set_widgets_sends_deck_set_widgets(self):
+        session = RecordingSession()
+        widget = MapWidget("map")
+        await widget.set_widgets(session, [zoom_widget()])
+
+        assert len(session.messages) == 1
+        msg_type, payload = session.messages[0]
+        assert msg_type == "deck_set_widgets"
+        assert payload["id"] == "map"
+        assert len(payload["widgets"]) == 1
