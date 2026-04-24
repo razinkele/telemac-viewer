@@ -43,7 +43,6 @@ from layers import (
     build_velocity_layer,
     build_velocity_patch,
     build_contour_layer_fn,
-    build_contour_patch,
     build_marker_layer,
     build_cross_section_layer,
     build_particle_layer,
@@ -1353,6 +1352,25 @@ def server(input, output, session):
             origin=[geom.lon_off, geom.lat_off],
         )
 
+    @reactive.calc
+    def contour_layer_cached():
+        """Cached primary contour layer.
+
+        Contour colors are hardcoded (not palette-dependent), so palette
+        changes MUST NOT invalidate the cache. Shiny's @reactive.calc
+        tracks only the inputs we actually read here: contours toggle,
+        effective_values (file/tidx/var/diagnostic), and mesh_geom.
+        """
+        if not input.contours():
+            return None
+        geom = mesh_geom()
+        return build_contour_layer_fn(
+            tel_file(),
+            effective_values(),
+            geom,
+            origin=[geom.lon_off, geom.lat_off],
+        )
+
     # -- Analysis panel, charts, stats, CSV downloads, overlays --
     from server_analysis import register_analysis_handlers
 
@@ -1512,10 +1530,9 @@ def server(input, output, session):
             if vlyr is not None:
                 layers.append(vlyr)
 
-        if input.contours():
-            clyr = build_contour_layer_fn(tf, values, geom, origin=origin)
-            if clyr is not None:
-                layers.append(clyr)
+        clyr = contour_layer_cached()
+        if clyr is not None:
+            layers.append(clyr)
 
         # Comparison variable contour overlay
         try:
@@ -1667,10 +1684,12 @@ def server(input, output, session):
                 vpatch = build_velocity_patch(tf, tidx, geom, origin=origin)
                 if vpatch is not None:
                     patches.append(vpatch)
-            if input.contours():
-                cpatch = build_contour_patch(tf, values, geom, origin=origin)
-                if cpatch is not None:
-                    patches.append(cpatch)
+            # Route the fast path through the same cache as the full path so
+            # palette changes (which skip the structural sig) don't trigger
+            # marching-triangles rebuilds for unchanged fields.
+            cpatch = contour_layer_cached()
+            if cpatch is not None:
+                patches.append(cpatch)
             if input.show_extrema():
                 extrema = find_extrema(tf, values)
                 patches.extend(
