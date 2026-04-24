@@ -51,6 +51,133 @@ import asyncio
 _logger = logging.getLogger(__name__)
 
 
+def build_timeseries_chart(
+    tf,
+    var: str,
+    tidx: int,
+    *,
+    points: list[tuple[float, float]],
+    obs: tuple[np.ndarray, np.ndarray, str] | None = None,
+) -> go.Figure:
+    """Time-series plot at clicked points, with optional observation overlay.
+
+    Pure version of the former _chart_timeseries closure. The reactive
+    state that used to live on clicked_points.get() / obs_data.get() is
+    now passed explicitly, which lets tests drive it without a session.
+    """
+    if not points:
+        return go.Figure()
+    fig = go.Figure()
+    for i, pt in enumerate(points):
+        times, values = time_series_at_point(tf, var, pt[0], pt[1])
+        fig.add_trace(
+            go.Scatter(
+                x=times,
+                y=values,
+                mode="lines",
+                name=f"Pt {i + 1} ({pt[0]:.0f}, {pt[1]:.0f})",
+            )
+        )
+    if tidx < len(tf.times):
+        fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
+    # Overlay observation data if available
+    if obs is not None:
+        obs_times, obs_values, obs_varname = obs
+        fig.add_trace(
+            go.Scatter(
+                x=obs_times,
+                y=obs_values,
+                mode="lines",
+                name=f"Obs: {obs_varname}",
+                line=dict(color="red", dash="dash"),
+            )
+        )
+        # Compare with the last clicked point's model trace
+        if points:
+            last_pt = points[-1]
+            model_times, model_values = time_series_at_point(
+                tf, var, last_pt[0], last_pt[1]
+            )
+            # Crop to overlapping time window to avoid clamped interpolation
+            t_lo = max(float(obs_times[0]), float(model_times[0]))
+            t_hi = min(float(obs_times[-1]), float(model_times[-1]))
+            if t_hi > t_lo:
+                mask = (obs_times >= t_lo) & (obs_times <= t_hi)
+                obs_t_overlap = obs_times[mask]
+                obs_v_overlap = obs_values[mask]
+                if len(obs_t_overlap) >= 2:
+                    model_interp = np.interp(obs_t_overlap, model_times, model_values)
+                    rmse = compute_rmse(model_interp, obs_v_overlap)
+                    nse = compute_nse(model_interp, obs_v_overlap)
+                    partial = "" if mask.all() else " (overlap only)"
+                    fig.add_annotation(
+                        text=f"RMSE={rmse:.4f}  NSE={nse:.4f}{partial}",
+                        xref="paper",
+                        yref="paper",
+                        x=0.02,
+                        y=0.98,
+                        showarrow=False,
+                        font=dict(size=11, color="red"),
+                        bgcolor="rgba(255,255,255,0.8)",
+                    )
+                else:
+                    fig.add_annotation(
+                        text="Too few overlapping points for metrics",
+                        xref="paper",
+                        yref="paper",
+                        x=0.02,
+                        y=0.98,
+                        showarrow=False,
+                        font=dict(size=11, color="orange"),
+                        bgcolor="rgba(255,255,255,0.8)",
+                    )
+            else:
+                fig.add_annotation(
+                    text="No time overlap between model and obs",
+                    xref="paper",
+                    yref="paper",
+                    x=0.02,
+                    y=0.98,
+                    showarrow=False,
+                    font=dict(size=11, color="orange"),
+                    bgcolor="rgba(255,255,255,0.8)",
+                )
+    fig.update_layout(
+        xaxis_title="Time (s)",
+        yaxis_title=var,
+        margin=dict(l=50, r=20, t=10, b=40),
+        height=220,
+    )
+    return fig
+
+
+def build_crosssection_chart(
+    tf,
+    var: str,
+    tidx: int,
+    *,
+    path_points: list[list[float]] | None,
+) -> go.Figure:
+    """Cross-section profile plot along a polyline path.
+
+    Pure version of the former _chart_crosssection closure. The reactive
+    state that used to live on cross_section_points.get() is now passed
+    explicitly via the path_points kwarg.
+    """
+    if path_points is None:
+        return go.Figure()
+    abscissa, values = cross_section_profile(tf, var, tidx, path_points)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=abscissa, y=values, mode="lines", name=var))
+    fig.update_layout(
+        xaxis_title="Distance (m)",
+        yaxis_title=var,
+        margin=dict(l=50, r=20, t=10, b=40),
+        height=220,
+    )
+    return fig
+
+
 def register_analysis_handlers(
     input,
     output,
@@ -138,109 +265,21 @@ def register_analysis_handlers(
     # -- Chart helpers --
 
     def _chart_timeseries(tf, var, tidx):
-        pts = clicked_points.get()
-        if not pts:
-            return go.Figure()
-        fig = go.Figure()
-        for i, pt in enumerate(pts):
-            times, values = time_series_at_point(tf, var, pt[0], pt[1])
-            fig.add_trace(
-                go.Scatter(
-                    x=times,
-                    y=values,
-                    mode="lines",
-                    name=f"Pt {i + 1} ({pt[0]:.0f}, {pt[1]:.0f})",
-                )
-            )
-        if tidx < len(tf.times):
-            fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
-        # Overlay observation data if available
-        obs = obs_data.get()
-        if obs is not None:
-            obs_times, obs_values, obs_varname = obs
-            fig.add_trace(
-                go.Scatter(
-                    x=obs_times,
-                    y=obs_values,
-                    mode="lines",
-                    name=f"Obs: {obs_varname}",
-                    line=dict(color="red", dash="dash"),
-                )
-            )
-            # Compare with the last clicked point's model trace
-            if pts:
-                last_pt = pts[-1]
-                model_times, model_values = time_series_at_point(
-                    tf, var, last_pt[0], last_pt[1]
-                )
-                # Crop to overlapping time window to avoid clamped interpolation
-                t_lo = max(float(obs_times[0]), float(model_times[0]))
-                t_hi = min(float(obs_times[-1]), float(model_times[-1]))
-                if t_hi > t_lo:
-                    mask = (obs_times >= t_lo) & (obs_times <= t_hi)
-                    obs_t_overlap = obs_times[mask]
-                    obs_v_overlap = obs_values[mask]
-                    if len(obs_t_overlap) >= 2:
-                        model_interp = np.interp(
-                            obs_t_overlap, model_times, model_values
-                        )
-                        rmse = compute_rmse(model_interp, obs_v_overlap)
-                        nse = compute_nse(model_interp, obs_v_overlap)
-                        partial = "" if mask.all() else " (overlap only)"
-                        fig.add_annotation(
-                            text=f"RMSE={rmse:.4f}  NSE={nse:.4f}{partial}",
-                            xref="paper",
-                            yref="paper",
-                            x=0.02,
-                            y=0.98,
-                            showarrow=False,
-                            font=dict(size=11, color="red"),
-                            bgcolor="rgba(255,255,255,0.8)",
-                        )
-                    else:
-                        fig.add_annotation(
-                            text="Too few overlapping points for metrics",
-                            xref="paper",
-                            yref="paper",
-                            x=0.02,
-                            y=0.98,
-                            showarrow=False,
-                            font=dict(size=11, color="orange"),
-                            bgcolor="rgba(255,255,255,0.8)",
-                        )
-                else:
-                    fig.add_annotation(
-                        text="No time overlap between model and obs",
-                        xref="paper",
-                        yref="paper",
-                        x=0.02,
-                        y=0.98,
-                        showarrow=False,
-                        font=dict(size=11, color="orange"),
-                        bgcolor="rgba(255,255,255,0.8)",
-                    )
-        fig.update_layout(
-            xaxis_title="Time (s)",
-            yaxis_title=var,
-            margin=dict(l=50, r=20, t=10, b=40),
-            height=220,
+        return build_timeseries_chart(
+            tf,
+            var,
+            tidx,
+            points=clicked_points.get(),
+            obs=obs_data.get(),
         )
-        return fig
 
     def _chart_crosssection(tf, var, tidx):
-        xsec_pts = cross_section_points.get()
-        if xsec_pts is None:
-            return go.Figure()
-        abscissa, values = cross_section_profile(tf, var, tidx, xsec_pts)
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=abscissa, y=values, mode="lines", name=var))
-        fig.update_layout(
-            xaxis_title="Distance (m)",
-            yaxis_title=var,
-            margin=dict(l=50, r=20, t=10, b=40),
-            height=220,
+        return build_crosssection_chart(
+            tf,
+            var,
+            tidx,
+            path_points=cross_section_points.get(),
         )
-        return fig
 
     def _chart_vertprofile(tf, var, tidx):
         pts = clicked_points.get()
