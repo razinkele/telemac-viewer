@@ -795,3 +795,56 @@ class TestPolygonZonalStatsEmpty:
         values = np.zeros(fake_tf.npoin2, dtype=np.float32)
         result = polygon_zonal_stats(fake_tf, values, poly, var_name="WATER DEPTH")
         assert result is None
+
+
+class TestEvaluateExpressionCorrectness:
+    """evaluate_expression arithmetic must produce correct values.
+
+    Task 7 pinned the error-type contract; this class pins the
+    positive path — sum, scalar multiply, power — so a future
+    refactor of the AST walker cannot silently break math output.
+    Variable names use underscores (spaces in varnames are replaced
+    before AST parsing — see evaluate_expression).
+    """
+
+    def test_simple_sum(self, fake_tf):
+        from analysis import evaluate_expression
+
+        result = evaluate_expression(fake_tf, 0, "WATER_DEPTH + WATER_DEPTH")
+        expected = 2.0 * fake_tf.get_data_value("WATER DEPTH", 0)[: fake_tf.npoin2]
+        np.testing.assert_allclose(result, expected, rtol=1e-6)
+
+    def test_scalar_multiplication(self, fake_tf):
+        from analysis import evaluate_expression
+
+        result = evaluate_expression(fake_tf, 0, "WATER_DEPTH * 3.5")
+        expected = 3.5 * fake_tf.get_data_value("WATER DEPTH", 0)[: fake_tf.npoin2]
+        np.testing.assert_allclose(result, expected, rtol=1e-6)
+
+    def test_power_operator(self, fake_tf):
+        from analysis import evaluate_expression
+
+        result = evaluate_expression(fake_tf, 0, "WATER_DEPTH ** 2")
+        depth = fake_tf.get_data_value("WATER DEPTH", 0)[: fake_tf.npoin2]
+        np.testing.assert_allclose(result, depth**2, rtol=1e-6)
+
+
+class TestEvaluateExpressionSecurity:
+    """evaluate_expression is user-exposed (custom scalar fields in UI).
+
+    The AST walker must reject attribute access and dunder escapes so
+    a malicious expression cannot reach __import__, __class__, etc.
+    """
+
+    def test_dunder_attribute_rejected(self, fake_tf):
+        """Arbitrary attribute access must not escape the sandbox."""
+        from analysis import evaluate_expression
+
+        with pytest.raises((ValueError, SyntaxError, KeyError, AttributeError)):
+            evaluate_expression(fake_tf, 0, "WATER_DEPTH.__class__")
+
+    def test_import_rejected(self, fake_tf):
+        from analysis import evaluate_expression
+
+        with pytest.raises((ValueError, SyntaxError, KeyError)):
+            evaluate_expression(fake_tf, 0, "__import__('os').system('whoami')")
