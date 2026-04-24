@@ -1,8 +1,8 @@
 # TELEMAC Viewer
 
-[![Version](https://img.shields.io/badge/version-3.2.0-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.3.0-blue.svg)](./CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-429%20passing-brightgreen.svg)](./tests)
+[![Tests](https://img.shields.io/badge/tests-464%20passing-brightgreen.svg)](./tests)
 [![License](https://img.shields.io/badge/license-LGPL%20v2.1-orange.svg)](#license)
 
 A web-based viewer for [TELEMAC](http://www.opentelemac.org/) simulation results,
@@ -39,8 +39,9 @@ engineering tools.
 - **Wireframe**, **contour isolines**, **particle tracing** with Lagrangian trails
 - **Boundary nodes** color-coded from `.cli`
 - **Min/max extrema** markers
-- **Dark mode** and multiple basemaps (CartoDB, Satellite)
+- **Light/dark map canvas** + multiple basemaps (CartoDB, Satellite)
 - **Difference mode** between timesteps with a diverging palette
+- **Fast timestep scrub** — partial-update dispatcher sends only the mesh color buffer on palette/value changes, preserving positions and indices via deck.gl's JS-side cache (~3-4× smaller WebSocket payload for large meshes)
 
 ### Analysis
 - **Time series** at clicked points, with CSV export (barycentric-interpolated for derived variables — matches the map layer)
@@ -245,9 +246,10 @@ python -m pytest tests/ -W error::RuntimeWarning
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.2.0**
-(2026-04-17) — mesh identity hash, barycentric derived sampling, volume FS–B
-fallback, plus Rounds 2–14 deep-review fixes.
+See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.3.0**
+(2026-04-24) — full-vs-partial map update dispatcher (~3-4× smaller WebSocket
+payload on timestep scrub), 17 silent-failure / observability fixes across
+the viewer, and 17 new tests pinning sandbox + wire-format contracts.
 
 ## License
 

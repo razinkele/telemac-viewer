@@ -4,6 +4,58 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-04-24
+
+### Added
+- **Full-vs-partial map update dispatcher**: when only palette, timestep, or values change (no structural changes), the viewer sends a mesh color-buffer patch via `map_widget.partial_update` + `set_widgets` instead of a full `update`. For a ~100k-node mesh this drops the per-tick WebSocket payload roughly 3-4× (positions + indices are preserved by deck.gl's JS-side cache).
+- `build_mesh_color_patch()` in `layers.py` — produces a colors-only patch dict ( `id` + `_meshColors` only; positions/indices/coordinate-system deliberately omitted so the cache preserves them).
+- `build_velocity_patch()` and `build_contour_patch()` in `layers.py` — pass-through wrappers today; seams ready for sparse attribute updates later without touching `app.py`.
+- `app_dispatch.decide_dispatch(prev_sig, curr_sig)` — pure decision function, unit-testable outside the Shiny reactive scope.
+- Default map background switched from dark to light; dark option remains in the Background dropdown.
+
+### Changed
+- **`_structural_sig` reactive calc** (`app.py`): collects every input that forces a full map rebuild (file, 7 layer toggles, 3D mode, basemap, compare-var, user-drawn overlay counts) into one hashable tuple. Consumed by the full-vs-partial dispatcher.
+- **Import-tab map widget** (`server_import.py`): moved to module scope and embedded via `import_map_widget.ui(...)` directly, replacing the broken `shinywidgets.render_widget` wrapper (`MapWidget` is a native Shiny component, not an ipywidget).
+- **Basemap styles and tooltip config** factored into `constants.py` (`MAP_BG_DARK`, `MAP_BG_LIGHT`, `BASEMAP_STYLES`, `MAP_TOOLTIP`, `solid_bg_style()`) — previously duplicated as URL-encoded data-URI strings in three places.
+- **Static-layer reactive caches** (`app.py`): `wireframe_layer_cached()` and `boundary_layers_cached()` now memoized via `@reactive.calc`, so `compute_unique_edges()` and `find_boundary_edges()` no longer re-run on every timestep scrub or palette change — only on file load or toggle flip.
+
+### Fixed
+- **Perpetual ".cli not found" notification** (`app.py`): previously re-emitted every ~4 seconds during any reactive tick when boundary overlays were on, and permanently for uploaded files (where `cli_data()` is hard-coded to `None`). Now gated on a reactive flag reset per file load, and skipped entirely for uploaded files (where the existing `upload_notice` already explains the absence of companion files).
+- **Silent `TelemacFile.close()` failures** leaked file descriptors across example switches. Centralised via `server_core._safe_close(tf, context)` which logs through `_logger.warning(..., exc_info=True)`. Three call sites updated (two in `server_core.py`, one in `server_analysis.py`).
+- **Invalid EPSG input silently disabled basemap alignment** (`server_core.resolve_crs`). Typos like `"4326x"` or non-existent codes like `99999` now raise a user-visible warning notification with the offending text and the underlying `pyproj.CRSError`. Narrowed `except Exception` to `(ValueError, pyproj.exceptions.CRSError)` so `KeyboardInterrupt` / `SystemExit` propagate.
+- **3D view silently fell back to a flat (z=0) plate** when the z-variable lookup failed, misleadingly suggesting flat bathymetry. `server_core.mesh_geom` now switches back to 2D via `is_3d_mode.set(False)` and raises a clear warning.
+- **Simulation module name whitelisted** (`server_simulation.py`): an unknown module string (from a malformed `.cas` path) could launch `python3 .py case.cas` and hang for 120 s waiting on stdin. Added `_ALLOWED_TELEMAC_MODULES = frozenset({...})` validation; unknown names abort with a clear error notification.
+- **`evaluate_expression` error handling narrowed** (`server_analysis.py`) from `except Exception` to `(ValueError, TypeError, ArithmeticError, SyntaxError, KeyError, np.linalg.LinAlgError)` so `MemoryError` and `KeyboardInterrupt` propagate.
+- **HEC-RAS import handlers narrowed** (`server_import.py`): both `import_preview` and `import_convert` previously caught `Exception`, masking `KeyboardInterrupt` and `MemoryError`. Restricted to `(OSError, ValueError, KeyError, RuntimeError)` with `_logger.exception()` so tracebacks reach server logs even when the in-UI log panel is dismissed.
+- **`read_cli_file` and `parse_liq_file` None-returns logged** (`analysis.py`, `validation.py`): each early-return (`OSError`, too-few-lines, no valid data rows) now logs the path and reason so operators can distinguish "file missing" from "file unreadable" from "file truncated".
+- **`tel_file()` open-before-close** (`server_core.py`): previously closed the old file before trying to open the new one; if the new open failed, the reactive chain halted with no file at all. Now opens new first, then closes old only on success.
+- **`cas_file` init-race catch logged** (`server_simulation.py`): `_logger.debug` now distinguishes "widget not yet rendered" from "user didn't pick a file" even though the user-facing message stays the same.
+- **Degenerate geometry guards** (`analysis.py`, `layers.py`): replaced `+1e-30` divide-by-zero tricks in circumradius and contour edge-crossing math with explicit `np.where(denom > eps, ..., np.nan)` masks. Collinear triangles now trigger `_sanitize_result`'s warning log; previously they were hidden as tiny-but-finite values that slipped through.
+- **Log-scale on uniform-valued mesh** (`layers.py`): detect `vmin == vmax` and skip the log branch instead of producing a silently all-black mesh. Existing `"use_log and not log_applied"` notification tells the user.
+- **Rating-curve skipped-timestep warning** (`server_analysis.py`): notify when more than half the timesteps in the h-Q curve lack FREE SURFACE / WATER DEPTH data.
+- **Particle-tracing empty-result notification** (`server_analysis.py`): warn when `compute_particle_paths` returns an empty list (seed grid empty, all seeds outside mesh) instead of silently clearing the particle overlay.
+- **Diverging-palette all-zero notification** (`app.py`): when a bipolar/diff-mode palette is active on an all-zero field, the map renders as a uniform midpoint color — now flagged with a message-level notification so the user doesn't interpret uniform color as real structure.
+- **`release.py` git subprocess stderr captured**: previously users running `release.py` got a Python traceback but not the actual git error (e.g. pre-commit hook rejection). New `_run_git(args)` helper uses `capture_output=True` and raises `RuntimeError` with both stdout and stderr in the message.
+- **`polygon_zonal_stats` returns `None` for empty intersection** (`analysis.py`): a zero-dict (`area=0`, `mean=0`) was indistinguishable from a polygon over genuinely zero values. Now returns `None`; the handler renders an explicit "no mesh nodes inside polygon" notification.
+
+### Tests
+- `TestWireFormatContract` in `tests/test_map_dispatch.py` pins the wire shape of `deck_partial_update` (only `_meshColors`, no `_meshPositions`/`_meshIndices`) and `deck_set_widgets`. Guards against accidentally re-adding position keys to the mesh color patch.
+- `TestParseObservationCSV` in `tests/test_validation.py` covers empty file, malformed row, and valid roundtrip — locks in the current `(times, values, varname)` 3-tuple contract.
+- `TestEvaluateExpressionCorrectness` and `TestEvaluateExpressionSecurity` in `tests/test_analysis.py` lock in arithmetic behaviour and verify `__import__('os').system(...)` and dunder-attribute access are rejected by the AST sandbox.
+
+### Documentation
+- README.md modernized (cover image, architecture notes, clearer quick-start).
+
+### Tier-0 chores (bundled)
+- Removed unused `from constants import _M2D` in `analysis.py`.
+- Moved `validation.py::_logger` declaration to module top; added `from __future__ import annotations`.
+- Renamed `time_idx` → `tidx` in `build_velocity_layer`/`build_velocity_patch` for consistency with the rest of the codebase (`analysis.py`, `server_core.py`, protocol, tests).
+- Collapsed duplicate comment block above `_COORD_METER_OFFSETS` in `layers.py`.
+- Added `id=` to every remaining `ui.notification_show` call in `server_core.py`; wrapped bare `input.X()` reads in `server_playback.py` with the codebase-standard `try/except (TypeError, AttributeError, KeyError)` pattern; added notification when playback speed is clamped.
+
+### Total suite
+**464 tests** (up from 429 at the previous release, +35), all passing under `pytest`.
+
 ## [3.2.0] - 2026-04-17
 
 ### Added
