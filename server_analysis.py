@@ -316,7 +316,8 @@ def register_analysis_handlers(
         h_values = []
         q_values = []
         skipped_h = 0
-        for t in range(len(tf.times)):
+        ntimes = len(tf.times)
+        for t in range(ntimes):
             result = compute_discharge(tf, t, xsec)
             if result["total_q"] is not None:
                 # Average water level along the cross-section
@@ -336,6 +337,14 @@ def register_analysis_handlers(
         if skipped_h > 0:
             _logger.warning(
                 "Rating curve: %d timesteps skipped (no water level data)", skipped_h
+            )
+        if skipped_h and ntimes and skipped_h / ntimes > 0.5:
+            ui.notification_show(
+                f"Rating curve: {skipped_h} of {ntimes} timesteps "
+                f"lacked FREE SURFACE / WATER DEPTH data.",
+                type="warning",
+                duration=6,
+                id="rating_warn",
             )
         fig = go.Figure()
         if h_values and q_values:
