@@ -175,9 +175,15 @@ def parse_liq_file(liq_path):
             lines = [
                 l.strip() for l in f if l.strip() and not l.strip().startswith("#")
             ]
-    except OSError:
+    except OSError as exc:
+        _logger.warning("Cannot read .liq file '%s': %s", liq_path, exc)
         return None
     if len(lines) < 3:
+        _logger.warning(
+            ".liq file '%s' has %d non-comment lines (need >=3)",
+            liq_path,
+            len(lines),
+        )
         return None
     try:
         headers = lines[0].split()
@@ -208,6 +214,7 @@ def parse_liq_file(liq_path):
                 continue
         data = np.array(rows) if rows else np.empty((0, ncols))
         if data.size == 0:
+            _logger.warning(".liq file '%s' has no valid data rows", liq_path)
             return None
         times = data[:, 0]
         result = {}

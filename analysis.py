@@ -581,7 +581,8 @@ def read_cli_file(cli_path: str) -> dict[int, int] | None:
     try:
         with open(cli_path) as f:
             raw_lines = f.readlines()
-    except OSError:
+    except OSError as exc:
+        _logger.warning("Cannot read .cli file '%s': %s", cli_path, exc)
         return None
     try:
         bc_types: dict[int, int] = {}
