@@ -260,14 +260,15 @@ def register_core_handlers(
             try:
                 z_name = tf.get_z_name()
                 z_vals = tf.get_data_value(z_name, current_tidx())
-            except Exception as e:
+            except (KeyError, ValueError, AttributeError, IndexError) as e:
                 ui.notification_show(
-                    f"Cannot read Z elevation: {e}. Showing flat mesh.",
+                    f"Cannot read Z elevation ({e}). Switched back to 2D view.",
                     type="warning",
                     duration=8,
                     id="z_warn",
                 )
-                z_vals = np.zeros(tf.npoin2, dtype=np.float32)
+                is_3d_mode.set(False)
+                return build_mesh_geometry(tf, crs=crs, origin_offset=origin_offset)
             return build_mesh_geometry(
                 tf,
                 crs=crs,
