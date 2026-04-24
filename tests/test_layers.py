@@ -141,7 +141,7 @@ class TestBuildContourLayer:
         result = build_contour_layer_fn(fake_tf, values, fake_geom)
         assert isinstance(result, dict)
         assert "data" in result
-        assert len(result["data"]) > 0
+        assert result["data"]["length"] > 0
 
     def test_n_contours(self, fake_tf, fake_geom):
         values = fake_tf.get_data_value("WATER DEPTH", 0)
@@ -149,9 +149,30 @@ class TestBuildContourLayer:
         result_10 = build_contour_layer_fn(fake_tf, values, fake_geom, n_contours=10)
         # More contours should generally produce more or equal segments
         assert result_3 is not None and result_10 is not None
-        count_3 = len(result_3["data"])
-        count_10 = len(result_10["data"])
+        count_3 = result_3["data"]["length"]
+        count_10 = result_10["data"]["length"]
         assert count_10 != count_3 or count_10 > 0  # different or at least non-empty
+
+    def test_contour_uses_binary_position_attributes(self, fake_tf, fake_geom):
+        """Binary-attribute mode: data is {length: N}, positions are encoded."""
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        result = build_contour_layer_fn(fake_tf, values, fake_geom)
+        assert result is not None
+        assert isinstance(result["data"], dict)
+        assert "length" in result["data"]
+        src = result.get("getSourcePosition")
+        tgt = result.get("getTargetPosition")
+        assert isinstance(src, dict) and src.get("@@binary") is True
+        assert isinstance(tgt, dict) and tgt.get("@@binary") is True
+        assert src["dtype"] == "float32" and src["size"] == 2
+        assert tgt["dtype"] == "float32" and tgt["size"] == 2
+
+    def test_contour_binary_length_matches_segments(self, fake_tf, fake_geom):
+        """data['length'] must be > 0 when a non-flat field produces crossings."""
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        result = build_contour_layer_fn(fake_tf, values, fake_geom)
+        assert result is not None
+        assert result["data"]["length"] > 0
 
 
 class TestOtherLayers:

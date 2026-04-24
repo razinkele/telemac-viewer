@@ -367,14 +367,17 @@ def build_contour_layer_fn(
     if not all_src:
         return None
 
-    lines = [
-        {"sourcePosition": list(s), "targetPosition": list(t)}
-        for s, t in zip(all_src, all_tgt)
-    ]
+    # Binary-attribute mode: deck.gl reads positions from a base64-encoded
+    # Float32Array at index i, dramatically smaller on the wire than the
+    # equivalent list of {sourcePosition, targetPosition} dicts.
+    src_xy = np.array(all_src, dtype=np.float32).reshape(-1, 2)
+    tgt_xy = np.array(all_tgt, dtype=np.float32).reshape(-1, 2)
 
     return line_layer(
         layer_id,
-        lines,
+        data={"length": int(src_xy.shape[0])},
+        getSourcePosition=encode_binary_attribute(src_xy),
+        getTargetPosition=encode_binary_attribute(tgt_xy),
         getColor=c_color + [180] if len(c_color) == 3 else c_color,
         getWidth=1,
         widthMinPixels=1,
