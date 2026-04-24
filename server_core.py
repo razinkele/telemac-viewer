@@ -4,6 +4,7 @@ from __future__ import annotations
 import glob
 import logging
 import threading
+from dataclasses import dataclass
 
 import numpy as np
 import pyproj
@@ -41,6 +42,82 @@ def _safe_close(tf, context: str) -> None:
         tf.close()
     except Exception:
         _logger.warning("Failed to close %s TelemacFile", context, exc_info=True)
+
+
+@dataclass(frozen=True)
+class CrsResolution:
+    """Outcome of resolving CRS from user + file inputs.
+
+    source values:
+      - "manual":   user typed a valid EPSG code in the textbox
+      - "invalid":  user typed something that failed to parse; error is set
+      - "disabled": auto-detect is off and no manual code was given
+      - "cas":      .cas file GEOGRAPHIC SYSTEM keyword matched; detected_epsg is set
+      - "coords":   coordinate heuristic matched; detected_epsg is set
+      - "none":     no detection method succeeded
+    """
+
+    crs: object | None  # CRS instance (from crs.py) or None
+    source: str
+    error: str | None = None  # human-readable, when source=="invalid"
+    detected_epsg: int | None = None  # populated for "cas" and "coords" only
+
+
+def _resolve_crs_from_inputs(
+    *,
+    epsg_text: str,
+    auto_crs_enabled: bool,
+    cas_candidates: tuple[str, ...],
+    mesh_xy: tuple[np.ndarray, np.ndarray] | None,
+) -> CrsResolution:
+    """Pure CRS-resolution decision for server_core.resolve_crs.
+
+    Precedence: manual EPSG > auto-detect disabled > .cas files > coordinate
+    heuristic > None.
+
+    Parameters
+    ----------
+    epsg_text
+        Raw user input from the EPSG textbox; whitespace-stripped internally.
+    auto_crs_enabled
+        Whether the auto-detect checkbox is enabled.
+    cas_candidates
+        Paths to .cas files to scan for GEOGRAPHIC SYSTEM. Empty for uploads.
+    mesh_xy
+        (x_array, y_array) from the loaded mesh for coordinate-heuristic
+        fallback, or None to skip that path.
+    """
+    stripped = epsg_text.strip()
+    if stripped:
+        try:
+            code = int(stripped)
+            return CrsResolution(crs=crs_from_epsg(code), source="manual")
+        except (ValueError, pyproj.exceptions.CRSError) as exc:
+            return CrsResolution(
+                crs=None,
+                source="invalid",
+                error=f"Invalid EPSG code '{stripped}': {exc}",
+            )
+    if not auto_crs_enabled:
+        return CrsResolution(crs=None, source="disabled")
+    for cas_path in cas_candidates:
+        detected = detect_crs_from_cas(cas_path)
+        if detected is not None:
+            return CrsResolution(
+                crs=detected,
+                source="cas",
+                detected_epsg=detected.epsg,
+            )
+    if mesh_xy is not None:
+        x, y = mesh_xy
+        detected = guess_crs_from_coords(x, y)
+        if detected is not None:
+            return CrsResolution(
+                crs=detected,
+                source="coords",
+                detected_epsg=detected.epsg,
+            )
+    return CrsResolution(crs=None, source="none")
 
 
 def register_core_handlers(
@@ -185,50 +262,52 @@ def register_core_handlers(
         """Auto-detect or manually set CRS when file or EPSG input changes."""
         epsg_text = input.epsg_input() if input.epsg_input() else ""
 
-        # Manual EPSG overrides auto-detect
-        if epsg_text.strip():
-            try:
-                code = int(epsg_text.strip())
-                current_crs.set(crs_from_epsg(code))
-                return
-            except (ValueError, pyproj.exceptions.CRSError) as exc:
-                current_crs.set(None)
-                ui.notification_show(
-                    f"Invalid EPSG code '{epsg_text.strip()}': {exc}",
-                    type="warning",
-                    duration=6,
-                    id="epsg_warn",
-                )
-                return
-
-        # Auto-detect disabled
-        if not input.auto_crs():
-            current_crs.set(None)
-            return
-
-        # Try .cas file detection
+        # Assemble inputs for the pure helper
+        try:
+            auto_crs_enabled = bool(input.auto_crs())
+        except (TypeError, AttributeError, KeyError):
+            auto_crs_enabled = True
         uploaded = input.upload()
-        if not (uploaded and use_upload.get()):
-            path = EXAMPLES.get(input.example(), "")
-            cas_files = find_cas_files(path)
-            for cas_path in cas_files.values():
-                detected = detect_crs_from_cas(cas_path)
-                if detected:
-                    current_crs.set(detected)
-                    with reactive.isolate():
-                        ui.update_text("epsg_input", value=str(detected.epsg))
-                    return
+        if uploaded and use_upload.get():
+            cas_candidates: tuple[str, ...] = ()
+        else:
+            slf_path = EXAMPLES.get(input.example(), "")
+            cas_candidates = (
+                tuple(find_cas_files(slf_path).values()) if slf_path else ()
+            )
+        # Consult the mesh heuristic only when it might actually be used:
+        # the manual-EPSG and auto-disabled paths terminate before the
+        # mesh_xy is inspected, so gate the tel_file() read to avoid
+        # creating an avoidable reactive dep on every EPSG keystroke.
+        mesh_xy = None
+        stripped = epsg_text.strip()
+        if not stripped and auto_crs_enabled:
+            try:
+                tf = tel_file()
+                mesh_xy = (tf.meshx, tf.meshy)
+            except (AttributeError, OSError, KeyError, ValueError, RuntimeError):
+                # File not loaded yet / malformed / transient read error —
+                # skip the coord heuristic, let the helper return source="none".
+                mesh_xy = None
 
-        # Try coordinate heuristic
-        tf = tel_file()
-        detected = guess_crs_from_coords(tf.meshx, tf.meshy)
-        if detected:
-            current_crs.set(detected)
+        outcome = _resolve_crs_from_inputs(
+            epsg_text=epsg_text,
+            auto_crs_enabled=auto_crs_enabled,
+            cas_candidates=cas_candidates,
+            mesh_xy=mesh_xy,
+        )
+
+        current_crs.set(outcome.crs)
+        if outcome.source == "invalid":
+            ui.notification_show(
+                outcome.error,
+                type="warning",
+                duration=6,
+                id="epsg_warn",
+            )
+        if outcome.detected_epsg is not None:
             with reactive.isolate():
-                ui.update_text("epsg_input", value=str(detected.epsg))
-            return
-
-        current_crs.set(None)
+                ui.update_text("epsg_input", value=str(outcome.detected_epsg))
 
     @output
     @render.ui
