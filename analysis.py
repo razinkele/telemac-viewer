@@ -616,13 +616,15 @@ def polygon_zonal_stats(
     polygon_m: list[list[float]],
     flood_threshold: float = 0.01,
     var_name: str = "",
-) -> dict[str, float]:
+) -> dict[str, float] | None:
     """Compute statistics of a variable within a drawn polygon.
 
     polygon_m: list of [x_m, y_m] vertices in mesh meters.
     flood_threshold: depth threshold for flooded fraction (default 0.01 m).
     var_name: variable name; flooded metrics only computed for depth-like vars.
     Returns dict with area, mean, min, max, count, flooded_area, flooded_fraction.
+    Returns None when the polygon contains no mesh nodes (empty intersection),
+    so the caller can distinguish that from a polygon over genuine zeros.
     """
     from matplotlib.path import Path
 
@@ -647,15 +649,8 @@ def polygon_zonal_stats(
 
     n_inside = int(inside.sum())
     if n_inside == 0:
-        return {
-            "area": 0.0,
-            "mean": 0.0,
-            "min": 0.0,
-            "max": 0.0,
-            "count": 0,
-            "flooded_area": 0.0,
-            "flooded_fraction": 0.0,
-        }
+        _logger.info("polygon_zonal_stats: no mesh nodes inside polygon")
+        return None
 
     vals_inside = values[:npoin][inside]
 

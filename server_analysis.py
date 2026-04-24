@@ -488,6 +488,17 @@ def register_analysis_handlers(
                 stats = polygon_zonal_stats(
                     tel_file(), values, poly_m, var_name=current_var()
                 )
+                if stats is None:
+                    ui.notification_show(
+                        "No mesh nodes inside the selected polygon.",
+                        type="warning",
+                        duration=5,
+                        id="polygon_empty_warn",
+                    )
+                    polygon_stats_data.set(None)
+                    polygon_mode.set(False)
+                    await map_widget.disable_draw(session)
+                    return
                 polygon_stats_data.set(stats)
                 polygon_geom.set(poly_m)
                 polygon_mode.set(False)

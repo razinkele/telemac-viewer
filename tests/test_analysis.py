@@ -633,12 +633,11 @@ class TestPolygonZonalStats:
         assert 0.1 <= stats["mean"] <= 1.0
 
     def test_empty_polygon(self, fake_tf):
-        """Polygon outside mesh should return zeros."""
+        """Polygon outside mesh should return None (empty intersection)."""
         polygon = [[10, 10], [11, 10], [11, 11], [10, 11]]
         values = fake_tf.get_data_value("WATER DEPTH", 0)
         stats = polygon_zonal_stats(fake_tf, values, polygon)
-        assert stats["count"] == 0
-        assert stats["mean"] == 0.0
+        assert stats is None
 
 
 # ---------------------------------------------------------------------------
@@ -784,3 +783,15 @@ class TestMeshQualityDegenerate:
             "Expected a 'non-finite values replaced' warning from "
             f"_sanitize_result. Got records: {[r.message for r in caplog.records]}"
         )
+
+
+class TestPolygonZonalStatsEmpty:
+    def test_returns_none_when_polygon_outside_mesh(self, fake_tf):
+        from analysis import polygon_zonal_stats
+        import numpy as np
+
+        # Polygon far outside the fake mesh (fake_tf spans roughly 0..1)
+        poly = [[1e6, 1e6], [1e6 + 1, 1e6], [1e6 + 1, 1e6 + 1], [1e6, 1e6 + 1]]
+        values = np.zeros(fake_tf.npoin2, dtype=np.float32)
+        result = polygon_zonal_stats(fake_tf, values, poly, var_name="WATER DEPTH")
+        assert result is None
