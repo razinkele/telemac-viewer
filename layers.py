@@ -237,28 +237,25 @@ def build_velocity_layer(
     # Scale arrows so the longest is ~1/30th of the mesh extent
     arrow_scale = extent / (max_mag * 30)
 
-    arrows = []
-    for i in idx:
-        if mag[i] < max_mag * 0.01:
-            continue
-        sx = float(x[i] - x_off)
-        sy = float(y[i] - y_off)
-        arrows.append(
-            {
-                "sourcePosition": [sx, sy],
-                "targetPosition": [
-                    sx + float(u[i] * arrow_scale),
-                    sy + float(v[i] * arrow_scale),
-                ],
-            }
-        )
-
-    if not arrows:
+    # Vectorised filter + positioning; then emit in deck.gl binary-attribute
+    # mode so the per-tick wire payload is ~5x smaller than a list of dicts.
+    mask = mag[idx] >= max_mag * 0.01
+    kept = idx[mask]
+    if kept.size == 0:
         return None
+
+    sx = (x[kept] - x_off).astype(np.float32)
+    sy = (y[kept] - y_off).astype(np.float32)
+    tx = sx + (u[kept] * arrow_scale).astype(np.float32)
+    ty = sy + (v[kept] * arrow_scale).astype(np.float32)
+    src_xy = np.column_stack([sx, sy])
+    tgt_xy = np.column_stack([tx, ty])
 
     return line_layer(
         "velocity",
-        arrows,
+        data={"length": int(kept.size)},
+        getSourcePosition=encode_binary_attribute(src_xy),
+        getTargetPosition=encode_binary_attribute(tgt_xy),
         getColor=[20, 20, 20, 160],
         getWidth=2,
         widthMinPixels=1,

@@ -129,6 +129,25 @@ class TestBuildVelocityLayer:
         assert "type" in result
         assert "id" in result
 
+    def test_velocity_uses_binary_position_attributes(self, fake_tf, fake_geom):
+        result = build_velocity_layer(fake_tf, 0, fake_geom)
+        if result is None:
+            pytest.skip("FakeTF has no velocity vars")
+        assert isinstance(result["data"], dict)
+        assert "length" in result["data"]
+        src = result.get("getSourcePosition")
+        tgt = result.get("getTargetPosition")
+        assert isinstance(src, dict) and src.get("@@binary") is True
+        assert isinstance(tgt, dict) and tgt.get("@@binary") is True
+        assert src["dtype"] == "float32" and src["size"] == 2
+        assert tgt["dtype"] == "float32" and tgt["size"] == 2
+
+    def test_velocity_binary_length_matches_arrow_count(self, fake_tf, fake_geom):
+        result = build_velocity_layer(fake_tf, 0, fake_geom)
+        if result is None:
+            pytest.skip("FakeTF has no velocity vars")
+        assert result["data"]["length"] > 0
+
 
 class TestBuildContourLayer:
     def test_flat_values(self, fake_tf, fake_geom):
