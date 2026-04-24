@@ -1,10 +1,15 @@
 # validation.py — Observation data I/O and validation metrics
 """Functions for parsing observation CSV files and computing validation statistics."""
 
+from __future__ import annotations
+
 import csv
 import logging
+
 import numpy as np
 from numpy import ndarray
+
+_logger = logging.getLogger(__name__)
 
 
 def parse_observation_csv(file_path: str) -> tuple[ndarray, ndarray, str]:
@@ -156,9 +161,6 @@ def compute_volume_timeseries(tf, compute_integral_fn):
         times.append(float(tf.times[t]))
         volumes.append(result["integral"])
     return np.array(times), np.array(volumes)
-
-
-_logger = logging.getLogger(__name__)
 
 
 def parse_liq_file(liq_path):

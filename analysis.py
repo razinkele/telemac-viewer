@@ -9,7 +9,6 @@ import re
 import warnings
 import numpy as np
 from typing import Any
-from constants import _M2D
 from viewer_types import TelemacFileProtocol
 from telemac_defaults import find_velocity_pair
 import logging

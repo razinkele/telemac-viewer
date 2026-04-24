@@ -13,7 +13,8 @@ from shiny_deckgl import (
     encode_binary_attribute,
 )
 
-# deck.gl _COORD_METER_OFFSETS = 2
+# deck.gl COORDINATE_SYSTEM.METER_OFFSETS: layer x/y are meters relative to
+# the lon/lat origin set via coordinateOrigin on each layer.
 _COORD_METER_OFFSETS = 2
 from constants import cached_palette_arr
 from telemac_defaults import find_velocity_pair
@@ -156,7 +157,7 @@ def build_mesh_color_patch(
 
 def build_velocity_patch(
     tf: TelemacFileProtocol,
-    time_idx: int,
+    tidx: int,
     geom: MeshGeometry,
     origin: list[float] | None = None,
 ) -> dict | None:
@@ -168,7 +169,7 @@ def build_velocity_patch(
     ``build_*_patch`` uniformly; if we later introduce sparse attribute
     updates for arrows, only this function changes.
     """
-    return build_velocity_layer(tf, time_idx, geom, origin=origin)
+    return build_velocity_layer(tf, tidx, geom, origin=origin)
 
 
 def build_contour_patch(
@@ -202,7 +203,7 @@ def build_contour_patch(
 
 def build_velocity_layer(
     tf: TelemacFileProtocol,
-    time_idx: int,
+    tidx: int,
     geom: MeshGeometry,
     origin: list[float] | None = None,
 ) -> dict | None:
@@ -211,8 +212,8 @@ def build_velocity_layer(
     if pair is None:
         return None
 
-    u = tf.get_data_value(pair[0], time_idx)
-    v = tf.get_data_value(pair[1], time_idx)
+    u = tf.get_data_value(pair[0], tidx)
+    v = tf.get_data_value(pair[1], tidx)
     x, y = tf.meshx, tf.meshy
     npoin = tf.npoin2
     x_off, y_off = geom.x_off, geom.y_off
