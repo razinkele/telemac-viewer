@@ -1371,6 +1371,42 @@ def server(input, output, session):
             origin=[geom.lon_off, geom.lat_off],
         )
 
+    @reactive.calc
+    def compare_contour_layer_cached():
+        """Cached secondary contour overlay for the compare-variable feature.
+
+        Reads the compare_var input, secondary TelemacFile (if "(2) "-prefixed),
+        current tidx, and mesh_geom. Rebuilds only when one of those changes
+        — palette / log-scale / diagnostic flips produce a cache hit.
+        """
+        try:
+            compare = input.compare_var() or ""
+        except (TypeError, AttributeError, KeyError):
+            compare = ""
+        if not compare:
+            return None
+        tf = tel_file()
+        tidx = current_tidx()
+        geom = mesh_geom()
+        if compare.startswith("(2) ") and compare_tf.get() is not None:
+            real_name = compare[4:]
+            tf2 = compare_tf.get()
+            safe_tidx = min(tidx, len(tf2.times) - 1)
+            compare_vals = get_var_values(tf2, real_name, safe_tidx)
+        else:
+            compare_vals = get_var_values(tf, compare, tidx)
+        if compare_vals is None:
+            return None
+        return build_contour_layer_fn(
+            tf,
+            compare_vals,
+            geom,
+            n_contours=8,
+            layer_id="compare-contours",
+            contour_color=[0, 0, 180],
+            origin=[geom.lon_off, geom.lat_off],
+        )
+
     # -- Analysis panel, charts, stats, CSV downloads, overlays --
     from server_analysis import register_analysis_handlers
 
@@ -1534,31 +1570,10 @@ def server(input, output, session):
         if clyr is not None:
             layers.append(clyr)
 
-        # Comparison variable contour overlay
-        try:
-            compare = input.compare_var() or ""
-        except (TypeError, AttributeError, KeyError):
-            compare = ""
-        compare_vals = None
-        if compare.startswith("(2) ") and compare_tf.get() is not None:
-            real_name = compare[4:]
-            tf2 = compare_tf.get()
-            safe_tidx = min(tidx, len(tf2.times) - 1)
-            compare_vals = get_var_values(tf2, real_name, safe_tidx)
-        elif compare:
-            compare_vals = get_var_values(tf, compare, tidx)
-        if compare_vals is not None:
-            clyr2 = build_contour_layer_fn(
-                tf,
-                compare_vals,
-                geom,
-                n_contours=8,
-                layer_id="compare-contours",
-                contour_color=[0, 0, 180],
-                origin=origin,
-            )
-            if clyr2 is not None:
-                layers.append(clyr2)
+        # Comparison variable contour overlay (cached — see compare_contour_layer_cached).
+        clyr2 = compare_contour_layer_cached()
+        if clyr2 is not None:
+            layers.append(clyr2)
 
         # Markers for clicked points
         pts = clicked_points.get()
@@ -1684,12 +1699,16 @@ def server(input, output, session):
                 vpatch = build_velocity_patch(tf, tidx, geom, origin=origin)
                 if vpatch is not None:
                     patches.append(vpatch)
-            # Route the fast path through the same cache as the full path so
+            # Route the fast path through the same caches as the full path so
             # palette changes (which skip the structural sig) don't trigger
-            # marching-triangles rebuilds for unchanged fields.
+            # marching-triangles rebuilds for unchanged fields, and so the
+            # compare-contour overlay stays in sync with tidx scrubs.
             cpatch = contour_layer_cached()
             if cpatch is not None:
                 patches.append(cpatch)
+            compare_cpatch = compare_contour_layer_cached()
+            if compare_cpatch is not None:
+                patches.append(compare_cpatch)
             if input.show_extrema():
                 extrema = find_extrema(tf, values)
                 patches.extend(
