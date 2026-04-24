@@ -91,7 +91,11 @@ def register_simulation_handlers(input, output, session, use_upload=None):
         cas_files = find_cas_files(path)
         try:
             cas_name = input.cas_file() if input.cas_file() else None
-        except (TypeError, AttributeError, KeyError):
+        except (TypeError, AttributeError, KeyError) as exc:
+            _logger.debug(
+                "input.cas_file() not yet available (widget init): %s",
+                exc,
+            )
             cas_name = None
         if not cas_name or cas_name not in cas_files:
             ui.notification_show("No .cas file selected", type="warning", duration=3)
