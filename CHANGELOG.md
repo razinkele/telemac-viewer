@@ -4,6 +4,11 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.3.3] - 2026-04-24
+
+### Performance
+- **Cached primary contour layer** via a new `contour_layer_cached` `@reactive.calc` matching the existing `wireframe_layer_cached` / `boundary_layers_cached` pattern. `build_contour_layer_fn` runs marching-triangles over the whole mesh on every call (~20-50 ms CPU on a 100k-triangle mesh × 6 thresholds). The previous code re-ran it on every reactive fire, including palette changes that don't actually affect contour appearance (colors are hardcoded). Now the rebuild only fires when the mesh, the toggle, or the underlying values change — palette changes, log-scale toggles, and any other non-contour-affecting reactive input produce a cache hit. Both the full-path `_build_overlay_layers` and the fast-path `update_map` branch route through the same cache.
+
 ## [3.3.2] - 2026-04-24
 
 ### Performance

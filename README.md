@@ -1,6 +1,6 @@
 # TELEMAC Viewer
 
-[![Version](https://img.shields.io/badge/version-3.3.2-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.3.3-blue.svg)](./CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/tests-490%20passing-brightgreen.svg)](./tests)
 [![License](https://img.shields.io/badge/license-LGPL%20v2.1-orange.svg)](#license)
@@ -246,11 +246,10 @@ python -m pytest tests/ -W error::RuntimeWarning
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.3.2**
-(2026-04-24) — binary-encoded velocity and contour overlays cut their
-per-tick WebSocket payload 5.3×, finishing the partial_update
-optimization begun in v3.3.0. Users with overlays enabled see a
-~28% smaller per-tick payload on top of the mesh.
+See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.3.3**
+(2026-04-24) — caches the primary contour layer via `@reactive.calc`
+so marching-triangles no longer re-runs on palette changes or any
+other reactive fire that doesn't actually affect contour geometry.
 
 ## License
 
