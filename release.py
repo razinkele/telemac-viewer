@@ -44,6 +44,30 @@ OMITTED_TYPES = {"chore", "ci", "build", "release"}
 COMMIT_RE = re.compile(r"^(?P<type>\w+)(?:\((?P<scope>[^)]*)\))?:\s*(?P<message>.+)$")
 
 
+def _run_git(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
+    """Run a git command, raising RuntimeError with stderr on non-zero exit.
+
+    ``subprocess.run(..., check=True)`` raises ``CalledProcessError`` whose
+    ``.stderr`` is ``None`` unless ``capture_output=True`` is set. Using this
+    helper ensures the actual git error (e.g. pre-commit hook rejection)
+    surfaces in the raised message instead of a bare traceback.
+    """
+    result = subprocess.run(
+        args,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git command failed: {' '.join(args)}\n"
+            f"stdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
+    return result
+
+
 def read_version(version_file: Path = VERSION_FILE) -> tuple[int, int, int]:
     """Read VERSION file and return (major, minor, patch) tuple."""
     text = Path(version_file).read_text().strip()
@@ -109,21 +133,18 @@ def strip_trailers(body: str) -> str:
 def _find_latest_tag(cwd: Path | None = None) -> str | None:
     """Find latest v* tag using git describe."""
     try:
-        result = subprocess.run(
+        result = _run_git(
             ["git", "describe", "--tags", "--abbrev=0", "--match", "v*"],
             cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True,
         )
         return result.stdout.strip()
-    except subprocess.CalledProcessError:
+    except RuntimeError:
         return None
 
 
 def _get_files_changed(commit_hash: str, cwd: Path | None = None) -> list[str]:
     """Get list of files changed in a commit."""
-    result = subprocess.run(
+    result = _run_git(
         [
             "git",
             "diff-tree",
@@ -134,9 +155,6 @@ def _get_files_changed(commit_hash: str, cwd: Path | None = None) -> list[str]:
             commit_hash,
         ],
         cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=True,
     )
     return [f for f in result.stdout.strip().splitlines() if f]
 
@@ -155,13 +173,7 @@ def gather_commits(cwd: Path | None = None, since: str | None = None) -> list[di
     else:
         cmd.append("HEAD")
 
-    result = subprocess.run(
-        cmd,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_git(cmd, cwd=cwd)
 
     raw = result.stdout.strip()
     if not raw:
@@ -243,17 +255,15 @@ def git_tag(
     for f in files:
         fpath = cwd_path / f
         if fpath.exists():
-            subprocess.run(["git", "add", f], cwd=cwd_path, check=True)
+            _run_git(["git", "add", f], cwd=cwd_path)
 
-    subprocess.run(
+    _run_git(
         ["git", "commit", "-m", f"release: v{version}"],
         cwd=cwd_path,
-        check=True,
     )
-    subprocess.run(
+    _run_git(
         ["git", "tag", "-a", f"v{version}", "-m", f"Release v{version}"],
         cwd=cwd_path,
-        check=True,
     )
 
 
