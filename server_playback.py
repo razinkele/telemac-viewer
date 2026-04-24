@@ -39,14 +39,31 @@ def register_playback_handlers(input, output, session, playing, tel_file, curren
     def auto_advance():
         if not playing.get():
             return
-        speed = input.speed() if input.speed() is not None else 0.5
+        try:
+            speed = float(input.speed() or 0.5)
+        except (TypeError, AttributeError, KeyError, ValueError):
+            speed = 0.5
+        raw_speed = speed
         speed = max(0.1, min(10.0, float(speed)))
+        if speed != raw_speed:
+            ui.notification_show(
+                f"Playback speed clamped to {speed:g}× (requested {raw_speed:g}×).",
+                type="message",
+                duration=4,
+                id="speed_clamp",
+            )
         reactive.invalidate_later(speed)
         tf = tel_file()
         n = len(tf.times)
         with reactive.isolate():
-            current = input.time_idx() if input.time_idx() is not None else 0
-            loop = input.loop()
+            try:
+                current = int(input.time_idx() or 0)
+            except (TypeError, AttributeError, KeyError, ValueError):
+                current = 0
+            try:
+                loop = bool(input.loop())
+            except (TypeError, AttributeError, KeyError):
+                loop = False
         next_idx = current + 1
         if next_idx >= n:
             if loop:
@@ -62,7 +79,10 @@ def register_playback_handlers(input, output, session, playing, tel_file, curren
     @reactive.effect
     @reactive.event(input.goto_btn)
     def handle_goto_time():
-        target = input.goto_time()
+        try:
+            target = input.goto_time()
+        except (TypeError, AttributeError, KeyError):
+            return
         if target is None:
             return
         tf = tel_file()
@@ -77,14 +97,20 @@ def register_playback_handlers(input, output, session, playing, tel_file, curren
     def handle_kb_next():
         tf = tel_file()
         n = len(tf.times)
-        current = input.time_idx() if input.time_idx() is not None else 0
+        try:
+            current = int(input.time_idx() or 0)
+        except (TypeError, AttributeError, KeyError, ValueError):
+            current = 0
         if current < n - 1:
             ui.update_slider("time_idx", value=current + 1)
 
     @reactive.effect
     @reactive.event(input.kb_prev)
     def handle_kb_prev():
-        current = input.time_idx() if input.time_idx() is not None else 0
+        try:
+            current = int(input.time_idx() or 0)
+        except (TypeError, AttributeError, KeyError, ValueError):
+            current = 0
         if current > 0:
             ui.update_slider("time_idx", value=current - 1)
 

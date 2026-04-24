@@ -130,7 +130,12 @@ def register_core_handlers(
         try:
             tf = TelemacFile(path)
         except Exception as e:
-            ui.notification_show(f"Failed to open file: {e}", type="error", duration=8)
+            ui.notification_show(
+                f"Failed to open file: {e}",
+                type="error",
+                duration=8,
+                id="file_open_err",
+            )
             # Re-raise to halt reactive chain — Shiny shows error state.
             # _prev_tel_file is intentionally left alone so the previous
             # file continues to back already-running calcs.
@@ -326,6 +331,7 @@ def register_core_handlers(
                 f"Could not extract layer {layer} — showing full data",
                 type="warning",
                 duration=5,
+                id="var_extract_warn",
             )
             # Return truncated 2D slice to avoid shape mismatch downstream
             return vals[: tf.npoin2] if len(vals) > tf.npoin2 else vals
