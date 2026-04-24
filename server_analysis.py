@@ -537,8 +537,17 @@ def register_analysis_handlers(
                         f"Particle tracing failed: {e}", type="warning", duration=6
                     )
                     return
-                particle_paths.set(paths)
                 ui.notification_remove("particle_notif")
+                if not paths:
+                    ui.notification_show(
+                        "No particle paths produced — seed grid is empty.",
+                        type="warning",
+                        duration=5,
+                        id="particle_warn",
+                    )
+                    await map_widget.disable_draw(session)
+                    return
+                particle_paths.set(paths)
                 ui.notification_show(
                     f"Computed {len(paths)} particle paths", duration=3
                 )
@@ -594,6 +603,14 @@ def register_analysis_handlers(
                     x_off,
                     y_off,
                 )
+                if not paths:
+                    ui.notification_show(
+                        "No particle paths produced — seed grid is empty.",
+                        type="warning",
+                        duration=5,
+                        id="particle_warn",
+                    )
+                    return
                 particle_paths.set(paths)
                 ui.notification_show(
                     f"Computed {len(paths)} particle paths", duration=3
