@@ -128,3 +128,55 @@ class TestWireFormatContract:
         assert msg_type == "deck_set_widgets"
         assert payload["id"] == "map"
         assert len(payload["widgets"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_velocity_patch_sends_binary_attributes(self, fake_tf, fake_geom):
+        """build_velocity_patch must flow binary attrs through partial_update."""
+        import pytest as _pytest
+        from layers import build_velocity_patch
+
+        session = FakeSession()
+        widget = MapWidget("map")
+        patch = build_velocity_patch(fake_tf, 0, fake_geom)
+        if patch is None:
+            _pytest.skip("FakeTF has no velocity vars")
+
+        await widget.partial_update(session, [patch])
+
+        assert len(session.messages) == 1
+        msg_type, payload = session.messages[0]
+        assert msg_type == "deck_partial_update"
+        layer = payload["layers"][0]
+        assert layer["id"] == "velocity"
+        # Binary-attribute mode contract
+        assert isinstance(layer["data"], dict) and "length" in layer["data"]
+        assert layer["getSourcePosition"].get("@@binary") is True
+        assert layer["getTargetPosition"].get("@@binary") is True
+        # Rule: no pre-binary shape sneaking back in
+        assert not isinstance(layer["data"], list), (
+            "data must be {length: N}, not a list of dicts"
+        )
+
+    @pytest.mark.asyncio
+    async def test_contour_patch_sends_binary_attributes(self, fake_tf, fake_geom):
+        """build_contour_patch must flow binary attrs through partial_update."""
+        import pytest as _pytest
+        from layers import build_contour_patch
+
+        session = FakeSession()
+        widget = MapWidget("map")
+        values = fake_tf.get_data_value("WATER DEPTH", 0)
+        patch = build_contour_patch(fake_tf, values, fake_geom)
+        if patch is None:
+            _pytest.skip("flat field — no contours generated")
+
+        await widget.partial_update(session, [patch])
+
+        assert len(session.messages) == 1
+        msg_type, payload = session.messages[0]
+        assert msg_type == "deck_partial_update"
+        layer = payload["layers"][0]
+        assert layer["id"] == "contours"
+        assert isinstance(layer["data"], dict) and "length" in layer["data"]
+        assert layer["getSourcePosition"].get("@@binary") is True
+        assert layer["getTargetPosition"].get("@@binary") is True
