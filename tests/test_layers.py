@@ -87,6 +87,19 @@ class TestBuildMeshLayer:
         # vmax should be adjusted to vmin + 1 to avoid division by zero
         assert vmax > vmin
 
+    def test_log_scale_on_uniform_field_falls_back(self, fake_geom):
+        import numpy as np
+        from layers import build_mesh_layer
+
+        values = np.array([3.14, 3.14, 3.14, 3.14], dtype=np.float32)
+        _, _, _, log_applied = build_mesh_layer(
+            fake_geom,
+            values,
+            "Viridis",
+            log_scale=True,
+        )
+        assert log_applied is False
+
 
 class TestBuildVelocityLayer:
     def test_no_velocity_vars(self, fake_geom):

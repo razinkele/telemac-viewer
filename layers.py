@@ -53,12 +53,15 @@ def _compute_mesh_colors(
         cmin, cmax = color_range_override
         if cmin is not None and cmax is not None and cmax > cmin:
             vmin, vmax = float(cmin), float(cmax)
-    if vmax == vmin:
+    uniform_field = vmax == vmin
+    if uniform_field:
         vmax = vmin + 1.0
 
     palette_arr = cached_palette_arr(palette_id, reverse=reverse_palette)
     log_applied = False
-    if log_scale and vmin > 0:
+    # Log scale needs strictly positive min AND a non-degenerate range.
+    # Uniform fields would normalize to ~0 everywhere → silently black mesh.
+    if log_scale and vmin > 0 and not uniform_field:
         log_vals = np.log10(np.maximum(values[:npoin], vmin))
         log_min, log_max = np.log10(vmin), np.log10(vmax)
         normalized = np.clip((log_vals - log_min) / (log_max - log_min), 0, 1)
