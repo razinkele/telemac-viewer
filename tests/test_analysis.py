@@ -1,4 +1,5 @@
 """Tests for analysis.py — all computation functions."""
+
 from __future__ import annotations
 import logging
 import os
@@ -7,27 +8,49 @@ import pytest
 from tests.helpers import FakeTF
 from viewer_types import MeshGeometry
 from analysis import (
-    _element_areas, _scatter_to_vertices, _sanitize_result,
-    compute_mesh_quality, compute_slope, compute_courant_number,
-    compute_element_area, compute_mesh_integral,
-    get_available_derived, compute_derived, _compute_vorticity,
+    _element_areas,
+    _scatter_to_vertices,
+    _sanitize_result,
+    compute_mesh_quality,
+    compute_slope,
+    compute_courant_number,
+    compute_element_area,
+    compute_mesh_integral,
+    get_available_derived,
+    compute_derived,
+    _compute_vorticity,
     evaluate_expression,
     extract_layer_2d,
-    nearest_node, find_boundary_nodes, find_extrema,
-    vertical_profile_at_point, time_series_at_point, cross_section_profile,
-    compute_temporal_stats, compute_all_temporal_stats, compute_difference,
+    nearest_node,
+    find_boundary_nodes,
+    find_extrema,
+    vertical_profile_at_point,
+    time_series_at_point,
+    cross_section_profile,
+    compute_temporal_stats,
+    compute_all_temporal_stats,
+    compute_difference,
     compute_discharge,
-    compute_particle_paths, generate_seed_grid, distribute_seeds_along_line,
-    export_timeseries_csv, export_crosssection_csv, export_all_variables_csv,
-    find_cas_files, detect_module_from_path,
-    compute_flood_envelope, compute_flood_arrival, compute_flood_duration,
-    read_cli_file, polygon_zonal_stats,
+    compute_particle_paths,
+    generate_seed_grid,
+    distribute_seeds_along_line,
+    export_timeseries_csv,
+    export_crosssection_csv,
+    export_all_variables_csv,
+    find_cas_files,
+    detect_module_from_path,
+    compute_flood_envelope,
+    compute_flood_arrival,
+    compute_flood_duration,
+    read_cli_file,
+    polygon_zonal_stats,
 )
 
 
 # ---------------------------------------------------------------------------
 # FakeTF variants for tests that need different variable sets
 # ---------------------------------------------------------------------------
+
 
 class NoVelTF(FakeTF):
     varnames = ["WATER DEPTH"]
@@ -53,6 +76,7 @@ class NonUniformTimeTF(FakeTF):
 # ---------------------------------------------------------------------------
 # TestVectorizedHelpers
 # ---------------------------------------------------------------------------
+
 
 class TestVectorizedHelpers:
     def test_element_areas(self, fake_tf):
@@ -86,6 +110,7 @@ class TestVectorizedHelpers:
 # ---------------------------------------------------------------------------
 # TestComputedFields
 # ---------------------------------------------------------------------------
+
 
 class TestComputedFields:
     def test_mesh_quality_range(self, fake_tf):
@@ -150,6 +175,7 @@ class TestComputedFields:
 # TestDerivedVariables
 # ---------------------------------------------------------------------------
 
+
 class TestDerivedVariables:
     def test_available_with_velocity(self, fake_tf):
         avail = get_available_derived(fake_tf)
@@ -172,9 +198,12 @@ class TestDerivedVariables:
         class VortTF(FakeTF):
             _data = {
                 "VELOCITY U": np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float64),
-                "VELOCITY V": np.array([0.0, 1.0, 0.0, 1.0], dtype=np.float64),  # x-gradient
+                "VELOCITY V": np.array(
+                    [0.0, 1.0, 0.0, 1.0], dtype=np.float64
+                ),  # x-gradient
                 "WATER DEPTH": np.array([0.1, 0.5, 0.5, 1.0], dtype=np.float64),
             }
+
         tf = VortTF()
         vort = _compute_vorticity(tf, 0)
         # V=[0,1,0,1] has dv/dx=1, du/dy=0 → vorticity=1
@@ -184,6 +213,7 @@ class TestDerivedVariables:
 # ---------------------------------------------------------------------------
 # TestExpressionParser
 # ---------------------------------------------------------------------------
+
 
 class TestExpressionParser:
     def test_arithmetic(self, fake_tf):
@@ -268,12 +298,23 @@ class TestExpressionParser:
 # TestSpatialFunctions
 # ---------------------------------------------------------------------------
 
+
 class TestSpatialFunctions:
     def test_click_to_native_no_crs(self):
         from crs import click_to_native
-        geom = MeshGeometry(npoin=0, positions={}, indices={},
-                            x_off=500.0, y_off=300.0, lon_off=0.0, lat_off=0.0,
-                            crs=None, extent_m=1.0, zoom=1.0)
+
+        geom = MeshGeometry(
+            npoin=0,
+            positions={},
+            indices={},
+            x_off=500.0,
+            y_off=300.0,
+            lon_off=0.0,
+            lat_off=0.0,
+            crs=None,
+            extent_m=1.0,
+            zoom=1.0,
+        )
         x, y = click_to_native(0.0, 0.0, geom)
         assert x == pytest.approx(500.0)
         assert y == pytest.approx(300.0)
@@ -311,9 +352,12 @@ class TestSpatialFunctions:
 # TestProfiles
 # ---------------------------------------------------------------------------
 
+
 class TestProfiles:
     def test_vertical_profile_2d(self, fake_tf):
-        elev, vals, label = vertical_profile_at_point(fake_tf, "WATER DEPTH", 0, 0.5, 0.5)
+        elev, vals, label = vertical_profile_at_point(
+            fake_tf, "WATER DEPTH", 0, 0.5, 0.5
+        )
         assert len(elev) == 0
         assert len(vals) == 0
         assert label == "Elevation (m)"
@@ -348,6 +392,7 @@ class TestProfiles:
 # ---------------------------------------------------------------------------
 # TestDischarge
 # ---------------------------------------------------------------------------
+
 
 class TestDischarge:
     def test_missing_velocity(self):
@@ -386,6 +431,7 @@ class TestDischarge:
 # TestParticleTracing
 # ---------------------------------------------------------------------------
 
+
 class TestParticleTracing:
     def test_no_velocity(self):
         tf = NoVelTF()
@@ -414,6 +460,7 @@ class TestParticleTracing:
 # TestSeedDistribution
 # ---------------------------------------------------------------------------
 
+
 class TestSeedDistribution:
     def test_generate_seed_grid(self, fake_tf):
         seeds = generate_seed_grid(fake_tf, n_target=10)
@@ -438,6 +485,7 @@ class TestSeedDistribution:
 # ---------------------------------------------------------------------------
 # TestExport
 # ---------------------------------------------------------------------------
+
 
 class TestExport:
     def test_timeseries_csv(self):
@@ -468,6 +516,7 @@ class TestExport:
 # TestSimUtilities
 # ---------------------------------------------------------------------------
 
+
 class TestSimUtilities:
     def test_find_cas_files(self, tmp_path):
         (tmp_path / "case1.cas").write_text("/ test")
@@ -491,6 +540,7 @@ class TestSimUtilities:
 # ---------------------------------------------------------------------------
 # TestFloodAnalysis
 # ---------------------------------------------------------------------------
+
 
 class TestFloodAnalysis:
     def test_flood_envelope_is_peak(self, fake_tf):
@@ -535,6 +585,7 @@ class TestFloodAnalysis:
 # TestCliFile
 # ---------------------------------------------------------------------------
 
+
 class TestCliFile:
     def test_valid_cli_file(self, tmp_path):
         """Parse a minimal .cli file with LIHBOR codes."""
@@ -565,6 +616,7 @@ class TestCliFile:
 # TestPolygonZonalStats
 # ---------------------------------------------------------------------------
 
+
 class TestPolygonZonalStats:
     def test_polygon_covering_all_nodes(self, fake_tf):
         """Polygon enclosing entire mesh should include all 4 nodes."""
@@ -575,7 +627,9 @@ class TestPolygonZonalStats:
         assert stats["min"] == pytest.approx(0.1)
         assert stats["max"] == pytest.approx(1.0)
         # Element-weighted mean (2 triangles with different areas)
-        assert stats["mean"] == pytest.approx(stats["mean"])  # just check it's a valid float
+        assert stats["mean"] == pytest.approx(
+            stats["mean"]
+        )  # just check it's a valid float
         assert 0.1 <= stats["mean"] <= 1.0
 
     def test_empty_polygon(self, fake_tf):
@@ -590,6 +644,7 @@ class TestPolygonZonalStats:
 # ---------------------------------------------------------------------------
 # TestSanitizeResultLogging
 # ---------------------------------------------------------------------------
+
 
 class TestSanitizeResultLogging:
     def test_logs_warning_on_nan(self, caplog):
@@ -612,6 +667,7 @@ class TestSanitizeResultLogging:
 # ---------------------------------------------------------------------------
 # TestExtractLayer2d
 # ---------------------------------------------------------------------------
+
 
 class TestExtractLayer2d:
     def test_extract_bottom_layer(self):
@@ -636,6 +692,7 @@ class TestExtractLayer2d:
 # TestComputeAllTemporalStats
 # ---------------------------------------------------------------------------
 
+
 class TestComputeAllTemporalStats:
     def test_returns_all_keys(self, fake_tf):
         result = compute_all_temporal_stats(fake_tf, "WATER DEPTH")
@@ -649,11 +706,39 @@ class TestComputeAllTemporalStats:
     def test_max_values_match_individual(self, fake_tf):
         combined = compute_all_temporal_stats(fake_tf, "WATER DEPTH")
         individual = compute_temporal_stats(fake_tf, "WATER DEPTH")
-        np.testing.assert_allclose(
-            combined["max_values"], individual["max"], rtol=1e-5)
+        np.testing.assert_allclose(combined["max_values"], individual["max"], rtol=1e-5)
 
     def test_min_values_match_individual(self, fake_tf):
         combined = compute_all_temporal_stats(fake_tf, "WATER DEPTH")
         individual = compute_temporal_stats(fake_tf, "WATER DEPTH")
-        np.testing.assert_allclose(
-            combined["min_values"], individual["min"], rtol=1e-5)
+        np.testing.assert_allclose(combined["min_values"], individual["min"], rtol=1e-5)
+
+
+class TestEvaluateExpressionErrors:
+    """evaluate_expression must raise the error types handled by server_analysis."""
+
+    def test_syntax_error_raises_syntaxerror(self, fake_tf):
+        # evaluate_expression wraps ast.parse SyntaxError into ValueError,
+        # so accept either — both are in the server_analysis handler tuple.
+        from analysis import evaluate_expression
+
+        with pytest.raises((SyntaxError, ValueError)):
+            evaluate_expression(fake_tf, 0, "WATER DEPTH +* 2")
+
+    def test_unknown_variable_raises_keyerror_or_valueerror(self, fake_tf):
+        from analysis import evaluate_expression
+
+        with pytest.raises((KeyError, ValueError)):
+            evaluate_expression(fake_tf, 0, "NONEXISTENT_VAR + 1")
+
+    def test_division_by_zero_raises_arithmetic_or_returns_inf(self, fake_tf):
+        """Division by zero is either raised or produces inf — both are handled."""
+        import numpy as np
+        from analysis import evaluate_expression
+
+        try:
+            result = evaluate_expression(fake_tf, 0, "WATER_DEPTH / 0")
+        except (ArithmeticError, ValueError):
+            return  # raised — caught by server_analysis handler
+        # Otherwise produced inf — also fine, just not visible in chart
+        assert np.any(np.isinf(result)) or np.any(np.isnan(result))

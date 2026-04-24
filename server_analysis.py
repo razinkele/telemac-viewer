@@ -926,7 +926,14 @@ def register_analysis_handlers(
             result = evaluate_expression(tf, tidx, expr)
             expr_result.set(result)
             ui.notification_show(f"Expression evaluated: {expr}", duration=3)
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            ArithmeticError,
+            SyntaxError,
+            KeyError,
+            np.linalg.LinAlgError,
+        ) as e:
             expr_result.set(None)
             ui.notification_show(f"Expression error: {e}", type="error", duration=5)
 
