@@ -6,6 +6,7 @@ import logging
 import threading
 
 import numpy as np
+import pyproj
 from shiny import reactive, render, ui
 
 from analysis import (
@@ -182,8 +183,14 @@ def register_core_handlers(
                 code = int(epsg_text.strip())
                 current_crs.set(crs_from_epsg(code))
                 return
-            except Exception:
+            except (ValueError, pyproj.exceptions.CRSError) as exc:
                 current_crs.set(None)
+                ui.notification_show(
+                    f"Invalid EPSG code '{epsg_text.strip()}': {exc}",
+                    type="warning",
+                    duration=6,
+                    id="epsg_warn",
+                )
                 return
 
         # Auto-detect disabled

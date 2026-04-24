@@ -1,12 +1,18 @@
 # tests/test_crs.py
 """Tests for crs.py — coordinate reference system transforms."""
+
 from __future__ import annotations
 import numpy as np
 import pytest
 from crs import (
-    CRS, crs_from_epsg, native_to_wgs84, wgs84_to_native,
-    detect_crs_from_cas, guess_crs_from_coords,
-    click_to_native, meters_to_wgs84,
+    CRS,
+    crs_from_epsg,
+    native_to_wgs84,
+    wgs84_to_native,
+    detect_crs_from_cas,
+    guess_crs_from_coords,
+    click_to_native,
+    meters_to_wgs84,
 )
 from viewer_types import MeshGeometry
 
@@ -14,10 +20,16 @@ from viewer_types import MeshGeometry
 def _make_geom(**kwargs) -> MeshGeometry:
     """Build a minimal MeshGeometry for testing crs helpers."""
     defaults = dict(
-        npoin=0, positions={}, indices={},
-        x_off=0.0, y_off=0.0,
-        lon_off=0.0, lat_off=0.0,
-        crs=None, extent_m=1.0, zoom=1.0,
+        npoin=0,
+        positions={},
+        indices={},
+        x_off=0.0,
+        y_off=0.0,
+        lon_off=0.0,
+        lat_off=0.0,
+        crs=None,
+        extent_m=1.0,
+        zoom=1.0,
     )
     defaults.update(kwargs)
     return MeshGeometry(**defaults)
@@ -76,6 +88,7 @@ class TestTransforms:
 
 # --- Task 2: .cas detection and coordinate heuristic ---
 
+
 class TestDetectCrsFromCas:
     def test_lambert_zone1(self, tmp_path):
         cas = tmp_path / "test.cas"
@@ -90,10 +103,7 @@ class TestDetectCrsFromCas:
 
     def test_utm_north_zone34(self, tmp_path):
         cas = tmp_path / "test.cas"
-        cas.write_text(
-            "GEOGRAPHIC SYSTEM = 2\n"
-            "ZONE NUMBER IN GEOGRAPHIC SYSTEM = 34\n"
-        )
+        cas.write_text("GEOGRAPHIC SYSTEM = 2\nZONE NUMBER IN GEOGRAPHIC SYSTEM = 34\n")
         crs = detect_crs_from_cas(str(cas))
         assert crs is not None
         assert crs.epsg == 32634
@@ -106,10 +116,7 @@ class TestDetectCrsFromCas:
 
     def test_comments_stripped(self, tmp_path):
         cas = tmp_path / "test.cas"
-        cas.write_text(
-            "/ This is a comment\n"
-            "GEOGRAPHIC SYSTEM = 1 / WGS84\n"
-        )
+        cas.write_text("/ This is a comment\nGEOGRAPHIC SYSTEM = 1 / WGS84\n")
         crs = detect_crs_from_cas(str(cas))
         assert crs is not None
         assert crs.epsg == 4326
@@ -117,10 +124,7 @@ class TestDetectCrsFromCas:
     def test_lambert_zone93(self, tmp_path):
         """Zone 93 is RGF93 Lambert (different datum from zones 1-4)."""
         cas = tmp_path / "test.cas"
-        cas.write_text(
-            "GEOGRAPHIC SYSTEM = 4\n"
-            "ZONE NUMBER IN GEOGRAPHIC SYSTEM = 93\n"
-        )
+        cas.write_text("GEOGRAPHIC SYSTEM = 4\nZONE NUMBER IN GEOGRAPHIC SYSTEM = 93\n")
         crs = detect_crs_from_cas(str(cas))
         assert crs is not None
         assert crs.epsg == 2154
@@ -135,8 +139,7 @@ class TestDetectCrsFromCas:
     def test_french_keyword_with_zone(self, tmp_path):
         cas = tmp_path / "test.cas"
         cas.write_text(
-            "SYSTEME GEOGRAPHIQUE : 2\n"
-            "NUMERO DE ZONE DU SYSTEME GEOGRAPHIQUE : 34\n"
+            "SYSTEME GEOGRAPHIQUE : 2\nNUMERO DE ZONE DU SYSTEME GEOGRAPHIQUE : 34\n"
         )
         crs = detect_crs_from_cas(str(cas))
         assert crs is not None
@@ -157,6 +160,7 @@ class TestDetectCrsFromCas:
     def test_real_tide_cas(self):
         """Test with actual TELEMAC tide example if available."""
         import os
+
         cas_path = os.path.join(
             os.environ.get("HOMETEL", ""),
             "examples/telemac2d/tide/t2d_tide_local-jmj_type_gen.cas",
@@ -207,6 +211,7 @@ class TestGuessCrsFromCoords:
 
 # --- Task 3: click conversion and display helpers ---
 
+
 class TestClickToNative:
     def test_with_crs_roundtrip(self):
         """Round-trip: native → wgs84 → click_to_native should recover original."""
@@ -221,6 +226,7 @@ class TestClickToNative:
     def test_without_crs_fallback(self):
         """Without CRS, should match old coord_to_meters behavior."""
         from constants import _M2D
+
         geom = _make_geom(x_off=100.0, y_off=200.0, crs=None)
         lon, lat = 0.001, 0.002
         x, y = click_to_native(lon, lat, geom)
@@ -248,6 +254,7 @@ class TestOriginOffset:
     def test_offset_shifts_lonlat(self):
         from geometry import build_mesh_geometry
         from tests.helpers import FakeTF
+
         tf = FakeTF()
         crs = crs_from_epsg(3346)
         geom = build_mesh_geometry(tf, crs=crs, origin_offset=(309424, 6132619))
@@ -259,7 +266,17 @@ class TestOriginOffset:
     def test_zero_offset_unchanged(self):
         from geometry import build_mesh_geometry
         from tests.helpers import FakeTF
+
         geom_default = build_mesh_geometry(FakeTF())
         geom_zero = build_mesh_geometry(FakeTF(), origin_offset=(0, 0))
         assert geom_default.x_off == geom_zero.x_off
         assert geom_default.y_off == geom_zero.y_off
+
+
+def test_crs_from_epsg_rejects_nonsense_code():
+    """Non-existent EPSG code raises pyproj CRSError (caught in server_core)."""
+    import pyproj
+    from crs import crs_from_epsg
+
+    with pytest.raises((pyproj.exceptions.CRSError, ValueError)):
+        crs_from_epsg(99999)
