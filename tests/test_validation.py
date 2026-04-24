@@ -3,7 +3,13 @@ import logging
 import numpy as np
 import pytest
 
-from validation import parse_observation_csv, compute_rmse, compute_nse, compute_volume_timeseries, parse_liq_file
+from validation import (
+    parse_observation_csv,
+    compute_rmse,
+    compute_nse,
+    compute_volume_timeseries,
+    parse_liq_file,
+)
 
 
 class TestParseObservationCsv:
@@ -85,6 +91,7 @@ class TestComputeNse:
 def test_compute_volume_timeseries():
     from tests.helpers import FakeTF
     from analysis import compute_mesh_integral
+
     tf = FakeTF()
     times, vols = compute_volume_timeseries(tf, compute_mesh_integral)
     assert len(times) == 3
@@ -94,7 +101,9 @@ def test_compute_volume_timeseries():
 
 def test_parse_liq_file(tmp_path):
     liq = tmp_path / "test.liq"
-    liq.write_text("# comment\nT Q(1) SL(2)\ns m3/s m\n0.0 500.0 1.5\n3600.0 450.0 1.4\n7200.0 400.0 1.3\n")
+    liq.write_text(
+        "# comment\nT Q(1) SL(2)\ns m3/s m\n0.0 500.0 1.5\n3600.0 450.0 1.4\n7200.0 400.0 1.3\n"
+    )
     result = parse_liq_file(str(liq))
     assert result is not None
     assert "Q(1)" in result
@@ -113,8 +122,10 @@ class TestParseLiqFileErrors:
         with caplog.at_level(logging.WARNING):
             result = parse_liq_file(str(liq))
         assert result is None
-        assert any("parse" in r.message.lower() or "liq" in r.message.lower()
-                    for r in caplog.records)
+        assert any(
+            "parse" in r.message.lower() or "liq" in r.message.lower()
+            for r in caplog.records
+        )
 
     def test_missing_file_returns_none(self, tmp_path):
         """Missing file should return None without raising."""
@@ -127,3 +138,43 @@ class TestParseLiqFileErrors:
         liq.write_text("T  Q(1)\ns  m3/s\n")
         result = parse_liq_file(str(liq))
         assert result is None
+
+
+class TestParseObservationCSV:
+    """Regression guard for parse_observation_csv edge cases.
+
+    Pins current observed behaviour so future refactors surface here.
+    The function signature is: parse_observation_csv(file_path) -> tuple[ndarray, ndarray, str]
+    """
+
+    def test_empty_file_raises_value_error(self, tmp_path):
+        """A zero-byte file raises ValueError('CSV file is empty')."""
+        p = tmp_path / "empty.csv"
+        p.write_text("")
+        with pytest.raises(ValueError, match="empty"):
+            parse_observation_csv(str(p))
+
+    def test_malformed_row_raises_value_error(self, tmp_path):
+        """A non-numeric value in a data row propagates ValueError from float()."""
+        p = tmp_path / "bad.csv"
+        # Header OK, first row OK, second row has non-numeric value.
+        p.write_text("time,value\n0,1.0\n1,not_a_number\n2,2.0\n")
+        with pytest.raises(ValueError):
+            parse_observation_csv(str(p))
+
+    def test_valid_csv_roundtrip(self, tmp_path):
+        """A well-formed 2-column CSV returns (times, values, varname)."""
+        p = tmp_path / "ok.csv"
+        p.write_text("time,value\n0.0,1.0\n1.0,2.0\n2.0,3.0\n")
+        result = parse_observation_csv(str(p))
+        # Function returns a 3-tuple of (ndarray, ndarray, str).
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+        times, values, varname = result
+        assert isinstance(times, np.ndarray)
+        assert isinstance(values, np.ndarray)
+        assert times.dtype == np.float64
+        assert values.dtype == np.float64
+        np.testing.assert_array_equal(times, [0.0, 1.0, 2.0])
+        np.testing.assert_array_equal(values, [1.0, 2.0, 3.0])
+        assert varname == "value"
