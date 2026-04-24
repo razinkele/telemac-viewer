@@ -1,8 +1,8 @@
 # TELEMAC Viewer
 
-[![Version](https://img.shields.io/badge/version-3.3.0-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.3.1-blue.svg)](./CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-464%20passing-brightgreen.svg)](./tests)
+[![Tests](https://img.shields.io/badge/tests-484%20passing-brightgreen.svg)](./tests)
 [![License](https://img.shields.io/badge/license-LGPL%20v2.1-orange.svg)](#license)
 
 A web-based viewer for [TELEMAC](http://www.opentelemac.org/) simulation results,
@@ -246,10 +246,10 @@ python -m pytest tests/ -W error::RuntimeWarning
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.3.0**
-(2026-04-24) — full-vs-partial map update dispatcher (~3-4× smaller WebSocket
-payload on timestep scrub), 17 silent-failure / observability fixes across
-the viewer, and 17 new tests pinning sandbox + wire-format contracts.
+See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.3.1**
+(2026-04-24) — a pure test-and-refactor bump: 20 new tests (484 total)
+pinning the CRS decision tree, two chart builders, and the
+upload-vs-example path picker. No user-visible behavior change.
 
 ## License
 

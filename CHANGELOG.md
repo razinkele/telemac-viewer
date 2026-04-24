@@ -4,6 +4,19 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.3.1] - 2026-04-24
+
+### Changed
+- **Extracted `_pick_file_path` helper** in `server_core.py` — factors the `uploaded[0]["datapath"] if ... else EXAMPLES.get(input.example(), "")` pattern from 2 inlined sites in `app.py` (`_structural_sig`, `update_map` full-path branch) into one reusable helper. `tel_file()` keeps its existing `EXAMPLES[k]` direct indexing (strict semantics surface missing keys with a clearer traceback than letting `TelemacFile("")` fail downstream).
+
+### Tests
+- **Extracted `_resolve_crs_from_inputs`** (`server_core.py`) as a pure function covering all 4 CRS decision branches (manual EPSG > auto-disabled > `.cas` scan > coord heuristic > None). The reactive `resolve_crs` effect becomes a thin shim that drives the 3 side-effects (`current_crs.set`, `ui.notification_show`, `ui.update_text`). 9 new tests pin the contract.
+- **Extracted `build_timeseries_chart` + `build_crosssection_chart`** (`server_analysis.py`) as module-level pure functions, reachable from tests without a Shiny session. The reactive state (`clicked_points.get()`, `obs_data.get()`, `cross_section_points.get()`) becomes explicit kwargs. The RMSE/NSE observation-overlay block is preserved verbatim. 6 new tests. Remaining 6 chart builders stay as closures (extract-on-demand).
+- **Promoted `FakeSession`** to `tests/helpers.py` (from `tests/test_map_dispatch.py`'s private `RecordingSession`). Adds `messages_of_type()` and `clear()` helpers. `tests/conftest.py` gains a `fake_session` fixture.
+
+### Total suite
+**484 tests** (up from 464, +20), all passing under `pytest`. Coverage of the two reactive modules stays at ~10% line coverage overall — the extracted pure helpers are covered at ~100%, but the reactive-handler bodies (80-90% of each file) remain uncovered because `pytest` doesn't boot Shiny. Full integration coverage would need either Playwright or a reactive-runtime mock; neither was in scope.
+
 ## [3.3.0] - 2026-04-24
 
 ### Added
