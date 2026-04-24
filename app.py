@@ -1439,6 +1439,14 @@ def server(input, output, session):
             abs_max = max(abs(float(values.min())), abs(float(values.max())))
             if abs_max > 0:
                 crange = (-abs_max, abs_max)
+            else:
+                ui.notification_show(
+                    "Diverging palette active but values are all zero — "
+                    "colors will appear uniform.",
+                    type="message",
+                    duration=5,
+                    id="bipolar_zero_warn",
+                )
         elif custom_range:
             try:
                 cmin = input.color_min()
