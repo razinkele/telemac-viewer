@@ -4,6 +4,22 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.3.2] - 2026-04-24
+
+### Performance
+- **Binary-encoded overlay layers**: `build_velocity_layer` and `build_contour_layer_fn` now emit their deck.gl `LineLayer` in binary-attribute mode (`data={length: N}` with `getSourcePosition`/`getTargetPosition` as `encode_binary_attribute(Float32Array)`) instead of a list of `{sourcePosition, targetPosition}` dicts (~85 bytes each).
+  - Velocity: ~63 KB → ~12 KB per tick on a Malpasset-scale mesh (~750 arrows). **5.3× smaller.**
+  - Contour: ~101 KB → ~19 KB per tick on the same mesh (~1200 segments). **5.3× smaller.**
+  - Combined per-tick overhead when both overlays are enabled drops from ~480 KB to ~347 KB — roughly **28% smaller WebSocket payload** with overlays on.
+- Finishes the deliberately-pass-through velocity and contour patch helpers from v3.3.0; the `build_velocity_patch` / `build_contour_patch` wrappers unchanged (they continue to delegate to the full builders).
+
+### Tests
+- 4 new wire-format tests pinning the binary-attribute contract for both velocity and contour layers, including two end-to-end assertions that drive `MapWidget.partial_update` through a `FakeSession` and verify the emitted `deck_partial_update` payload shape.
+- 2 existing contour tests updated from `len(result["data"])` to `result["data"]["length"]` for the new `{length: N}` shape.
+
+### Total suite
+**490 tests** (up from 484, +6), all passing under `pytest`.
+
 ## [3.3.1] - 2026-04-24
 
 ### Changed
