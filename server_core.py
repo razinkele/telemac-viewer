@@ -120,6 +120,23 @@ def _resolve_crs_from_inputs(
     return CrsResolution(crs=None, source="none")
 
 
+def _find_uploaded_by_ext(uploaded: list | None, ext: str) -> str | None:
+    """Return the datapath of the first uploaded file whose name ends with ext.
+
+    Matching is case-insensitive and uses the original filename the user
+    uploaded (``item["name"]``), not the temp datapath (which Shiny sets
+    to a randomised filename).
+    """
+    if not uploaded:
+        return None
+    ext_lower = ext.lower()
+    for item in uploaded:
+        name = (item.get("name") or "").lower()
+        if name.endswith(ext_lower):
+            return item.get("datapath")
+    return None
+
+
 def _pick_file_path(
     *,
     uploaded: list | None,
@@ -130,12 +147,17 @@ def _pick_file_path(
     """Return the .slf path to open: uploaded file if selected, else example.
 
     Mirrors the ``.get(example_key, "")`` fallback semantic used by the 3
-    inlined upload-vs-example sites. ``tel_file()`` keeps its direct
-    ``EXAMPLES[k]`` indexing deliberately (it wants KeyError on missing
-    key for a clearer traceback than letting ``TelemacFile("")`` fail
-    downstream).
+    inlined upload-vs-example sites. With multi-file uploads, explicitly
+    picks the .slf rather than ``uploaded[0]`` (which could be a companion
+    .cas file). ``tel_file()`` keeps its direct ``EXAMPLES[k]`` indexing
+    deliberately (it wants KeyError on missing key for a clearer traceback
+    than letting ``TelemacFile("")`` fail downstream).
     """
     if uploaded and use_upload:
+        slf_path = _find_uploaded_by_ext(uploaded, ".slf")
+        if slf_path is not None:
+            return slf_path
+        # Pre-multi-file fallback (shouldn't hit with the widget filter).
         return uploaded[0]["datapath"]
     return examples.get(example_key, "")
 
@@ -221,7 +243,12 @@ def register_core_handlers(
     def tel_file():
         uploaded = input.upload()
         if uploaded and use_upload.get():
-            path = uploaded[0]["datapath"]
+            # Multi-file uploads (.slf + optional .cas) — find the .slf
+            # rather than trusting position 0.
+            path = _find_uploaded_by_ext(uploaded, ".slf")
+            if path is None:
+                # Backward-compat: pre-multi-file uploads only carry the .slf.
+                path = uploaded[0]["datapath"]
         else:
             path = EXAMPLES[input.example()]
         try:
@@ -265,9 +292,30 @@ def register_core_handlers(
         polygon_stats_data.set(None)
         polygon_geom.set(None)
         if use_upload.get():
+            uploaded = input.upload() or []
+            has_cas = _find_uploaded_by_ext(uploaded, ".cas") is not None
+            missing = []
+            if not has_cas:
+                missing.append(".cas CRS detection")
+            # .cli/.liq upload support is a future extension; for now
+            # those companion features stay unavailable for uploads.
+            missing.append(".cli boundary coloring")
+            missing.append(".liq hydrographs")
+            if has_cas:
+                msg = (
+                    "Uploaded file: .cas CRS detection active. "
+                    "Other companion features (.cli boundary coloring, "
+                    ".liq hydrographs) remain unavailable."
+                )
+            else:
+                msg = (
+                    "Uploaded file: companion features ("
+                    + ", ".join(missing)
+                    + ") are unavailable. Upload a .cas alongside the .slf "
+                    "to enable CRS auto-detection."
+                )
             ui.notification_show(
-                "Uploaded file: companion features (.cas CRS detection, "
-                ".cli boundary coloring, .liq hydrographs) are unavailable.",
+                msg,
                 type="message",
                 duration=6,
                 id="upload_notice",
@@ -289,7 +337,11 @@ def register_core_handlers(
             auto_crs_enabled = True
         uploaded = input.upload()
         if uploaded and use_upload.get():
-            cas_candidates: tuple[str, ...] = ()
+            # If the user uploaded a companion .cas alongside the .slf,
+            # scan it for the GEOGRAPHIC SYSTEM keyword. Previously uploads
+            # always got an empty tuple, disabling .cas-based CRS detection.
+            uploaded_cas = _find_uploaded_by_ext(uploaded, ".cas")
+            cas_candidates: tuple[str, ...] = (uploaded_cas,) if uploaded_cas else ()
         else:
             slf_path = EXAMPLES.get(input.example(), "")
             cas_candidates = (

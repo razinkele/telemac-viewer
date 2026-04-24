@@ -886,7 +886,12 @@ app_ui = ui.page_navbar(
             style="margin:0 0 8px; color: var(--coastal-text);",
         ),
         ui.input_select("example", "Example case", choices=EXAMPLE_CHOICES),
-        ui.input_file("upload", "Or upload .slf file", accept=[".slf"]),
+        ui.input_file(
+            "upload",
+            "Or upload .slf (+ optional .cas for CRS auto-detect)",
+            accept=[".slf", ".cas"],
+            multiple=True,
+        ),
         ui.output_ui("clear_upload_ui"),
         ui.input_select(
             "basemap",

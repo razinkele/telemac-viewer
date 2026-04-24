@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from server_core import _resolve_crs_from_inputs, CrsResolution
+from server_core import CrsResolution, _resolve_crs_from_inputs
 
 
 class TestResolveCrsFromInputs:
@@ -157,7 +157,7 @@ class TestPickFilePath:
     def test_upload_with_use_upload_false_falls_to_example(self):
         from server_core import _pick_file_path
 
-        uploaded = [{"datapath": "/tmp/u.slf"}]
+        uploaded = [{"datapath": "/tmp/u.slf", "name": "u.slf"}]
         result = _pick_file_path(
             uploaded=uploaded,
             use_upload=False,
@@ -198,3 +198,78 @@ class TestPickFilePath:
             examples={"X": "/tmp/x.slf"},
         )
         assert result == ""
+
+    def test_multi_file_upload_picks_slf_not_first(self):
+        """When user uploads [.cas, .slf, .cli], picker must return the .slf."""
+        from server_core import _pick_file_path
+
+        uploaded = [
+            {"datapath": "/tmp/u.cas", "name": "u.cas"},
+            {"datapath": "/tmp/u.slf", "name": "u.slf"},
+            {"datapath": "/tmp/u.cli", "name": "u.cli"},
+        ]
+        result = _pick_file_path(
+            uploaded=uploaded,
+            use_upload=True,
+            example_key="X",
+            examples={"X": "/tmp/x.slf"},
+        )
+        assert result == "/tmp/u.slf"
+
+    def test_multi_file_upload_case_insensitive(self):
+        """Extension match is case-insensitive (browsers may preserve .SLF)."""
+        from server_core import _pick_file_path
+
+        uploaded = [
+            {"datapath": "/tmp/u.cas", "name": "U.CAS"},
+            {"datapath": "/tmp/u.slf", "name": "U.SLF"},
+        ]
+        result = _pick_file_path(
+            uploaded=uploaded,
+            use_upload=True,
+            example_key="X",
+            examples={"X": "/tmp/x.slf"},
+        )
+        assert result == "/tmp/u.slf"
+
+
+class TestFindUploadedByExt:
+    def test_none_uploaded_returns_none(self):
+        from server_core import _find_uploaded_by_ext
+
+        assert _find_uploaded_by_ext(None, ".cas") is None
+        assert _find_uploaded_by_ext([], ".cas") is None
+
+    def test_finds_first_matching_extension(self):
+        from server_core import _find_uploaded_by_ext
+
+        uploaded = [
+            {"datapath": "/tmp/a.slf", "name": "a.slf"},
+            {"datapath": "/tmp/b.cas", "name": "b.cas"},
+            {"datapath": "/tmp/c.cli", "name": "c.cli"},
+        ]
+        assert _find_uploaded_by_ext(uploaded, ".cas") == "/tmp/b.cas"
+        assert _find_uploaded_by_ext(uploaded, ".cli") == "/tmp/c.cli"
+        assert _find_uploaded_by_ext(uploaded, ".slf") == "/tmp/a.slf"
+
+    def test_returns_none_when_extension_absent(self):
+        from server_core import _find_uploaded_by_ext
+
+        uploaded = [{"datapath": "/tmp/a.slf", "name": "a.slf"}]
+        assert _find_uploaded_by_ext(uploaded, ".cas") is None
+
+    def test_case_insensitive_match(self):
+        from server_core import _find_uploaded_by_ext
+
+        uploaded = [{"datapath": "/tmp/a.cas", "name": "PROJECT.CAS"}]
+        assert _find_uploaded_by_ext(uploaded, ".cas") == "/tmp/a.cas"
+
+    def test_handles_missing_name_gracefully(self):
+        """Defensive: if Shiny ever sends items without 'name', don't crash."""
+        from server_core import _find_uploaded_by_ext
+
+        uploaded = [
+            {"datapath": "/tmp/a.slf"},
+            {"datapath": "/tmp/b.cas", "name": "b.cas"},
+        ]
+        assert _find_uploaded_by_ext(uploaded, ".cas") == "/tmp/b.cas"
