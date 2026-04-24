@@ -1130,6 +1130,7 @@ def server(input, output, session):
     playing = reactive.value(False)
     last_file_path = reactive.value("")
     last_structural_sig = reactive.value(None)
+    _cli_warn_shown = reactive.value(False)
     analysis_mode = reactive.value("none")
     clicked_points = reactive.value([])  # list of (x_meters, y_meters)
     cross_section_points = reactive.value(None)  # [[x_m, y_m], ...] or None
@@ -1230,6 +1231,12 @@ def server(input, output, session):
     cli_data = _core["cli_data"]
     current_crs = _core["current_crs"]
     _run_with_lock = _core["_run_with_lock"]
+
+    @reactive.effect
+    def _reset_cli_warn_on_file_change():
+        """Re-enable the .cli-missing warning when the user loads a new file."""
+        tel_file()  # take dep on file change
+        _cli_warn_shown.set(False)
 
     # -- Mesh quality override --
 
@@ -1465,13 +1472,25 @@ def server(input, output, session):
         # Boundary edges (color-coded by hydrodynamic type)
         if input.boundary_nodes():
             layers.extend(boundary_layers_cached())
-            if cli_data() is None:
+            # Warn once per session when .cli is missing for example files.
+            # Uploaded files deliberately skip this — the "upload_notice" in
+            # server_core._reset_state_on_new_file already explains why
+            # companion files aren't used.
+            # Order matters: checking use_upload first short-circuits for
+            # uploaded files and avoids taking a reactive dep on cli_data()
+            # that would otherwise retrigger this overlay builder unnecessarily.
+            if (
+                not use_upload.get()
+                and not _cli_warn_shown.get()
+                and cli_data() is None
+            ):
                 ui.notification_show(
                     "No .cli file found — boundary types shown as Wall (inferred).",
                     type="message",
                     duration=4,
                     id="cli_warn",
                 )
+                _cli_warn_shown.set(True)
 
         # Min/max location markers
         if input.show_extrema():
