@@ -122,10 +122,6 @@ def register_core_handlers(
 
     @reactive.calc
     def tel_file():
-        # Close previous file to avoid leaking file descriptors
-        if _prev_tel_file[0] is not None:
-            with _tf_lock:
-                _safe_close(_prev_tel_file[0], "previous")
         uploaded = input.upload()
         if uploaded and use_upload.get():
             path = uploaded[0]["datapath"]
@@ -135,9 +131,16 @@ def register_core_handlers(
             tf = TelemacFile(path)
         except Exception as e:
             ui.notification_show(f"Failed to open file: {e}", type="error", duration=8)
-            # Re-raise to halt reactive chain — Shiny shows error state
+            # Re-raise to halt reactive chain — Shiny shows error state.
+            # _prev_tel_file is intentionally left alone so the previous
+            # file continues to back already-running calcs.
             raise
+        # Open succeeded — swap in the new file, then close the old one.
+        old = _prev_tel_file[0]
         _prev_tel_file[0] = tf
+        if old is not None:
+            with _tf_lock:
+                _safe_close(old, "previous")
         return tf
 
     @reactive.effect
