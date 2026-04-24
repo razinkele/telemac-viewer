@@ -1061,9 +1061,16 @@ def compute_mesh_quality(tf: TelemacFileProtocol) -> np.ndarray:
 
     # Quality = 2 * inradius / circumradius, equilateral = 1.0
     valid = (area > 0) & (a * b * c > 0)
-    elem_quality = np.zeros(len(ikle), dtype=np.float64)
+    # Degenerate elements → NaN, caught and zeroed by _sanitize_result
+    # (the observable warning; previously hidden by the +1e-30 trick).
+    elem_quality = np.full(len(ikle), np.nan, dtype=np.float64)
     inradius = np.where(valid, area / s, 0.0)
-    circumradius = np.where(valid, (a * b * c) / (4.0 * area + 1e-30), 1.0)
+    eps = 1e-12 * np.maximum(a * b, 1.0)
+    circumradius = np.where(
+        area > eps,
+        (a * b * c) / (4.0 * np.where(area > eps, area, 1.0)),
+        np.nan,
+    )
     elem_quality[valid] = np.minimum(2.0 * inradius[valid] / circumradius[valid], 1.0)
 
     return _sanitize_result(_scatter_to_vertices(ikle, elem_quality, npoin))

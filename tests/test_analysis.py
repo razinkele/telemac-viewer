@@ -742,3 +742,45 @@ class TestEvaluateExpressionErrors:
             return  # raised — caught by server_analysis handler
         # Otherwise produced inf — also fine, just not visible in chart
         assert np.any(np.isinf(result)) or np.any(np.isnan(result))
+
+
+class TestMeshQualityDegenerate:
+    """Collinear triangles must be detected by the NaN-sanitize path.
+
+    After the +1e-30 → np.where fix, degenerate elements produce NaN
+    internally; _sanitize_result zeros them and emits a warning log.
+    This test verifies the warning path activates — pinning the
+    observable signal that used to be hidden by +1e-30's "tiny finite".
+    """
+
+    def test_collinear_triangle_triggers_sanitize_warning(self, caplog):
+        import logging
+        import numpy as np
+        from analysis import compute_mesh_quality
+        from tests.helpers import FakeTF
+
+        class DegenerateTF(FakeTF):
+            # Three collinear points + one offset. Element 0 is degenerate
+            # (area = 0); element 1 is a proper triangle.
+            meshx = np.array([0.0, 1.0, 2.0, 0.0], dtype=np.float64)
+            meshy = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+            ikle2 = np.array([[0, 1, 2], [0, 1, 3]], dtype=np.int32)
+            npoin2 = 4
+            nelem2 = 2
+
+        with caplog.at_level(logging.WARNING, logger="analysis"):
+            q = compute_mesh_quality(DegenerateTF())
+
+        # Sanitize zeroes NaN → output stays finite (what downstream code
+        # depends on — see test_collinear_nodes_quality_zero in round 3).
+        assert np.all(np.isfinite(q)), (
+            f"compute_mesh_quality must return all-finite (sanitized), got {q}"
+        )
+        # The warning is the new observable — the +1e-30 trick hid it.
+        assert any(
+            "non-finite" in rec.message or "replaced" in rec.message
+            for rec in caplog.records
+        ), (
+            "Expected a 'non-finite values replaced' warning from "
+            f"_sanitize_result. Got records: {[r.message for r in caplog.records]}"
+        )

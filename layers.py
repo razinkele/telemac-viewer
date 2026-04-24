@@ -305,7 +305,13 @@ def build_contour_layer_fn(
     # Helper: find edge crossings for all elements (vectorized)
     def _edge_crossings(da, db, ia, ib):
         cross = (da * db) < 0  # different signs = crossing
-        t = np.where(cross, da / (da - db + 1e-30), 0.0)
+        denom = da - db
+        valid = cross & (np.abs(denom) > 1e-12)
+        t = np.where(
+            valid,
+            da / np.where(valid, denom, 1.0),
+            0.0,
+        )
         px = np.where(cross, cx[ia] + t * (cx[ib] - cx[ia]), 0.0)
         py = np.where(cross, cy[ia] + t * (cy[ib] - cy[ia]), 0.0)
         return cross, px, py
