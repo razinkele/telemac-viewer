@@ -4,6 +4,14 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.3.4] - 2026-04-24
+
+### Fixed
+- **Compare-contour overlay now refreshes on timestep scrub.** The fast-path `update_map` (taken when the structural signature is unchanged) previously emitted only the primary-contour patch. With a compare variable active, scrubbing tidx left the compare-contour layer showing the previous tidx's iso-values. The fast path now calls `compare_contour_layer_cached()` and emits the patch when it's non-`None`, keeping the compare overlay in sync.
+
+### Performance
+- **Cached compare-contour overlay** via a new `compare_contour_layer_cached` `@reactive.calc`. Same rationale as the primary `contour_layer_cached` shipped in v3.3.3 — palette / log-scale / diagnostic flips produce cache hits because the colors are hardcoded. Only the real deps (compare_var, compare_tf, tidx, tel_file, mesh_geom) invalidate.
+
 ## [3.3.3] - 2026-04-24
 
 ### Performance
