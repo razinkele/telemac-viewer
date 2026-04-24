@@ -324,7 +324,8 @@ def register_import_handlers(input, output, session):
                 "\nReady to convert. Click 'Convert' to generate TELEMAC files."
             )
 
-        except Exception as e:
+        except (OSError, ValueError, KeyError, RuntimeError) as e:
+            _logger.exception("HEC-RAS preview failed for %s", hdf_path)
             _append_log(f"ERROR: {e}")
             import_model.set(None)
 
@@ -415,10 +416,11 @@ def register_import_handlers(input, output, session):
 
             _append_log("\nConversion complete. Use Download buttons below.")
 
-        except Exception as e:
-            _append_log(f"ERROR: {e}")
+        except (OSError, ValueError, KeyError, RuntimeError) as e:
+            _logger.exception("HEC-RAS conversion failed")
             import traceback
 
+            _append_log(f"ERROR: {e}")
             _append_log(traceback.format_exc())
             ui.notification_show(
                 f"Import conversion failed: {e}", type="error", duration=8
