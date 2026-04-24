@@ -1,8 +1,9 @@
 """Shared fixtures for TELEMAC Viewer tests."""
+
 from __future__ import annotations
 import pytest
 from geometry import build_mesh_geometry
-from tests.helpers import FakeTF
+from tests.helpers import FakeTF, FakeSession
 
 
 @pytest.fixture
@@ -15,3 +16,9 @@ def fake_tf():
 def fake_geom(fake_tf):
     """Return mesh geometry dict from FakeTF."""
     return build_mesh_geometry(fake_tf)
+
+
+@pytest.fixture
+def fake_session():
+    """A fresh FakeSession for each test."""
+    return FakeSession()

@@ -1,4 +1,5 @@
 """Shared test helpers — FakeTF and variants."""
+
 from __future__ import annotations
 import numpy as np
 
@@ -21,6 +22,7 @@ class FakeTF:
         VELOCITY V: y-gradient [0, 0, 1, 1] -- constant across timesteps
         WATER DEPTH: [0.1, 0.5, 0.5, 1.0] scaled by (1 + tidx * 0.5)
     """
+
     meshx = np.array([0.0, 1.0, 0.0, 1.0], dtype=np.float64)
     meshy = np.array([0.0, 0.0, 1.0, 1.0], dtype=np.float64)
     ikle2 = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int32)
@@ -73,7 +75,7 @@ class FakeTF:
             if i > 0:
                 dx = px - polyline[i - 1][0]
                 dy = py - polyline[i - 1][1]
-                cum_dist += np.sqrt(dx ** 2 + dy ** 2)
+                cum_dist += np.sqrt(dx**2 + dy**2)
             dists = (self.meshx - px) ** 2 + (self.meshy - py) ** 2
             nearest = np.argmin(dists)
             points_out.append([px, py])
@@ -90,6 +92,29 @@ class FakeTF:
 
 # Verify FakeTF satisfies the protocol (checked at import time by type checkers)
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from viewer_types import TelemacFileProtocol
+
     _: TelemacFileProtocol = FakeTF()  # type: ignore[assignment]
+
+
+class FakeSession:
+    """Minimal async session stand-in for unit-testing server handler code.
+
+    Records every send_custom_message call so tests can assert against the
+    outgoing WebSocket traffic without booting Shiny's ASGI app.
+    """
+
+    def __init__(self):
+        self.messages: list[tuple[str, dict]] = []
+
+    async def send_custom_message(self, msg_type: str, payload: dict) -> None:
+        self.messages.append((msg_type, payload))
+
+    def messages_of_type(self, msg_type: str) -> list[dict]:
+        """Return only payloads whose msg_type matches."""
+        return [p for t, p in self.messages if t == msg_type]
+
+    def clear(self) -> None:
+        self.messages.clear()

@@ -7,16 +7,7 @@ from shiny_deckgl import MapWidget, zoom_widget
 
 from app_dispatch import decide_dispatch
 from layers import build_mesh_color_patch
-
-
-class RecordingSession:
-    """Minimal stand-in for a Shiny Session that records custom messages."""
-
-    def __init__(self):
-        self.messages: list[tuple[str, dict]] = []
-
-    async def send_custom_message(self, msg_type: str, payload: dict) -> None:
-        self.messages.append((msg_type, payload))
+from tests.helpers import FakeSession
 
 
 def make_sig(
@@ -104,7 +95,7 @@ class TestWireFormatContract:
 
     @pytest.mark.asyncio
     async def test_mesh_color_patch_sends_deck_partial_update(self, fake_geom, fake_tf):
-        session = RecordingSession()
+        session = FakeSession()
         widget = MapWidget("map")
         values = fake_tf.get_data_value("WATER DEPTH", 0)
         patch, _, _, _ = build_mesh_color_patch(fake_geom, values, "Viridis")
@@ -128,7 +119,7 @@ class TestWireFormatContract:
 
     @pytest.mark.asyncio
     async def test_set_widgets_sends_deck_set_widgets(self):
-        session = RecordingSession()
+        session = FakeSession()
         widget = MapWidget("map")
         await widget.set_widgets(session, [zoom_widget()])
 
