@@ -1196,7 +1196,7 @@ def server(input, output, session):
             return "—"
 
     # -- Core reactive calcs (tel_file, mesh_geom, current_var, etc.) --
-    from server_core import register_core_handlers
+    from server_core import _pick_file_path, register_core_handlers
 
     _core = register_core_handlers(
         input,
@@ -1289,11 +1289,11 @@ def server(input, output, session):
     # KEEP THIS IN SYNC with app_dispatch.make_sig() in tests/test_map_dispatch.py.
     @reactive.calc
     def _structural_sig() -> tuple:
-        uploaded = input.upload()
-        file_path = (
-            uploaded[0]["datapath"]
-            if uploaded and use_upload.get()
-            else EXAMPLES.get(input.example(), "")
+        file_path = _pick_file_path(
+            uploaded=input.upload(),
+            use_upload=use_upload.get(),
+            example_key=input.example(),
+            examples=EXAMPLES,
         )
         try:
             basemap = input.basemap() or "light"
@@ -1730,11 +1730,11 @@ def server(input, output, session):
         layers = [lyr] + _build_overlay_layers(tf, geom, tidx, values, origin)
         legend = _build_legend(display_var, vmin, vmax, palette_id, reverse)
 
-        uploaded = input.upload()
-        current_path = (
-            uploaded[0]["datapath"]
-            if uploaded and use_upload.get()
-            else EXAMPLES.get(input.example(), "")
+        current_path = _pick_file_path(
+            uploaded=input.upload(),
+            use_upload=use_upload.get(),
+            example_key=input.example(),
+            examples=EXAMPLES,
         )
         kwargs = {}
         if current_path != last_file_path.get():

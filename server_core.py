@@ -120,6 +120,26 @@ def _resolve_crs_from_inputs(
     return CrsResolution(crs=None, source="none")
 
 
+def _pick_file_path(
+    *,
+    uploaded: list | None,
+    use_upload: bool,
+    example_key: str,
+    examples: dict[str, str],
+) -> str:
+    """Return the .slf path to open: uploaded file if selected, else example.
+
+    Mirrors the ``.get(example_key, "")`` fallback semantic used by the 3
+    inlined upload-vs-example sites. ``tel_file()`` keeps its direct
+    ``EXAMPLES[k]`` indexing deliberately (it wants KeyError on missing
+    key for a clearer traceback than letting ``TelemacFile("")`` fail
+    downstream).
+    """
+    if uploaded and use_upload:
+        return uploaded[0]["datapath"]
+    return examples.get(example_key, "")
+
+
 def register_core_handlers(
     input,
     output,
@@ -436,6 +456,9 @@ def register_core_handlers(
         uploaded = input.upload()
         if uploaded and use_upload.get():
             return None
+        # Not routed through _pick_file_path: the upload branch is
+        # already handled by the early return above, and we only need
+        # the example-path lookup here.
         path = EXAMPLES.get(input.example(), "")
         cli_files = glob.glob(_os.path.join(_os.path.dirname(path), "*.cli"))
         return read_cli_file(cli_files[0]) if cli_files else None

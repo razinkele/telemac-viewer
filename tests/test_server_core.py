@@ -139,3 +139,62 @@ class TestResolveCrsFromInputs:
             mesh_xy=None,
         )
         assert result.source == "none"
+
+
+class TestPickFilePath:
+    def test_upload_with_use_upload_true(self):
+        from server_core import _pick_file_path
+
+        uploaded = [{"datapath": "/tmp/u.slf", "name": "u.slf"}]
+        result = _pick_file_path(
+            uploaded=uploaded,
+            use_upload=True,
+            example_key="X",
+            examples={"X": "/tmp/x.slf"},
+        )
+        assert result == "/tmp/u.slf"
+
+    def test_upload_with_use_upload_false_falls_to_example(self):
+        from server_core import _pick_file_path
+
+        uploaded = [{"datapath": "/tmp/u.slf"}]
+        result = _pick_file_path(
+            uploaded=uploaded,
+            use_upload=False,
+            example_key="X",
+            examples={"X": "/tmp/x.slf"},
+        )
+        assert result == "/tmp/x.slf"
+
+    def test_no_upload_uses_example(self):
+        from server_core import _pick_file_path
+
+        result = _pick_file_path(
+            uploaded=None,
+            use_upload=False,
+            example_key="X",
+            examples={"X": "/tmp/x.slf"},
+        )
+        assert result == "/tmp/x.slf"
+
+    def test_empty_upload_list_uses_example(self):
+        from server_core import _pick_file_path
+
+        result = _pick_file_path(
+            uploaded=[],
+            use_upload=True,
+            example_key="X",
+            examples={"X": "/tmp/x.slf"},
+        )
+        assert result == "/tmp/x.slf"
+
+    def test_missing_example_key_returns_empty_string(self):
+        from server_core import _pick_file_path
+
+        result = _pick_file_path(
+            uploaded=None,
+            use_upload=False,
+            example_key="Nonexistent",
+            examples={"X": "/tmp/x.slf"},
+        )
+        assert result == ""
