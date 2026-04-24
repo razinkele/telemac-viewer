@@ -13,6 +13,19 @@ from constants import EXAMPLES
 
 _logger = logging.getLogger(__name__)
 
+_ALLOWED_TELEMAC_MODULES = frozenset(
+    {
+        "telemac2d",
+        "telemac3d",
+        "tomawac",
+        "artemis",
+        "sisyphe",
+        "gaia",
+        "waqtel",
+        "stbtel",
+    }
+)
+
 
 def register_simulation_handlers(input, output, session, use_upload=None):
     """Register server handlers for the Run Simulation tab.
@@ -20,8 +33,8 @@ def register_simulation_handlers(input, output, session, use_upload=None):
     All simulation state is local to this function.
     """
 
-    sim_process = reactive.value(None)   # asyncio.Process or None
-    sim_output = reactive.value("")      # accumulated console output
+    sim_process = reactive.value(None)  # asyncio.Process or None
+    sim_output = reactive.value("")  # accumulated console output
     sim_running = reactive.value(False)
 
     def _is_upload_mode():
@@ -33,11 +46,15 @@ def register_simulation_handlers(input, output, session, use_upload=None):
     @render.ui
     def cas_select_ui():
         if _is_upload_mode():
-            return ui.p("Upload mode — no .cas files available", class_="text-muted small")
+            return ui.p(
+                "Upload mode — no .cas files available", class_="text-muted small"
+            )
         path = EXAMPLES.get(input.example(), "")
         cas_files = find_cas_files(path)
         if not cas_files:
-            return ui.p("No .cas files found near this example", class_="text-muted small")
+            return ui.p(
+                "No .cas files found near this example", class_="text-muted small"
+            )
         choices = {name: name for name in cas_files}
         return ui.input_select("cas_file", "Steering file (.cas)", choices=choices)
 
@@ -60,11 +77,15 @@ def register_simulation_handlers(input, output, session, use_upload=None):
     @reactive.event(input.run_sim)
     async def handle_run_sim():
         if sim_running.get():
-            ui.notification_show("Simulation already running", type="warning", duration=3)
+            ui.notification_show(
+                "Simulation already running", type="warning", duration=3
+            )
             return
         uploaded = _is_upload_mode()
         if uploaded:
-            ui.notification_show("Cannot run simulation on uploaded files", type="warning", duration=3)
+            ui.notification_show(
+                "Cannot run simulation on uploaded files", type="warning", duration=3
+            )
             return
         path = EXAMPLES.get(input.example(), "")
         cas_files = find_cas_files(path)
@@ -80,6 +101,17 @@ def register_simulation_handlers(input, output, session, use_upload=None):
         ncores = input.ncores() if input.ncores() is not None else 4
         cas_dir = _os.path.dirname(cas_path)
 
+        if module not in _ALLOWED_TELEMAC_MODULES:
+            ui.notification_show(
+                f"Unknown TELEMAC module '{module}' — aborting. "
+                f"Expected one of: {', '.join(sorted(_ALLOWED_TELEMAC_MODULES))}.",
+                type="error",
+                duration=8,
+                id="sim_err",
+            )
+            sim_running.set(False)
+            return
+
         # Build command
         runner = f"{module}.py"
         cmd_display = f"{runner} {cas_name} --ncsize={ncores}"
@@ -92,19 +124,26 @@ def register_simulation_handlers(input, output, session, use_upload=None):
             # Source TELEMAC env and run (quote all paths for shell safety)
             hometel = _os.environ.get("HOMETEL", "")
             if not hometel or not _os.path.isdir(hometel):
-                sim_output.set(sim_output.get() + "ERROR: HOMETEL not set or directory not found.\n")
+                sim_output.set(
+                    sim_output.get()
+                    + "ERROR: HOMETEL not set or directory not found.\n"
+                )
                 sim_running.set(False)
                 return
             env_script = _os.path.join(hometel, "configs/pysource.local.sh")
             if not _os.path.isfile(env_script):
-                sim_output.set(sim_output.get() +
-                               f"ERROR: pysource.local.sh not found at {env_script}\n")
+                sim_output.set(
+                    sim_output.get()
+                    + f"ERROR: pysource.local.sh not found at {env_script}\n"
+                )
                 sim_running.set(False)
                 return
-            shell_cmd = (f"source {shlex.quote(env_script)} && "
-                         f"cd {shlex.quote(cas_dir)} && "
-                         f"{shlex.quote(runner)} {shlex.quote(cas_name)} "
-                         f"--ncsize={int(ncores)} 2>&1")
+            shell_cmd = (
+                f"source {shlex.quote(env_script)} && "
+                f"cd {shlex.quote(cas_dir)} && "
+                f"{shlex.quote(runner)} {shlex.quote(cas_name)} "
+                f"--ncsize={int(ncores)} 2>&1"
+            )
             proc = await asyncio.create_subprocess_shell(
                 shell_cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -119,7 +158,8 @@ def register_simulation_handlers(input, output, session, use_upload=None):
             try:
                 while True:
                     line = await asyncio.wait_for(
-                        proc.stdout.readline(), timeout=_READLINE_TIMEOUT)
+                        proc.stdout.readline(), timeout=_READLINE_TIMEOUT
+                    )
                     if not line:
                         break
                     lines_buf.append(line.decode())
@@ -131,7 +171,8 @@ def register_simulation_handlers(input, output, session, use_upload=None):
                         await reactive.flush()
             except asyncio.TimeoutError:
                 lines_buf.append(
-                    f"\n--- No output for {_READLINE_TIMEOUT}s, killing process ---\n")
+                    f"\n--- No output for {_READLINE_TIMEOUT}s, killing process ---\n"
+                )
                 proc.kill()
             await proc.wait()
             lines_buf.append(f"\n--- Process exited with code {proc.returncode} ---\n")
