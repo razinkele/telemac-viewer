@@ -1,8 +1,8 @@
 # TELEMAC Viewer
 
-[![Version](https://img.shields.io/badge/version-3.3.4-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.4.0-blue.svg)](./CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-490%20passing-brightgreen.svg)](./tests)
+[![Tests](https://img.shields.io/badge/tests-497%20passing-brightgreen.svg)](./tests)
 [![License](https://img.shields.io/badge/license-LGPL%20v2.1-orange.svg)](#license)
 
 A web-based viewer for [TELEMAC](http://www.opentelemac.org/) simulation results,
@@ -246,10 +246,10 @@ python -m pytest tests/ -W error::RuntimeWarning
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.3.4**
-(2026-04-24) — caches the compare-contour overlay and fixes a
-stale-on-scrub bug where the fast path skipped emitting compare-
-contour patches when only tidx changed.
+See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.4.0**
+(2026-04-24) — uploaded `.slf` files can now carry a companion `.cas`
+in the same upload batch, triggering the same CRS auto-detection
+path that example files use.
 
 ## License
 

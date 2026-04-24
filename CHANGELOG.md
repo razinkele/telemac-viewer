@@ -4,6 +4,18 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-04-24
+
+### Added
+- **CRS auto-detection for uploaded files.** The upload widget now accepts `.slf` + optional `.cas` together (`multiple=True`). When the user uploads both, the CRS resolver scans the `.cas` file's `GEOGRAPHIC SYSTEM` keyword just like it does for example files — previously uploads were hard-coded to skip `.cas`-based detection. The label updates to "Or upload .slf (+ optional .cas for CRS auto-detect)" and the upload-notification splits into two branches: "`.cas` CRS detection active" when a companion file is found, or the original "companion features unavailable" hint (now with an actionable "upload a `.cas` alongside the `.slf`" suggestion) when not.
+- `server_core._find_uploaded_by_ext(uploaded, ext)` helper — case-insensitive extension match on the first matching entry in Shiny's upload list. Used both for picking the `.slf` among a multi-file upload and for spotting the companion `.cas`.
+
+### Changed
+- `_pick_file_path` and the `tel_file()` reactive calc now pick the `.slf` explicitly via `_find_uploaded_by_ext` rather than trusting `uploaded[0]`, which could be a `.cas` if the user dragged files in a different order.
+
+### Tests
+- 7 new tests: 2 in `TestPickFilePath` (multi-file picks `.slf` not position 0, case-insensitive) + 5 in new `TestFindUploadedByExt` class (None handling, first-match by ext, case insensitivity, missing-ext, missing-name graceful). Total suite now **497 tests**.
+
 ## [3.3.4] - 2026-04-24
 
 ### Fixed
