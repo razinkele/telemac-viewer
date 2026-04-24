@@ -32,15 +32,39 @@ import os as _os
 _logger = logging.getLogger(__name__)
 
 
+def _safe_close(tf, context: str) -> None:
+    """Close a TelemacFile, logging any failure without re-raising."""
+    if tf is None:
+        return
+    try:
+        tf.close()
+    except Exception:
+        _logger.warning("Failed to close %s TelemacFile", context, exc_info=True)
+
+
 def register_core_handlers(
-    input, output, session, _tf_lock,
+    input,
+    output,
+    session,
+    _tf_lock,
     # shared reactive values that core resets on file change
-    particle_paths, cross_section_points, clicked_points,
-    temporal_stats_cache, integral_result, expr_result,
-    measure_points, measure_mode, analysis_mode,
-    obs_data, compare_tf, volume_cache, polygon_stats_data, polygon_geom,
+    particle_paths,
+    cross_section_points,
+    clicked_points,
+    temporal_stats_cache,
+    integral_result,
+    expr_result,
+    measure_points,
+    measure_mode,
+    analysis_mode,
+    obs_data,
+    compare_tf,
+    volume_cache,
+    polygon_stats_data,
+    polygon_geom,
     # shared upload state
-    use_upload, is_3d_mode,
+    use_upload,
+    is_3d_mode,
 ):
     """Register core reactive calcs and return them for use by other modules.
 
@@ -71,14 +95,19 @@ def register_core_handlers(
     def clear_upload_ui():
         if not use_upload.get():
             return ui.div()
-        return ui.input_action_button("clear_upload", "Clear upload (use examples)",
-                                      class_="btn-sm btn-outline-danger w-100 mb-1")
+        return ui.input_action_button(
+            "clear_upload",
+            "Clear upload (use examples)",
+            class_="btn-sm btn-outline-danger w-100 mb-1",
+        )
 
     @output
     @render.ui
     def compare_upload_ui():
         if input.diff_mode():
-            return ui.input_file("compare_upload", "Compare file (.slf)", accept=[".slf"])
+            return ui.input_file(
+                "compare_upload", "Compare file (.slf)", accept=[".slf"]
+            )
         return ui.div()
 
     @reactive.effect
@@ -95,10 +124,7 @@ def register_core_handlers(
         # Close previous file to avoid leaking file descriptors
         if _prev_tel_file[0] is not None:
             with _tf_lock:
-                try:
-                    _prev_tel_file[0].close()
-                except Exception:
-                    pass
+                _safe_close(_prev_tel_file[0], "previous")
         uploaded = input.upload()
         if uploaded and use_upload.get():
             path = uploaded[0]["datapath"]
@@ -127,12 +153,7 @@ def register_core_handlers(
         measure_mode.set(False)
         analysis_mode.set("none")
         obs_data.set(None)
-        old_compare = compare_tf.get()
-        if old_compare is not None:
-            try:
-                old_compare.close()
-            except Exception:
-                pass
+        _safe_close(compare_tf.get(), "compare")
         compare_tf.set(None)
         volume_cache.set(None)
         polygon_stats_data.set(None)
@@ -141,7 +162,9 @@ def register_core_handlers(
             ui.notification_show(
                 "Uploaded file: companion features (.cas CRS detection, "
                 ".cli boundary coloring, .liq hydrographs) are unavailable.",
-                type="message", duration=6, id="upload_notice",
+                type="message",
+                duration=6,
+                id="upload_notice",
             )
 
     # -- CRS reactive --
@@ -233,9 +256,18 @@ def register_core_handlers(
             except Exception as e:
                 ui.notification_show(
                     f"Cannot read Z elevation: {e}. Showing flat mesh.",
-                    type="warning", duration=8, id="z_warn")
+                    type="warning",
+                    duration=8,
+                    id="z_warn",
+                )
                 z_vals = np.zeros(tf.npoin2, dtype=np.float32)
-            return build_mesh_geometry(tf, crs=crs, z_values=z_vals, z_scale=z_scale, origin_offset=origin_offset)
+            return build_mesh_geometry(
+                tf,
+                crs=crs,
+                z_values=z_vals,
+                z_scale=z_scale,
+                origin_offset=origin_offset,
+            )
         return build_mesh_geometry(tf, crs=crs, origin_offset=origin_offset)
 
     # -- Variable and timestep calcs --
@@ -272,7 +304,7 @@ def register_core_handlers(
         try:
             layer = input.layer_select()
             if layer and layer != "all":
-                nplan = getattr(tf, 'nplan', 0)
+                nplan = getattr(tf, "nplan", 0)
                 if nplan > 1:
                     return extract_layer_2d(vals, tf.npoin2, int(layer))
         except (TypeError, AttributeError, KeyError):
@@ -281,9 +313,11 @@ def register_core_handlers(
             _logger.warning("Layer extraction failed for layer %s: %s", layer, exc)
             ui.notification_show(
                 f"Could not extract layer {layer} — showing full data",
-                type="warning", duration=5)
+                type="warning",
+                duration=5,
+            )
             # Return truncated 2D slice to avoid shape mismatch downstream
-            return vals[:tf.npoin2] if len(vals) > tf.npoin2 else vals
+            return vals[: tf.npoin2] if len(vals) > tf.npoin2 else vals
         return vals
 
     # -- Topology-only reactive calcs (independent of timestep) --
@@ -323,7 +357,9 @@ def register_core_handlers(
         else:
             choices = file_vars
         selected = "WATER DEPTH" if "WATER DEPTH" in tf.varnames else tf.varnames[0]
-        return ui.input_select("variable", "Variable", choices=choices, selected=selected)
+        return ui.input_select(
+            "variable", "Variable", choices=choices, selected=selected
+        )
 
     @reactive.effect
     @reactive.event(input.variable)
@@ -354,8 +390,12 @@ def register_core_handlers(
         tf = tel_file()
         n = len(tf.times)
         return ui.input_slider(
-            "ref_tidx", "Reference time step",
-            min=0, max=n - 1, value=0, step=1,
+            "ref_tidx",
+            "Reference time step",
+            min=0,
+            max=n - 1,
+            value=0,
+            step=1,
         )
 
     @output
@@ -391,8 +431,10 @@ def register_core_handlers(
             vmin, vmax = 0.0, 1.0
         step = round((vmax - vmin) / 100, 4) if vmax > vmin else 0.01
         return ui.input_slider(
-            "filter_range", "Value filter",
-            min=round(vmin, 4), max=round(vmax, 4),
+            "filter_range",
+            "Value filter",
+            min=round(vmin, 4),
+            max=round(vmax, 4),
             value=[round(vmin, 4), round(vmax, 4)],
             step=step,
         )
@@ -402,16 +444,20 @@ def register_core_handlers(
     def clear_xsec_ui():
         if cross_section_points.get() is None:
             return ui.div()
-        return ui.input_action_button("clear_xsec", "Clear Cross-Section",
-                                      class_="btn-sm btn-outline-danger w-100 mb-1")
+        return ui.input_action_button(
+            "clear_xsec",
+            "Clear Cross-Section",
+            class_="btn-sm btn-outline-danger w-100 mb-1",
+        )
 
     @output
     @render.ui
     def particle_seed_ui():
         if not input.particles():
             return ui.div()
-        return ui.input_action_button("draw_seed", "Draw Seed Line",
-                                      class_="btn-sm btn-outline-info w-100 mb-1")
+        return ui.input_action_button(
+            "draw_seed", "Draw Seed Line", class_="btn-sm btn-outline-info w-100 mb-1"
+        )
 
     @output
     @render.ui
@@ -422,8 +468,11 @@ def register_core_handlers(
         max_trail = float(tf.times[-1] - tf.times[0]) if len(tf.times) > 1 else 1.0
         default_trail = max_trail * 0.2
         return ui.input_slider(
-            "trail_length", "Trail length (s)",
-            min=0, max=round(max_trail, 1), value=round(default_trail, 1),
+            "trail_length",
+            "Trail length (s)",
+            min=0,
+            max=round(max_trail, 1),
+            value=round(default_trail, 1),
             step=round(max_trail / 50, 2) if max_trail > 0 else 0.1,
         )
 
@@ -435,10 +484,21 @@ def register_core_handlers(
             return ui.div()
         return ui.div(
             ui.input_switch("view_3d", "3D View", value=False),
-            ui.input_select("layer_select", "Display layer", choices=
-                {"all": "All planes (3D)"} |
-                {str(k): f"Layer {k}" + (" (bottom)" if k == 0 else " (surface)" if k == tf.nplan - 1 else "")
-                 for k in range(tf.nplan)}
+            ui.input_select(
+                "layer_select",
+                "Display layer",
+                choices={"all": "All planes (3D)"}
+                | {
+                    str(k): f"Layer {k}"
+                    + (
+                        " (bottom)"
+                        if k == 0
+                        else " (surface)"
+                        if k == tf.nplan - 1
+                        else ""
+                    )
+                    for k in range(tf.nplan)
+                },
             ),
             ui.output_ui("z_scale_ui"),
         )
@@ -456,12 +516,22 @@ def register_core_handlers(
             depth_range = float(z_vals.max() - z_vals.min())
         except Exception as e:
             ui.notification_show(
-                f"Cannot determine depth range: {e}", type="warning", duration=5, id="zscale_warn")
+                f"Cannot determine depth range: {e}",
+                type="warning",
+                duration=5,
+                id="zscale_warn",
+            )
             depth_range = 0.0
-        default_scale = min(50, int(geom.extent_m / depth_range)) if depth_range > 0 else 10
+        default_scale = (
+            min(50, int(geom.extent_m / depth_range)) if depth_range > 0 else 10
+        )
         return ui.input_slider(
-            "z_scale", "Z Scale",
-            min=1, max=100, value=default_scale, step=1,
+            "z_scale",
+            "Z Scale",
+            min=1,
+            max=100,
+            value=default_scale,
+            step=1,
         )
 
     # -- 3D mode sync --

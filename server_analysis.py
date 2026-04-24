@@ -1085,7 +1085,8 @@ def register_analysis_handlers(
                     old_tf.close()
                 except Exception:
                     _logger.warning(
-                        "Failed to close previous compare file", exc_info=True
+                        "Failed to close previous compare TelemacFile",
+                        exc_info=True,
                     )
             compare_tf.set(tf2)
             ui.notification_show(
@@ -1097,7 +1098,10 @@ def register_analysis_handlers(
                 try:
                     tf2.close()
                 except Exception:
-                    pass
+                    _logger.warning(
+                        "Failed to close compare TelemacFile",
+                        exc_info=True,
+                    )
             ui.notification_show(
                 f"Failed to open comparison file: {e}", type="error", duration=5
             )
