@@ -1412,6 +1412,35 @@ def server(input, output, session):
             origin=[geom.lon_off, geom.lat_off],
         )
 
+    @reactive.calc
+    def particle_layer_cached():
+        """Cached particle-trips animation layer.
+
+        Particle colors are hardcoded — palette changes must NOT
+        invalidate. Real deps: particles toggle, particle_paths reactive
+        value (re-seed), tel_file/current_tidx (currentTime), trail
+        length input, mesh_geom (origin). Same caching rationale as
+        contour_layer_cached.
+        """
+        if not input.particles():
+            return None
+        paths = particle_paths.get()
+        if not paths:
+            return None
+        tf = tel_file()
+        tidx = current_tidx()
+        geom = mesh_geom()
+        try:
+            trail = input.trail_length() if input.trail_length() is not None else 1.0
+        except (TypeError, AttributeError, KeyError):
+            trail = 1.0
+        return build_particle_layer(
+            paths,
+            float(tf.times[tidx]),
+            trail,
+            origin=[geom.lon_off, geom.lat_off],
+        )
+
     # -- Analysis panel, charts, stats, CSV downloads, overlays --
     from server_analysis import register_analysis_handlers
 
@@ -1594,14 +1623,10 @@ def server(input, output, session):
             path_centered = [[x - geom.x_off, y - geom.y_off] for x, y in xsec]
             layers.append(build_cross_section_layer(path_centered, origin=origin))
 
-        # Particle traces
-        paths = particle_paths.get()
-        if paths and input.particles():
-            current_time = float(tf.times[tidx])
-            trail = input.trail_length() if input.trail_length() is not None else 1.0
-            layers.append(
-                build_particle_layer(paths, current_time, trail, origin=origin)
-            )
+        # Particle traces (cached — see particle_layer_cached).
+        plyr = particle_layer_cached()
+        if plyr is not None:
+            layers.append(plyr)
 
         # Measurement line (convert mesh-meter coords to centered for layer)
         mpts = measure_points.get()
@@ -1714,6 +1739,12 @@ def server(input, output, session):
             compare_cpatch = compare_contour_layer_cached()
             if compare_cpatch is not None:
                 patches.append(compare_cpatch)
+            # Without this the trips_layer's currentTime stays frozen at
+            # whatever value the last full update emitted, freezing the
+            # animation when the user scrubs tidx.
+            ppatch = particle_layer_cached()
+            if ppatch is not None:
+                patches.append(ppatch)
             if input.show_extrema():
                 extrema = find_extrema(tf, values)
                 patches.extend(
