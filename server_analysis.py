@@ -178,6 +178,210 @@ def build_crosssection_chart(
     return fig
 
 
+def build_vertprofile_chart(
+    tf,
+    var: str,
+    tidx: int,
+    *,
+    points: list[tuple[float, float]],
+) -> go.Figure:
+    """Vertical profile plot at the clicked point(s).
+
+    Pure version of the former _chart_vertprofile closure. The reactive
+    state that used to live on clicked_points.get() is now passed
+    explicitly via the points kwarg.
+    """
+    if not points:
+        return go.Figure()
+    fig = go.Figure()
+    elev_label = "Elevation (m)"
+    for i, pt in enumerate(points):
+        elevations, values, elev_label = vertical_profile_at_point(
+            tf, var, tidx, pt[0], pt[1]
+        )
+        if len(elevations) > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=values,
+                    y=elevations,
+                    mode="lines+markers",
+                    name=f"Pt {i + 1} ({pt[0]:.0f}, {pt[1]:.0f})",
+                )
+            )
+    fig.update_layout(
+        xaxis_title=var,
+        yaxis_title=elev_label,
+        margin=dict(l=50, r=20, t=10, b=40),
+        height=220,
+    )
+    return fig
+
+
+def build_histogram_chart(
+    tf,
+    var: str,
+    *,
+    values: np.ndarray,
+) -> go.Figure:
+    """Value histogram for the current scalar field.
+
+    Pure version of the former _chart_histogram closure. The reactive
+    state that used to live on effective_values() is now passed
+    explicitly via the values kwarg.
+    """
+    npoin = tf.npoin2
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=values[:npoin], nbinsx=50, name=var))
+    fig.update_layout(
+        xaxis_title=var,
+        yaxis_title="Count",
+        margin=dict(l=50, r=20, t=10, b=40),
+        height=220,
+    )
+    return fig
+
+
+def build_multivar_chart(
+    tf,
+    tidx: int,
+    *,
+    points: list[tuple[float, float]],
+) -> go.Figure:
+    """All-variables time series at the most recently clicked point.
+
+    Pure version of the former _chart_multivar closure. The reactive
+    state that used to live on clicked_points.get() is now passed
+    explicitly via the points kwarg.
+    """
+    if not points:
+        return go.Figure()
+    px_coord, py_coord = points[-1]
+    fig = go.Figure()
+    for vname in tf.varnames:
+        times, values = time_series_at_point(tf, vname, px_coord, py_coord)
+        fig.add_trace(
+            go.Scatter(
+                x=times,
+                y=values,
+                mode="lines",
+                name=vname,
+            )
+        )
+    if tidx < len(tf.times):
+        fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
+    fig.update_layout(
+        xaxis_title="Time (s)",
+        yaxis_title="Value",
+        margin=dict(l=50, r=20, t=10, b=40),
+        height=220,
+    )
+    return fig
+
+
+def build_rating_chart(
+    tf,
+    *,
+    path_points: list[list[float]] | None,
+) -> tuple[go.Figure, int, int]:
+    """h-Q rating curve at the cross-section path.
+
+    Returns (fig, skipped_h, ntimes). The shim emits a UI notification
+    when more than half the timesteps lacked the required field; the
+    pure function exposes the count so tests can assert the invariant
+    without booting Shiny.
+    """
+    ntimes = len(tf.times)
+    if path_points is None:
+        return go.Figure(), 0, ntimes
+    h_values: list[float] = []
+    q_values: list[float] = []
+    skipped_h = 0
+    for t in range(ntimes):
+        result = compute_discharge(tf, t, path_points)
+        if result["total_q"] is not None:
+            h_val: float | None = None
+            try:
+                _, wl_vals = cross_section_profile(tf, "FREE SURFACE", t, path_points)
+                h_val = float(np.mean(wl_vals))
+            except (KeyError, ValueError, IndexError):
+                try:
+                    _, wd_vals = cross_section_profile(
+                        tf, "WATER DEPTH", t, path_points
+                    )
+                    h_val = float(np.mean(wd_vals))
+                except (KeyError, ValueError, IndexError):
+                    skipped_h += 1
+            if h_val is not None:
+                h_values.append(h_val)
+                q_values.append(result["total_q"])
+    if skipped_h > 0:
+        _logger.warning(
+            "Rating curve: %d timesteps skipped (no water level data)", skipped_h
+        )
+    fig = go.Figure()
+    if h_values and q_values:
+        fig.add_trace(
+            go.Scatter(
+                x=h_values,
+                y=q_values,
+                mode="lines+markers",
+                name="h-Q",
+                marker=dict(size=4),
+            )
+        )
+    fig.update_layout(
+        xaxis_title="Water level (m)",
+        yaxis_title="Discharge (m³/s)",
+        margin=dict(l=50, r=20, t=10, b=40),
+        height=220,
+    )
+    return fig, skipped_h, ntimes
+
+
+def build_volume_chart(*, cache: dict | None) -> go.Figure:
+    """Volume-vs-time chart from the volume_cache reactive value.
+
+    Pure version of the former _chart_volume closure. The cache dict
+    (or None when not yet computed) is passed explicitly.
+    """
+    if cache is None:
+        return go.Figure()
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(x=cache["times"], y=cache["volumes"], mode="lines", name="Volume")
+    )
+    fig.update_layout(
+        xaxis_title="Time (s)",
+        yaxis_title="Volume (m³)",
+        margin=dict(l=50, r=20, t=10, b=40),
+        height=220,
+    )
+    return fig
+
+
+def build_boundary_ts_chart(*, liq: dict | None) -> go.Figure:
+    """Boundary time-series plot from a parsed .liq file.
+
+    Pure version of the former _chart_boundary_ts closure. The parsed
+    .liq dict (or None when no .liq is loaded) is passed explicitly.
+    """
+    if liq is None:
+        return go.Figure()
+    fig = go.Figure()
+    for name, entry in liq.items():
+        label = f"{name} ({entry['unit']})" if entry.get("unit") else name
+        fig.add_trace(
+            go.Scatter(x=entry["times"], y=entry["values"], mode="lines", name=label)
+        )
+    fig.update_layout(
+        xaxis_title="Time (s)",
+        yaxis_title="Value",
+        margin=dict(l=50, r=20, t=10, b=40),
+        height=220,
+    )
+    return fig
+
+
 def register_analysis_handlers(
     input,
     output,
@@ -282,163 +486,33 @@ def register_analysis_handlers(
         )
 
     def _chart_vertprofile(tf, var, tidx):
-        pts = clicked_points.get()
-        if not pts:
-            return go.Figure()
-        fig = go.Figure()
-        elev_label = "Elevation (m)"
-        for i, pt in enumerate(pts):
-            elevations, values, elev_label = vertical_profile_at_point(
-                tf, var, tidx, pt[0], pt[1]
-            )
-            if len(elevations) > 0:
-                fig.add_trace(
-                    go.Scatter(
-                        x=values,
-                        y=elevations,
-                        mode="lines+markers",
-                        name=f"Pt {i + 1} ({pt[0]:.0f}, {pt[1]:.0f})",
-                    )
-                )
-        fig.update_layout(
-            xaxis_title=var,
-            yaxis_title=elev_label,
-            margin=dict(l=50, r=20, t=10, b=40),
-            height=220,
-        )
-        return fig
+        return build_vertprofile_chart(tf, var, tidx, points=clicked_points.get())
 
     def _chart_histogram(tf, var):
-        vals = effective_values()
-        npoin = tf.npoin2
-        fig = go.Figure()
-        fig.add_trace(go.Histogram(x=vals[:npoin], nbinsx=50, name=var))
-        fig.update_layout(
-            xaxis_title=var,
-            yaxis_title="Count",
-            margin=dict(l=50, r=20, t=10, b=40),
-            height=220,
-        )
-        return fig
+        return build_histogram_chart(tf, var, values=effective_values())
 
     def _chart_multivar(tf, tidx):
-        pts = clicked_points.get()
-        if not pts:
-            return go.Figure()
-        px_coord, py_coord = pts[-1]
-        fig = go.Figure()
-        for vname in tf.varnames:
-            times, values = time_series_at_point(tf, vname, px_coord, py_coord)
-            fig.add_trace(
-                go.Scatter(
-                    x=times,
-                    y=values,
-                    mode="lines",
-                    name=vname,
-                )
-            )
-        if tidx < len(tf.times):
-            fig.add_vline(x=tf.times[tidx], line_dash="dash", line_color="red")
-        fig.update_layout(
-            xaxis_title="Time (s)",
-            yaxis_title="Value",
-            margin=dict(l=50, r=20, t=10, b=40),
-            height=220,
-        )
-        return fig
+        return build_multivar_chart(tf, tidx, points=clicked_points.get())
 
     def _chart_rating(tf):
-        xsec = cross_section_points.get()
-        if xsec is None:
-            return go.Figure()
-        # Compute discharge and avg water level at cross-section for each timestep
-        h_values = []
-        q_values = []
-        skipped_h = 0
-        ntimes = len(tf.times)
-        for t in range(ntimes):
-            result = compute_discharge(tf, t, xsec)
-            if result["total_q"] is not None:
-                # Average water level along the cross-section
-                h_val = None
-                try:
-                    _, wl_vals = cross_section_profile(tf, "FREE SURFACE", t, xsec)
-                    h_val = float(np.mean(wl_vals))
-                except (KeyError, ValueError, IndexError):
-                    try:
-                        _, wd_vals = cross_section_profile(tf, "WATER DEPTH", t, xsec)
-                        h_val = float(np.mean(wd_vals))
-                    except (KeyError, ValueError, IndexError):
-                        skipped_h += 1
-                if h_val is not None:
-                    h_values.append(h_val)
-                    q_values.append(result["total_q"])
-        if skipped_h > 0:
-            _logger.warning(
-                "Rating curve: %d timesteps skipped (no water level data)", skipped_h
-            )
-        if skipped_h and ntimes and skipped_h / ntimes > 0.5:
+        fig, skipped, ntimes = build_rating_chart(
+            tf, path_points=cross_section_points.get()
+        )
+        if skipped and ntimes and skipped / ntimes > 0.5:
             ui.notification_show(
-                f"Rating curve: {skipped_h} of {ntimes} timesteps "
+                f"Rating curve: {skipped} of {ntimes} timesteps "
                 f"lacked FREE SURFACE / WATER DEPTH data.",
                 type="warning",
                 duration=6,
                 id="rating_warn",
             )
-        fig = go.Figure()
-        if h_values and q_values:
-            fig.add_trace(
-                go.Scatter(
-                    x=h_values,
-                    y=q_values,
-                    mode="lines+markers",
-                    name="h-Q",
-                    marker=dict(size=4),
-                )
-            )
-        fig.update_layout(
-            xaxis_title="Water level (m)",
-            yaxis_title="Discharge (m\u00b3/s)",
-            margin=dict(l=50, r=20, t=10, b=40),
-            height=220,
-        )
         return fig
 
     def _chart_volume():
-        vc = volume_cache.get()
-        if vc is None:
-            return go.Figure()
-        fig = go.Figure()
-        fig.add_trace(
-            go.Scatter(x=vc["times"], y=vc["volumes"], mode="lines", name="Volume")
-        )
-        fig.update_layout(
-            xaxis_title="Time (s)",
-            yaxis_title="Volume (m³)",
-            margin=dict(l=50, r=20, t=10, b=40),
-            height=220,
-        )
-        return fig
+        return build_volume_chart(cache=volume_cache.get())
 
     def _chart_boundary_ts():
-        data = liq_data()
-        if data is None:
-            return go.Figure()
-        fig = go.Figure()
-        for name, entry in data.items():
-            label = f"{name} ({entry['unit']})" if entry.get("unit") else name
-            fig.add_trace(
-                go.Scatter(
-                    x=entry["times"], y=entry["values"], mode="lines", name=label
-                )
-            )
-        fig.update_layout(
-            xaxis_title="Time (s)",
-            yaxis_title="Value",
-            margin=dict(l=50, r=20, t=10, b=40),
-            height=220,
-        )
-        return fig
+        return build_boundary_ts_chart(liq=liq_data())
 
     _CHART_DISPATCH = {
         "timeseries": lambda tf, var, tidx: _chart_timeseries(tf, var, tidx),
