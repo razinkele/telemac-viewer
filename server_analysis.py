@@ -858,12 +858,16 @@ def register_analysis_handlers(
 
     @reactive.calc
     def liq_data():
-        """Auto-detect and parse .liq file from the same directory as .slf."""
+        """Read .liq file from the upload batch first, else from the
+        example file's directory.
+        """
         from constants import EXAMPLES
+        from server_core import _find_uploaded_by_ext
 
         uploaded = input.upload()
         if uploaded and use_upload.get():
-            return None
+            uploaded_liq = _find_uploaded_by_ext(uploaded, ".liq")
+            return parse_liq_file(uploaded_liq) if uploaded_liq else None
         path = EXAMPLES.get(input.example(), "")
         liq_files = glob.glob(_os.path.join(_os.path.dirname(path), "*.liq"))
         return parse_liq_file(liq_files[0]) if liq_files else None

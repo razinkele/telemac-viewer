@@ -293,32 +293,39 @@ def register_core_handlers(
         polygon_geom.set(None)
         if use_upload.get():
             uploaded = input.upload() or []
-            has_cas = _find_uploaded_by_ext(uploaded, ".cas") is not None
-            has_cli = _find_uploaded_by_ext(uploaded, ".cli") is not None
-            active = []
-            if has_cas:
-                active.append(".cas CRS detection")
-            if has_cli:
-                active.append(".cli boundary coloring")
-            missing = []
-            if not has_cas:
-                missing.append(".cas (for CRS auto-detect)")
-            if not has_cli:
-                missing.append(".cli (for boundary coloring)")
-            # .liq upload support is a future extension.
-            missing.append(".liq (for hydrograph overlays)")
-            if active:
+            companions = (
+                (".cas", "CRS detection"),
+                (".cli", "boundary coloring"),
+                (".liq", "hydrograph overlays"),
+            )
+            active = [
+                f"{ext} {label}"
+                for ext, label in companions
+                if _find_uploaded_by_ext(uploaded, ext) is not None
+            ]
+            missing = [
+                f"{ext} (for {label})"
+                for ext, label in companions
+                if _find_uploaded_by_ext(uploaded, ext) is None
+            ]
+            if active and missing:
                 msg = (
                     "Uploaded file: " + ", ".join(active) + " active. "
                     "Add the missing companions to enable the rest: "
                     + ", ".join(missing)
                     + "."
                 )
+            elif active:
+                msg = (
+                    "Uploaded file: " + ", ".join(active) + " active — "
+                    "all companion features available."
+                )
             else:
                 msg = (
                     "Uploaded file: companion features unavailable. "
-                    "Drop a .cas / .cli alongside the .slf to enable "
-                    "CRS auto-detect and boundary coloring."
+                    "Drop .cas / .cli / .liq files alongside the .slf to "
+                    "enable CRS auto-detect, boundary coloring, and "
+                    "hydrograph overlays."
                 )
             ui.notification_show(
                 msg,

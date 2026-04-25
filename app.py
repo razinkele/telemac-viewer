@@ -888,8 +888,8 @@ app_ui = ui.page_navbar(
         ui.input_select("example", "Example case", choices=EXAMPLE_CHOICES),
         ui.input_file(
             "upload",
-            "Or upload .slf (+ optional .cas / .cli companions)",
-            accept=[".slf", ".cas", ".cli"],
+            "Or upload .slf (+ optional .cas / .cli / .liq companions)",
+            accept=[".slf", ".cas", ".cli", ".liq"],
             multiple=True,
         ),
         ui.output_ui("clear_upload_ui"),
