@@ -4,6 +4,18 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.4.1] - 2026-04-25
+
+### Added
+- **`.cli` upload companion support.** Extends v3.4.0's multi-file upload to recognize a `.cli` boundary-conditions file alongside the `.slf`. Uploaded files previously rendered every boundary edge as "Wall (inferred)" because `cli_data()` was hard-coded to return `None` for uploads; now it scans the upload batch via `_find_uploaded_by_ext(uploaded, ".cli")` and parses through the existing `read_cli_file`, producing the same wall / free-Neumann / prescribed-H/Q color coding example files have always had.
+- The upload widget's `accept` list expands to `[.slf, .cas, .cli]` and the label updates to "Or upload .slf (+ optional .cas / .cli companions)".
+
+### Changed
+- The `_reset_state_on_new_file` upload notification is now three-way: lists active companions when any are present, lists missing ones with their unlocked features, and falls back to a single hint when only the bare `.slf` was uploaded.
+
+### Total suite
+**497 tests** (unchanged — the new wiring is reactive-scope-only; the underlying `_find_uploaded_by_ext` and `read_cli_file` helpers are already covered).
+
 ## [3.4.0] - 2026-04-24
 
 ### Added
