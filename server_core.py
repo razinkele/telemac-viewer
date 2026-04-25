@@ -294,25 +294,31 @@ def register_core_handlers(
         if use_upload.get():
             uploaded = input.upload() or []
             has_cas = _find_uploaded_by_ext(uploaded, ".cas") is not None
+            has_cli = _find_uploaded_by_ext(uploaded, ".cli") is not None
+            active = []
+            if has_cas:
+                active.append(".cas CRS detection")
+            if has_cli:
+                active.append(".cli boundary coloring")
             missing = []
             if not has_cas:
-                missing.append(".cas CRS detection")
-            # .cli/.liq upload support is a future extension; for now
-            # those companion features stay unavailable for uploads.
-            missing.append(".cli boundary coloring")
-            missing.append(".liq hydrographs")
-            if has_cas:
+                missing.append(".cas (for CRS auto-detect)")
+            if not has_cli:
+                missing.append(".cli (for boundary coloring)")
+            # .liq upload support is a future extension.
+            missing.append(".liq (for hydrograph overlays)")
+            if active:
                 msg = (
-                    "Uploaded file: .cas CRS detection active. "
-                    "Other companion features (.cli boundary coloring, "
-                    ".liq hydrographs) remain unavailable."
+                    "Uploaded file: " + ", ".join(active) + " active. "
+                    "Add the missing companions to enable the rest: "
+                    + ", ".join(missing)
+                    + "."
                 )
             else:
                 msg = (
-                    "Uploaded file: companion features ("
-                    + ", ".join(missing)
-                    + ") are unavailable. Upload a .cas alongside the .slf "
-                    "to enable CRS auto-detection."
+                    "Uploaded file: companion features unavailable. "
+                    "Drop a .cas / .cli alongside the .slf to enable "
+                    "CRS auto-detect and boundary coloring."
                 )
             ui.notification_show(
                 msg,
@@ -504,13 +510,14 @@ def register_core_handlers(
 
     @reactive.calc
     def cli_data():
-        """Try to read .cli file from the same directory as the .slf."""
+        """Try to read .cli file: from the upload batch first, else from
+        the example file's directory.
+        """
         uploaded = input.upload()
         if uploaded and use_upload.get():
-            return None
-        # Not routed through _pick_file_path: the upload branch is
-        # already handled by the early return above, and we only need
-        # the example-path lookup here.
+            uploaded_cli = _find_uploaded_by_ext(uploaded, ".cli")
+            return read_cli_file(uploaded_cli) if uploaded_cli else None
+        # Example-file path lookup (companion .cli sits next to the .slf).
         path = EXAMPLES.get(input.example(), "")
         cli_files = glob.glob(_os.path.join(_os.path.dirname(path), "*.cli"))
         return read_cli_file(cli_files[0]) if cli_files else None
