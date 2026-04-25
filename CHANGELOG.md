@@ -4,6 +4,14 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.4.3] - 2026-04-25
+
+### Fixed
+- **Particle-trips animation now updates on timestep scrub.** The fast-path `update_map` (taken when the structural signature is unchanged) previously didn't emit any particle-layer patch. The deck.gl `TripsLayer` reads `currentTime` from the layer dict, so without a per-tick patch the trail animation froze at whatever `currentTime` the last full update set. Same class of bug as v3.3.4's compare-contour stale-on-scrub fix, just on a different overlay.
+
+### Performance
+- **Cached particle layer** via a new `particle_layer_cached` `@reactive.calc`. Palette changes / log-scale toggles / diagnostic flips no longer rebuild the trips-layer dict — only real deps invalidate (particles toggle, particle_paths re-seed, tidx, trail length, mesh_geom). Closes the cache-on-palette-change pattern for the third (and last user-visible) overlay type.
+
 ## [3.4.2] - 2026-04-25
 
 ### Added

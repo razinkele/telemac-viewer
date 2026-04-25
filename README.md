@@ -1,6 +1,6 @@
 # TELEMAC Viewer
 
-[![Version](https://img.shields.io/badge/version-3.4.2-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.4.3-blue.svg)](./CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/tests-497%20passing-brightgreen.svg)](./tests)
 [![License](https://img.shields.io/badge/license-LGPL%20v2.1-orange.svg)](#license)
@@ -246,11 +246,10 @@ python -m pytest tests/ -W error::RuntimeWarning
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.4.2**
-(2026-04-25) — completes the upload-companions trio: `.slf` now
-accepts `.cas`, `.cli`, and `.liq` companions in the same upload
-batch, unlocking CRS auto-detection, boundary coloring, and
-hydrograph overlays for uploaded files.
+See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.4.3**
+(2026-04-25) — caches the particle-trips overlay and fixes a
+stale-on-scrub bug where the trips animation froze when the user
+scrubbed timesteps with particle tracing on.
 
 ## License
 
