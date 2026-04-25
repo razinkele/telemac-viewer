@@ -41,7 +41,6 @@ from layers import (
     build_mesh_layer,
     build_mesh_color_patch,
     build_velocity_layer,
-    build_velocity_patch,
     build_contour_layer_fn,
     build_marker_layer,
     build_cross_section_layer,
@@ -1413,6 +1412,25 @@ def server(input, output, session):
         )
 
     @reactive.calc
+    def velocity_layer_cached():
+        """Cached velocity arrow layer.
+
+        Same rationale as the contour and particle caches: arrow colors
+        are hardcoded (not palette-dependent), so palette changes must
+        not invalidate. Real deps: vectors toggle, tel_file, current_tidx,
+        mesh_geom.
+        """
+        if not input.vectors():
+            return None
+        geom = mesh_geom()
+        return build_velocity_layer(
+            tel_file(),
+            current_tidx(),
+            geom,
+            origin=[geom.lon_off, geom.lat_off],
+        )
+
+    @reactive.calc
     def particle_layer_cached():
         """Cached particle-trips animation layer.
 
@@ -1595,10 +1613,9 @@ def server(input, output, session):
                 build_extrema_markers(extrema, geom.x_off, geom.y_off, origin=origin)
             )
 
-        if input.vectors():
-            vlyr = build_velocity_layer(tf, tidx, geom, origin=origin)
-            if vlyr is not None:
-                layers.append(vlyr)
+        vlyr = velocity_layer_cached()
+        if vlyr is not None:
+            layers.append(vlyr)
 
         clyr = contour_layer_cached()
         if clyr is not None:
@@ -1725,10 +1742,9 @@ def server(input, output, session):
                 reverse_palette=reverse,
             )
             patches = [patch]
-            if input.vectors():
-                vpatch = build_velocity_patch(tf, tidx, geom, origin=origin)
-                if vpatch is not None:
-                    patches.append(vpatch)
+            vpatch = velocity_layer_cached()
+            if vpatch is not None:
+                patches.append(vpatch)
             # Route the fast path through the same caches as the full path so
             # palette changes (which skip the structural sig) don't trigger
             # marching-triangles rebuilds for unchanged fields, and so the
