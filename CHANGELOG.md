@@ -4,6 +4,15 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.4.2] - 2026-04-25
+
+### Added
+- **`.liq` upload companion support** completes the upload-companions trio (`.cas` shipped in v3.4.0, `.cli` in v3.4.1, `.liq` here). `liq_data()` in `server_analysis.py` now scans the upload batch for a `.liq` file via `_find_uploaded_by_ext` and parses it through the existing `parse_liq_file`, restoring boundary-time-series overlays for uploaded files. Without it, the boundary-TS analysis chart was always empty for uploads.
+- The upload widget's `accept` list now spans `[.slf, .cas, .cli, .liq]` and the label reads "Or upload .slf (+ optional .cas / .cli / .liq companions)".
+
+### Changed
+- The `_reset_state_on_new_file` upload notification refactored to a small table-driven enumeration of `(ext, label)` companion pairs. Three states: all three companions present → "all companion features available"; some present → list active + remaining; none → single hint listing all three.
+
 ## [3.4.1] - 2026-04-25
 
 ### Added
