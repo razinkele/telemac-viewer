@@ -4,6 +4,15 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.4.4] - 2026-04-25
+
+### Performance
+- **Velocity arrow layer cached** via a new `velocity_layer_cached` `@reactive.calc`. Closes the cache-on-palette-change pattern for every overlay — every dynamic overlay (mesh, contour, compare-contour, particle, velocity) now follows the same `*_layer_cached` reactive.calc + fast-path emission shape. Velocity colors are hardcoded so palette changes don't invalidate; only `vectors` toggle, `tel_file`, `current_tidx`, and `mesh_geom` do. The unused `build_velocity_patch` import is dropped from `app.py`; the helper stays exported for downstream consumers and remains covered by the wire-format contract tests.
+
+### Tests
+- **Extracted the remaining 6 chart builders** (begun in v3.3.1 with timeseries + crosssection). Pure module-level functions for `build_vertprofile_chart`, `build_histogram_chart`, `build_multivar_chart`, `build_rating_chart`, `build_volume_chart`, `build_boundary_ts_chart`. Each closure inside `register_analysis_handlers` reduces to a 1-3 line shim. `build_rating_chart` returns `(fig, skipped, ntimes)` so the shim performs the >50%-skipped notification side-effect; tests assert the count directly.
+- 12 new tests in `tests/test_chart_builders.py` (empty-input + populated-output per builder). **509 tests total** (up from 497).
+
 ## [3.4.3] - 2026-04-25
 
 ### Fixed
