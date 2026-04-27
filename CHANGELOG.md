@@ -4,6 +4,18 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.4.5] - 2026-04-27
+
+### Added
+- **CRS status chip now shows the detection source.** The `CrsResolution` dataclass already tracked which path produced the current CRS (manual EPSG, `.cas` auto-detect, coordinate heuristic, etc.), but the user-facing chip threw that away — only the EPSG number was shown. Added a `current_crs_source` `reactive.value` that the `resolve_crs` shim sets alongside `current_crs`, and a `_CRS_SOURCE_LABELS` table that drives a human-readable suffix on the chip.
+
+  Examples:
+  - `EPSG:3346 — LKS94 / Lithuania TM (manual EPSG)`
+  - `EPSG:4326 — WGS 84 (auto-detected from .cas)`
+  - `No CRS — basemap alignment disabled (no CRS)`
+
+  Closes a small UX gap where users couldn't tell whether their CRS came from manual entry, the uploaded `.cas`, or the coordinate heuristic.
+
 ## [3.4.4] - 2026-04-25
 
 ### Performance

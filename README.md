@@ -1,6 +1,6 @@
 # TELEMAC Viewer
 
-[![Version](https://img.shields.io/badge/version-3.4.4-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.4.5-blue.svg)](./CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/tests-509%20passing-brightgreen.svg)](./tests)
 [![License](https://img.shields.io/badge/license-LGPL%20v2.1-orange.svg)](#license)
@@ -246,11 +246,12 @@ python -m pytest tests/ -W error::RuntimeWarning
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.4.4**
-(2026-04-25) — caches the velocity-arrow overlay (closing the
-overlay-caching pattern across all five dynamic layers) and
-extracts the remaining 6 chart-builder closures with 12 new
-unit tests (509 total).
+See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.4.5**
+(2026-04-27) — the CRS status chip now suffixes its EPSG line with
+the detection source, e.g. "EPSG:3346 — LKS94 / Lithuania TM
+(manual EPSG)" or "(auto-detected from .cas)". Helps users tell
+whether their CRS came from manual entry, an uploaded companion,
+or the coordinate heuristic.
 
 ## License
 
