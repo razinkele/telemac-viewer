@@ -1,8 +1,8 @@
 # TELEMAC Viewer
 
-[![Version](https://img.shields.io/badge/version-3.4.5-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.5.0-blue.svg)](./CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-509%20passing-brightgreen.svg)](./tests)
+[![Tests](https://img.shields.io/badge/tests-533%20passing-brightgreen.svg)](./tests)
 [![License](https://img.shields.io/badge/license-LGPL%20v2.1-orange.svg)](#license)
 
 A web-based viewer for [TELEMAC](http://www.opentelemac.org/) simulation results,
@@ -42,6 +42,7 @@ engineering tools.
 - **Light/dark map canvas** + multiple basemaps (CartoDB, Satellite)
 - **Difference mode** between timesteps with a diverging palette
 - **Fast timestep scrub** — partial-update dispatcher sends only the mesh color buffer on palette/value changes, preserving positions and indices via deck.gl's JS-side cache (~3-4× smaller WebSocket payload for large meshes)
+- **Local model library** — drop project folders into `~/.telemac-viewer/models/` (or `TELEMAC_VIEWER_MODELS=...`) — they appear in a "My models" sidebar dropdown alongside Examples and Upload. Each project folder is auto-scanned for `.slf` plus optional `.cas` / `.cli` / `.liq` companions; refresh button rescans on demand.
 
 ### Analysis
 - **Time series** at clicked points, with CSV export (barycentric-interpolated for derived variables — matches the map layer)
@@ -183,6 +184,7 @@ telemac-viewer/
 ├── layers.py              # deck.gl layer builders (mesh, velocity, contours, …)
 ├── analysis.py            # Spatial/temporal analysis functions
 ├── crs.py                 # CRS transforms and .cas detection
+├── model_library.py       # Local model library — filesystem-backed project folders
 ├── constants.py           # Examples, palettes, environment setup
 ├── telemac_defaults.py    # Variable semantics, module detection, velocity pairs
 ├── validation.py          # Observation parsing, RMSE, NSE, .liq parser
@@ -193,7 +195,7 @@ telemac-viewer/
 │   ├── domain/            #   Domain builder (DEM sampling, channel carving)
 │   ├── meshing/           #   Mesh generation (Triangle, Gmsh backends)
 │   └── telemac/           #   SELAFIN / CLI / CAS / LIQ file writers
-├── tests/                 # pytest suite (429 tests)
+├── tests/                 # pytest suite (533 tests)
 ├── docs/
 │   ├── API.md             # Module-level API reference
 │   ├── plans/             # Design documents for features
@@ -222,7 +224,7 @@ cd telemac-viewer
 python -m pytest tests/ -v
 ```
 
-The suite currently runs **429 tests** and is expected to pass with no
+The suite currently runs **533 tests** and is expected to pass with no
 `RuntimeWarning`:
 
 ```bash
@@ -246,12 +248,12 @@ python -m pytest tests/ -W error::RuntimeWarning
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.4.5**
-(2026-04-27) — the CRS status chip now suffixes its EPSG line with
-the detection source, e.g. "EPSG:3346 — LKS94 / Lithuania TM
-(manual EPSG)" or "(auto-detected from .cas)". Helps users tell
-whether their CRS came from manual entry, an uploaded companion,
-or the coordinate heuristic.
+See [CHANGELOG.md](./CHANGELOG.md). The current release is **v3.5.0**
+(2026-04-27) — adds a local model library: drop project folders
+into `~/.telemac-viewer/models/` (or set `TELEMAC_VIEWER_MODELS`)
+and they appear in a "My models" sidebar dropdown alongside Examples
+and Upload, with auto-scanning for `.slf` plus optional `.cas` /
+`.cli` / `.liq` companions.
 
 ## License
 

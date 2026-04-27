@@ -4,6 +4,18 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-04-27
+
+### Added
+- **Local model library:** new "My models" sidebar dropdown picks up TELEMAC project folders dropped into `~/.telemac-viewer/models/` (overridable via `TELEMAC_VIEWER_MODELS`). Each project folder is auto-scanned for `.slf` files plus optional `.cas`/`.cli`/`.liq` companions, which feed the existing CRS chip, boundary tints, and hydrograph panel without re-uploading. Refresh button rescans the directory on demand.
+- New module `model_library.py` with pure-function API (`library_root`, `scan_library`, `resolve_project`, `find_companion`) and 20 unit tests.
+
+### Changed
+- **Source switching is now exclusive:** picking an example or library project actively clears the upload state (and vice versa). Previously, an active upload would persist until manually cleared, even after picking an example. The new behavior is "last-touched wins" — closer to user expectations.
+- "Clear upload" button text dropped its "(use examples)" parenthetical now that library is a third source.
+- `_pick_file_path` extended to a 3-way priority chain (upload → library → example); raises `FileNotFoundError` on stale library selection so the reactive layer can clear and recover.
+- `tel_file()` refactored to delegate to `_pick_file_path` instead of duplicating the dispatch logic inline.
+
 ## [3.4.5] - 2026-04-27
 
 ### Added
