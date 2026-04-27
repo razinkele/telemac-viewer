@@ -167,3 +167,64 @@ class TestResolveProject:
         (proj / "results.txt").write_text("X")  # not a TELEMAC companion
         files = resolve_project(entry, "results.slf")
         assert (files.cas, files.cli, files.liq) == (None, None, None)
+
+
+class TestFindCompanion:
+    def test_returns_none_when_selection_is_none(self, tmp_path):
+        from model_library import find_companion
+
+        assert find_companion(None, tmp_path, ".cas") is None
+
+    def test_returns_path_when_basename_matches(self, tmp_path):
+        from model_library import find_companion
+
+        proj = tmp_path / "curonian"
+        proj.mkdir()
+        (proj / "results.slf").write_bytes(b"")
+        (proj / "results.cas").write_text("X")
+        result = find_companion(("curonian", "results.slf"), tmp_path, ".cas")
+        assert result == proj / "results.cas"
+
+    def test_returns_none_when_project_has_no_slf(self, tmp_path):
+        """A project folder with companions but no .slf is filtered out by
+        scan_library, so find_companion never reaches it.
+        """
+        from model_library import find_companion
+
+        proj = tmp_path / "curonian"
+        proj.mkdir()
+        (proj / "results.cas").write_text("X")
+        result = find_companion(("curonian", "results.slf"), tmp_path, ".cas")
+        assert result is None
+
+    def test_swallows_filenotfound_when_slf_deleted_after_scan(
+        self, tmp_path, monkeypatch
+    ):
+        """Race: scan_library returns an entry, but the .slf is gone by
+        the time resolve_project reads it. Helper silently returns None.
+        """
+        import model_library
+        from model_library import find_companion, ProjectEntry
+
+        proj = tmp_path / "curonian"
+        proj.mkdir()
+        slf = proj / "results.slf"
+        slf.write_bytes(b"")
+        (proj / "results.cas").write_text("X")
+        # Snapshot the entry, then delete the .slf to simulate a race.
+        stale_entry = ProjectEntry(name="curonian", path=proj, slf_files=(slf,))
+        slf.unlink()
+        monkeypatch.setattr(model_library, "scan_library", lambda r: [stale_entry])
+
+        result = find_companion(("curonian", "results.slf"), tmp_path, ".cas")
+        assert result is None
+
+    def test_returns_none_when_project_renamed(self, tmp_path):
+        from model_library import find_companion
+
+        proj = tmp_path / "actual-name"
+        proj.mkdir()
+        (proj / "results.slf").write_bytes(b"")
+        (proj / "results.cas").write_text("X")
+        result = find_companion(("old-name", "results.slf"), tmp_path, ".cas")
+        assert result is None

@@ -185,3 +185,28 @@ def resolve_project(entry: ProjectEntry, slf_name: str) -> ProjectFiles:
         cli=found[".cli"],
         liq=found[".liq"],
     )
+
+
+def find_companion(
+    library_selection: tuple[str, str] | None,
+    lib_root: Path,
+    ext: str,
+) -> Path | None:
+    """Look up a companion file (.cas/.cli/.liq) for the selected library project.
+
+    Returns None when no project is selected, when the project has been
+    renamed/deleted, or when the requested companion is missing. Companions
+    are optional, so we silently degrade — `tel_file()` clears the
+    selection on its own when the .slf becomes unreachable.
+    """
+    if library_selection is None:
+        return None
+    project_name, slf_name = library_selection
+    try:
+        for entry in scan_library(lib_root):
+            if entry.name == project_name:
+                attr = ext.lstrip(".").lower()
+                return getattr(resolve_project(entry, slf_name), attr)
+    except FileNotFoundError:
+        pass
+    return None
