@@ -277,6 +277,32 @@ class TestPickFilePath:
         )
         assert result == "/tmp/u.slf"
 
+    def test_rejects_asymmetric_library_args(self):
+        from server_core import _pick_file_path
+
+        # library_selection without lib_root — TypeError
+        with pytest.raises(TypeError, match="both be set or both be None"):
+            _pick_file_path(
+                uploaded=None,
+                use_upload=False,
+                library_selection=("x", "y.slf"),
+                lib_root=None,
+                example_key="X",
+                examples={"X": "/tmp/x.slf"},
+            )
+        # lib_root without library_selection — also TypeError
+        from pathlib import Path
+
+        with pytest.raises(TypeError):
+            _pick_file_path(
+                uploaded=None,
+                use_upload=False,
+                library_selection=None,
+                lib_root=Path("/tmp"),
+                example_key="X",
+                examples={"X": "/tmp/x.slf"},
+            )
+
 
 class TestFindUploadedByExt:
     def test_none_uploaded_returns_none(self):

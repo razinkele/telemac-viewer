@@ -161,10 +161,17 @@ def _pick_file_path(
         if slf_path is not None:
             return slf_path
         return uploaded[0]["datapath"]
+    if (library_selection is None) != (lib_root is None):
+        raise TypeError(
+            "_pick_file_path: library_selection and lib_root must both be set or both be None"
+        )
     if library_selection is not None and lib_root is not None:
         from model_library import scan_library, resolve_project
 
         project_name, slf_name = library_selection
+        # scan_library() applies the path-safety guard and is cheap relative
+        # to the reactive cadence (called on selection/upload changes, not on
+        # every render). Direct resolution would skip the safety guard.
         for entry in scan_library(lib_root):
             if entry.name == project_name:
                 return str(resolve_project(entry, slf_name).slf)
