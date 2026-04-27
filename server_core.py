@@ -223,7 +223,7 @@ def register_core_handlers(
         with _tf_lock:
             return fn(*args)
 
-    from model_library import library_root, find_companion  # noqa: F401
+    from model_library import library_root, find_companion
 
     # When library_selection is None (pre-Task-10 transitional state),
     # use a sentinel reactive value that always reads None.
@@ -398,12 +398,15 @@ def register_core_handlers(
         except (TypeError, AttributeError, KeyError):
             auto_crs_enabled = True
         uploaded = input.upload()
-        if uploaded and use_upload.get():
+        if library_selection.get() is not None:
+            cas_path = find_companion(library_selection.get(), library_root(), ".cas")
+            cas_candidates: tuple[str, ...] = (str(cas_path),) if cas_path else ()
+        elif uploaded and use_upload.get():
             # If the user uploaded a companion .cas alongside the .slf,
             # scan it for the GEOGRAPHIC SYSTEM keyword. Previously uploads
             # always got an empty tuple, disabling .cas-based CRS detection.
             uploaded_cas = _find_uploaded_by_ext(uploaded, ".cas")
-            cas_candidates: tuple[str, ...] = (uploaded_cas,) if uploaded_cas else ()
+            cas_candidates = (uploaded_cas,) if uploaded_cas else ()
         else:
             slf_path = EXAMPLES.get(input.example(), "")
             cas_candidates = (
@@ -584,9 +587,12 @@ def register_core_handlers(
 
     @reactive.calc
     def cli_data():
-        """Try to read .cli file: from the upload batch first, else from
-        the example file's directory.
+        """Try to read .cli file: library project first, upload second,
+        else from the example file's directory.
         """
+        if library_selection.get() is not None:
+            cli_path = find_companion(library_selection.get(), library_root(), ".cli")
+            return read_cli_file(str(cli_path)) if cli_path else None
         uploaded = input.upload()
         if uploaded and use_upload.get():
             uploaded_cli = _find_uploaded_by_ext(uploaded, ".cli")
