@@ -337,6 +337,9 @@ def register_core_handlers(
     # -- CRS reactive --
 
     current_crs = reactive.value(None)
+    # Tracks how the CRS was set: "manual" / "cas" / "coords" / "none" /
+    # "disabled" / "invalid". Drives the source-suffix on crs_status_ui.
+    current_crs_source = reactive.value("none")
 
     @reactive.effect
     def resolve_crs():
@@ -383,6 +386,7 @@ def register_core_handlers(
         )
 
         current_crs.set(outcome.crs)
+        current_crs_source.set(outcome.source)
         if outcome.source == "invalid":
             ui.notification_show(
                 outcome.error,
@@ -394,13 +398,30 @@ def register_core_handlers(
             with reactive.isolate():
                 ui.update_text("epsg_input", value=str(outcome.detected_epsg))
 
+    _CRS_SOURCE_LABELS = {
+        "manual": "manual EPSG",
+        "cas": "auto-detected from .cas",
+        "coords": "auto-detected from coordinates",
+        "disabled": "manual entry only",
+        "invalid": "invalid input",
+        "none": "no CRS",
+    }
+
     @output
     @render.ui
     def crs_status_ui():
         crs = current_crs.get()
+        source = current_crs_source.get()
+        source_label = _CRS_SOURCE_LABELS.get(source, source)
         if crs:
-            return ui.span(f"EPSG:{crs.epsg} — {crs.name}", class_="small text-success")
-        return ui.span("No CRS — basemap alignment disabled", class_="small text-muted")
+            return ui.span(
+                f"EPSG:{crs.epsg} — {crs.name} ({source_label})",
+                class_="small text-success",
+            )
+        return ui.span(
+            f"No CRS — basemap alignment disabled ({source_label})",
+            class_="small text-muted",
+        )
 
     @output
     @render.ui
