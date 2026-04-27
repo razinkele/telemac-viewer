@@ -252,7 +252,7 @@ def register_core_handlers(
             return ui.div()
         return ui.input_action_button(
             "clear_upload",
-            "Clear upload (use examples)",
+            "Clear upload",
             class_="btn-sm btn-outline-danger w-100 mb-1",
         )
 
