@@ -5,6 +5,7 @@ import glob
 import logging
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pyproj
@@ -141,24 +142,35 @@ def _pick_file_path(
     *,
     uploaded: list | None,
     use_upload: bool,
+    library_selection: tuple[str, str] | None = None,
+    lib_root: Path | None = None,
     example_key: str,
     examples: dict[str, str],
 ) -> str:
-    """Return the .slf path to open: uploaded file if selected, else example.
+    """Return the .slf path to open: upload, library, or example (in priority order).
 
-    Mirrors the ``.get(example_key, "")`` fallback semantic used by the 3
-    inlined upload-vs-example sites. With multi-file uploads, explicitly
-    picks the .slf rather than ``uploaded[0]`` (which could be a companion
-    .cas file). ``tel_file()`` keeps its direct ``EXAMPLES[k]`` indexing
-    deliberately (it wants KeyError on missing key for a clearer traceback
-    than letting ``TelemacFile("")`` fail downstream).
+    `library_selection` and `lib_root` default to `None` so existing call sites
+    can migrate one-by-one. When both are set, the library branch is consulted.
+
+    Raises FileNotFoundError if `library_selection` names a project that is no
+    longer in `lib_root` (folder deleted or renamed under the running app).
+    Caller is expected to clear the selection and re-evaluate.
     """
     if uploaded and use_upload:
         slf_path = _find_uploaded_by_ext(uploaded, ".slf")
         if slf_path is not None:
             return slf_path
-        # Pre-multi-file fallback (shouldn't hit with the widget filter).
         return uploaded[0]["datapath"]
+    if library_selection is not None and lib_root is not None:
+        from model_library import scan_library, resolve_project
+
+        project_name, slf_name = library_selection
+        for entry in scan_library(lib_root):
+            if entry.name == project_name:
+                return str(resolve_project(entry, slf_name).slf)
+        raise FileNotFoundError(
+            f"library project {project_name!r} no longer exists in {lib_root}"
+        )
     return examples.get(example_key, "")
 
 

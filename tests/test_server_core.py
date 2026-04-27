@@ -232,6 +232,51 @@ class TestPickFilePath:
         )
         assert result == "/tmp/u.slf"
 
+    def test_library_selection_returns_library_path(self, tmp_path):
+        from server_core import _pick_file_path
+
+        proj = tmp_path / "curonian"
+        proj.mkdir()
+        (proj / "results.slf").write_bytes(b"")
+        result = _pick_file_path(
+            uploaded=None,
+            use_upload=False,
+            library_selection=("curonian", "results.slf"),
+            lib_root=tmp_path,
+            example_key="X",
+            examples={"X": "/tmp/x.slf"},
+        )
+        assert result == str(proj.resolve() / "results.slf")
+
+    def test_raises_filenotfound_when_library_project_missing(self, tmp_path):
+        from server_core import _pick_file_path
+
+        with pytest.raises(FileNotFoundError):
+            _pick_file_path(
+                uploaded=None,
+                use_upload=False,
+                library_selection=("ghost", "results.slf"),
+                lib_root=tmp_path,
+                example_key="X",
+                examples={"X": "/tmp/x.slf"},
+            )
+
+    def test_upload_wins_over_library(self, tmp_path):
+        from server_core import _pick_file_path
+
+        proj = tmp_path / "curonian"
+        proj.mkdir()
+        (proj / "results.slf").write_bytes(b"")
+        result = _pick_file_path(
+            uploaded=[{"datapath": "/tmp/u.slf", "name": "u.slf"}],
+            use_upload=True,
+            library_selection=("curonian", "results.slf"),
+            lib_root=tmp_path,
+            example_key="X",
+            examples={"X": "/tmp/x.slf"},
+        )
+        assert result == "/tmp/u.slf"
+
 
 class TestFindUploadedByExt:
     def test_none_uploaded_returns_none(self):
