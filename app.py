@@ -60,6 +60,7 @@ from analysis import (
 )
 from telemac_defaults import is_bipolar
 from app_dispatch import decide_dispatch
+from model_library import library_root, scan_library
 
 # ---------------------------------------------------------------------------
 # Map widget
@@ -885,6 +886,20 @@ app_ui = ui.page_navbar(
             style="margin:0 0 8px; color: var(--coastal-text);",
         ),
         ui.input_select("example", "Example case", choices=EXAMPLE_CHOICES),
+        ui.div(
+            ui.div(
+                ui.span("My models", style="font-weight: 500;"),
+                ui.input_action_button(
+                    "library_refresh",
+                    "↻",
+                    class_="btn-sm",
+                    style="float: right; padding: 0 8px;",
+                    title="Rescan library directory",
+                ),
+                style="display: flex; justify-content: space-between; align-items: center;",
+            ),
+            ui.output_ui("library_select_ui"),
+        ),
         ui.input_file(
             "upload",
             "Or upload .slf (+ optional .cas / .cli / .liq companions)",
@@ -1143,6 +1158,7 @@ def server(input, output, session):
     measure_points = reactive.value([])  # list of [x_mesh_m, y_mesh_m] (max 2)
     measure_mode = reactive.value(False)  # True when waiting for measurement clicks
     use_upload = reactive.value(False)  # True when uploaded file should be used
+    library_selection: reactive.value[tuple[str, str] | None] = reactive.value(None)
     obs_data = reactive.value(
         None
     )  # parsed observation CSV: (times, values, varname) or None
@@ -1198,6 +1214,37 @@ def server(input, output, session):
         except (TypeError, AttributeError, KeyError):
             return "—"
 
+    # -- My-models library dropdown --
+    @reactive.calc
+    def library_choices() -> dict[str, str]:
+        """Build the My-models dropdown choice dict, refreshed on every
+        click of the ↻ button via the input.library_refresh dependency.
+        """
+        input.library_refresh()  # take dependency; rescan on each click
+        root = library_root()
+        entries = scan_library(root)
+        if not entries:
+            return {"": f"(no models — drop folders into {root})"}
+        out: dict[str, str] = {"": "— pick a project —"}
+        for entry in entries:
+            if len(entry.slf_files) == 1:
+                slf = entry.slf_files[0]
+                out[f"{entry.name}::{slf.name}"] = entry.name
+            else:
+                for slf in entry.slf_files:
+                    out[f"{entry.name}::{slf.name}"] = f"{entry.name} / {slf.name}"
+        return out
+
+    @output
+    @render.ui
+    def library_select_ui():
+        return ui.input_select(
+            "library_project",
+            label=None,
+            choices=library_choices(),
+            selected="",
+        )
+
     # -- Core reactive calcs (tel_file, mesh_geom, current_var, etc.) --
     from server_core import _pick_file_path, register_core_handlers
 
@@ -1222,6 +1269,7 @@ def server(input, output, session):
         polygon_geom,
         use_upload,
         is_3d_mode,
+        library_selection=library_selection,
     )
     tel_file = _core["tel_file"]
     mesh_geom = _core["mesh_geom"]
@@ -1295,6 +1343,8 @@ def server(input, output, session):
         file_path = _pick_file_path(
             uploaded=input.upload(),
             use_upload=use_upload.get(),
+            library_selection=library_selection.get(),
+            lib_root=library_root(),
             example_key=input.example(),
             examples=EXAMPLES,
         )
@@ -1493,6 +1543,7 @@ def server(input, output, session):
         use_upload,
         is_3d_mode,
         _run_with_lock,
+        library_selection=library_selection,
     )
 
     # -- Simulation launcher --
@@ -1823,6 +1874,8 @@ def server(input, output, session):
         current_path = _pick_file_path(
             uploaded=input.upload(),
             use_upload=use_upload.get(),
+            library_selection=library_selection.get(),
+            lib_root=library_root(),
             example_key=input.example(),
             examples=EXAMPLES,
         )
