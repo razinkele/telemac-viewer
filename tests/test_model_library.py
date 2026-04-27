@@ -51,3 +51,56 @@ class TestLibraryRoot:
         # library_root itself returns the resolved path but logs a warning.
         captured = capsys.readouterr()
         assert "viewer source tree" in captured.err.lower()
+
+
+class TestScanLibrary:
+    def test_empty_root(self, tmp_path):
+        from model_library import scan_library
+
+        assert scan_library(tmp_path) == []
+
+    def test_skips_non_directories(self, tmp_path):
+        from model_library import scan_library
+
+        (tmp_path / "notes.txt").write_text("ignore me")
+        (tmp_path / "loose.slf").write_bytes(b"")
+        assert scan_library(tmp_path) == []
+
+    def test_skips_hidden_dirs(self, tmp_path):
+        from model_library import scan_library
+
+        hidden = tmp_path / ".staging"
+        hidden.mkdir()
+        (hidden / "a.slf").write_bytes(b"")
+        assert scan_library(tmp_path) == []
+
+    def test_skips_projects_without_slf(self, tmp_path):
+        from model_library import scan_library
+
+        proj = tmp_path / "no-slf-here"
+        proj.mkdir()
+        (proj / "readme.md").write_text("wip")
+        assert scan_library(tmp_path) == []
+
+    def test_finds_multiple_slf_per_project(self, tmp_path):
+        from model_library import scan_library
+
+        proj = tmp_path / "curonian"
+        proj.mkdir()
+        (proj / "results.slf").write_bytes(b"")
+        (proj / "restart.slf").write_bytes(b"")
+        entries = scan_library(tmp_path)
+        assert len(entries) == 1
+        assert entries[0].name == "curonian"
+        assert len(entries[0].slf_files) == 2
+        assert [p.name for p in entries[0].slf_files] == ["restart.slf", "results.slf"]
+
+    def test_sorts_alphabetically(self, tmp_path):
+        from model_library import scan_library
+
+        for name in ("zebra", "alpha", "mango"):
+            proj = tmp_path / name
+            proj.mkdir()
+            (proj / "r.slf").write_bytes(b"")
+        names = [e.name for e in scan_library(tmp_path)]
+        assert names == ["alpha", "mango", "zebra"]

@@ -92,3 +92,51 @@ def library_root() -> Path:
                 f"could not create library root {root}: {exc}",
             )
     return root
+
+
+def scan_library(root: Path) -> list[ProjectEntry]:
+    """List one-level-deep project folders containing at least one .slf.
+
+    Detection rules (per spec §scan_library):
+    - Skip non-directories, hidden names, unresolvable symlinks.
+    - Skip folders with no .slf inside.
+    - Sort projects and .slf files alphabetically.
+    """
+    if _VIEWER_TREE in root.parents or root == _VIEWER_TREE:
+        return []
+    if not root.is_dir():
+        return []
+    try:
+        with os.scandir(root) as it:
+            candidates = sorted(it, key=lambda e: e.name.lower())
+    except OSError as exc:
+        _warn_once(f"scan-fail:{root}", f"could not list {root}: {exc}")
+        return []
+
+    entries: list[ProjectEntry] = []
+    for child in candidates:
+        if child.name.startswith("."):
+            continue
+        try:
+            if not child.is_dir(follow_symlinks=True):
+                continue
+        except OSError:
+            continue
+        proj_path = Path(child.path).resolve()
+        try:
+            slfs = tuple(
+                sorted(
+                    (
+                        p
+                        for p in proj_path.iterdir()
+                        if p.is_file() and p.suffix.lower() == ".slf"
+                    ),
+                    key=lambda p: p.name.lower(),
+                )
+            )
+        except OSError:
+            continue
+        if not slfs:
+            continue
+        entries.append(ProjectEntry(name=child.name, path=proj_path, slf_files=slfs))
+    return entries
