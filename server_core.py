@@ -286,11 +286,21 @@ def register_core_handlers(
                 examples=EXAMPLES,
             )
         except FileNotFoundError as exc:
-            # Library project disappeared under us — clear the selection
-            # and let the calc re-run with the next-priority source.
+            # Library project disappeared under us. Clear the selection (so future
+            # ticks see no library), then retry on this same tick with library
+            # disabled so we don't fall through to TelemacFile("") and show the
+            # user a confusing error toast — they get the upload or example load
+            # silently instead.
             _warn_once_session(f"stale-library:{exc}", str(exc))
             library_selection.set(None)
-            path = ""
+            path = _pick_file_path(
+                uploaded=input.upload(),
+                use_upload=use_upload.get(),
+                library_selection=None,
+                lib_root=None,
+                example_key=input.example(),
+                examples=EXAMPLES,
+            )
         try:
             tf = TelemacFile(path)
         except Exception as e:
