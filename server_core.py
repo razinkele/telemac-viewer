@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import glob
 import logging
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -204,6 +205,7 @@ def register_core_handlers(
     # shared upload state
     use_upload,
     is_3d_mode,
+    library_selection=None,  # NEW — optional until Task 10
 ):
     """Register core reactive calcs and return them for use by other modules.
 
@@ -220,6 +222,20 @@ def register_core_handlers(
         """Run fn(*args) while holding the TelemacFile lock."""
         with _tf_lock:
             return fn(*args)
+
+    from model_library import library_root, find_companion  # noqa: F401
+
+    # When library_selection is None (pre-Task-10 transitional state),
+    # use a sentinel reactive value that always reads None.
+    if library_selection is None:
+        library_selection = reactive.value(None)
+
+    _warned_session: set[str] = set()
+
+    def _warn_once_session(key: str, message: str) -> None:
+        if key not in _warned_session:
+            _warned_session.add(key)
+            print(f"[viewer] {message}", file=sys.stderr)
 
     # -- Upload management --
 
@@ -260,16 +276,21 @@ def register_core_handlers(
 
     @reactive.calc
     def tel_file():
-        uploaded = input.upload()
-        if uploaded and use_upload.get():
-            # Multi-file uploads (.slf + optional .cas) — find the .slf
-            # rather than trusting position 0.
-            path = _find_uploaded_by_ext(uploaded, ".slf")
-            if path is None:
-                # Backward-compat: pre-multi-file uploads only carry the .slf.
-                path = uploaded[0]["datapath"]
-        else:
-            path = EXAMPLES[input.example()]
+        try:
+            path = _pick_file_path(
+                uploaded=input.upload(),
+                use_upload=use_upload.get(),
+                library_selection=library_selection.get(),
+                lib_root=library_root(),
+                example_key=input.example(),
+                examples=EXAMPLES,
+            )
+        except FileNotFoundError as exc:
+            # Library project disappeared under us — clear the selection
+            # and let the calc re-run with the next-priority source.
+            _warn_once_session(f"stale-library:{exc}", str(exc))
+            library_selection.set(None)
+            path = ""
         try:
             tf = TelemacFile(path)
         except Exception as e:
@@ -279,16 +300,12 @@ def register_core_handlers(
                 duration=8,
                 id="file_open_err",
             )
-            # Re-raise to halt reactive chain — Shiny shows error state.
-            # _prev_tel_file is intentionally left alone so the previous
-            # file continues to back already-running calcs.
             raise
-        # Open succeeded — swap in the new file, then close the old one.
         old = _prev_tel_file[0]
         _prev_tel_file[0] = tf
         if old is not None:
             with _tf_lock:
-                _safe_close(old, "previous")
+                _safe_close(old, "previous tel_file")
         return tf
 
     @reactive.effect
