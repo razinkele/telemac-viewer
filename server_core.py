@@ -245,6 +245,7 @@ def register_core_handlers(
         if input.upload():
             use_upload.set(True)
             library_selection.set(None)
+            ui.update_select("library_project", selected="")
 
     @output
     @render.ui

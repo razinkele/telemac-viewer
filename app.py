@@ -1198,6 +1198,7 @@ def server(input, output, session):
     def _example_changed():
         if input.example():
             library_selection.set(None)
+            ui.update_select("library_project", selected="")
             use_upload.set(False)
 
     # -- Stat chip outputs (Map tab header) --
