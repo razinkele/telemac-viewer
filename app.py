@@ -1177,6 +1177,29 @@ def server(input, output, session):
     def _show_help():
         ui.modal_show(_HELP_MODAL)
 
+    # -- Mutual-exclusion between library / upload / example sources --
+    @reactive.effect
+    @reactive.event(input.library_project)
+    def _library_project_changed():
+        choice = input.library_project()
+        if not choice:
+            library_selection.set(None)
+            return
+        project_name, sep, slf_name = choice.partition("::")
+        if not sep:
+            # Defensive: dropdown values always carry "::"; ignore stray inputs.
+            return
+        use_upload.set(False)
+        ui.update_select("example", selected="")
+        library_selection.set((project_name, slf_name))
+
+    @reactive.effect
+    @reactive.event(input.example)
+    def _example_changed():
+        if input.example():
+            library_selection.set(None)
+            use_upload.set(False)
+
     # -- Stat chip outputs (Map tab header) --
     @output
     @render.text

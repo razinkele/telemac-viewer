@@ -244,6 +244,7 @@ def register_core_handlers(
     def handle_upload_change():
         if input.upload():
             use_upload.set(True)
+            library_selection.set(None)
 
     @output
     @render.ui
