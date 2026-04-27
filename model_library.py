@@ -140,3 +140,48 @@ def scan_library(root: Path) -> list[ProjectEntry]:
             continue
         entries.append(ProjectEntry(name=child.name, path=proj_path, slf_files=slfs))
     return entries
+
+
+def resolve_project(entry: ProjectEntry, slf_name: str) -> ProjectFiles:
+    """Locate the chosen .slf and any matching .cas/.cli/.liq companions.
+
+    Companion resolution: prefer the file whose basename matches the .slf;
+    otherwise, if exactly one file of that extension lives in the folder,
+    use it; otherwise return None for that companion.
+
+    Raises FileNotFoundError if `slf_name` doesn't exist in the project
+    folder (e.g., user deleted it after the dropdown was populated).
+    """
+    slf_path = entry.path / slf_name
+    if not slf_path.is_file():
+        raise FileNotFoundError(f"{slf_name} not found in {entry.path}")
+
+    base = Path(slf_name).stem
+    found: dict[str, Path | None] = {".cas": None, ".cli": None, ".liq": None}
+    by_ext: dict[str, list[Path]] = {".cas": [], ".cli": [], ".liq": []}
+
+    try:
+        children = list(entry.path.iterdir())
+    except OSError:
+        children = []
+
+    for p in children:
+        if not p.is_file():
+            continue
+        ext = p.suffix.lower()
+        if ext not in by_ext:
+            continue
+        by_ext[ext].append(p)
+        if p.stem == base:
+            found[ext] = p
+
+    for ext in (".cas", ".cli", ".liq"):
+        if found[ext] is None and len(by_ext[ext]) == 1:
+            found[ext] = by_ext[ext][0]
+
+    return ProjectFiles(
+        slf=slf_path,
+        cas=found[".cas"],
+        cli=found[".cli"],
+        liq=found[".liq"],
+    )

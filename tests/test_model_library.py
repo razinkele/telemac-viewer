@@ -104,3 +104,66 @@ class TestScanLibrary:
             (proj / "r.slf").write_bytes(b"")
         names = [e.name for e in scan_library(tmp_path)]
         assert names == ["alpha", "mango", "zebra"]
+
+
+class TestResolveProject:
+    def _make_entry(self, root, *, slf="results.slf"):
+        from model_library import ProjectEntry, scan_library
+
+        proj = root / "proj"
+        proj.mkdir()
+        (proj / slf).write_bytes(b"")
+        return scan_library(root)[0]
+
+    def test_basename_match_companions(self, tmp_path):
+        from model_library import resolve_project
+
+        entry = self._make_entry(tmp_path)
+        proj = entry.path
+        (proj / "results.cas").write_text("X")
+        (proj / "results.cli").write_text("X")
+        (proj / "results.liq").write_text("X")
+        # Decoy companions that should be ignored when basename match wins:
+        (proj / "other.cas").write_text("X")
+        files = resolve_project(entry, "results.slf")
+        assert files.slf == proj / "results.slf"
+        assert files.cas == proj / "results.cas"
+        assert files.cli == proj / "results.cli"
+        assert files.liq == proj / "results.liq"
+
+    def test_single_companion_fallback(self, tmp_path):
+        from model_library import resolve_project
+
+        entry = self._make_entry(tmp_path)
+        proj = entry.path
+        (proj / "boundary.cli").write_text("X")  # no basename match
+        files = resolve_project(entry, "results.slf")
+        assert files.cli == proj / "boundary.cli"
+        assert files.cas is None
+        assert files.liq is None
+
+    def test_no_match_returns_none(self, tmp_path):
+        from model_library import resolve_project
+
+        entry = self._make_entry(tmp_path)
+        proj = entry.path
+        (proj / "inflow.liq").write_text("X")
+        (proj / "outflow.liq").write_text("X")  # ambiguous, no match
+        files = resolve_project(entry, "results.slf")
+        assert files.liq is None
+
+    def test_raises_when_slf_missing(self, tmp_path):
+        from model_library import resolve_project
+
+        entry = self._make_entry(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            resolve_project(entry, "ghost.slf")
+
+    def test_unknown_extension_ignored(self, tmp_path):
+        from model_library import resolve_project
+
+        entry = self._make_entry(tmp_path)
+        proj = entry.path
+        (proj / "results.txt").write_text("X")  # not a TELEMAC companion
+        files = resolve_project(entry, "results.slf")
+        assert (files.cas, files.cli, files.liq) == (None, None, None)
