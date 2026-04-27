@@ -416,8 +416,14 @@ def register_analysis_handlers(
     is_3d_mode,
     # shared lock helper
     _run_with_lock,
+    library_selection=None,  # NEW — optional until Task 10
 ):
     """Register all analysis panel, chart, stats, and CSV download handlers."""
+
+    # When library_selection is None (pre-Task-10 transitional state),
+    # use a sentinel reactive value that always reads None.
+    if library_selection is None:
+        library_selection = reactive.value(None)
 
     # -- Analysis panel UI --
 
@@ -932,12 +938,16 @@ def register_analysis_handlers(
 
     @reactive.calc
     def liq_data():
-        """Read .liq file from the upload batch first, else from the
+        """Read .liq: library project first, upload second, else the
         example file's directory.
         """
         from constants import EXAMPLES
         from server_core import _find_uploaded_by_ext
+        from model_library import find_companion, library_root
 
+        if library_selection.get() is not None:
+            liq_path = find_companion(library_selection.get(), library_root(), ".liq")
+            return parse_liq_file(str(liq_path)) if liq_path else None
         uploaded = input.upload()
         if uploaded and use_upload.get():
             uploaded_liq = _find_uploaded_by_ext(uploaded, ".liq")
