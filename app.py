@@ -1262,11 +1262,19 @@ def server(input, output, session):
     @output
     @render.ui
     def library_select_ui():
+        choices = library_choices()
+        sel = library_selection.get()
+        if sel is None:
+            selected = ""
+        else:
+            project_name, slf_name = sel
+            candidate = f"{project_name}::{slf_name}"
+            selected = candidate if candidate in choices else ""
         return ui.input_select(
             "library_project",
             label=None,
-            choices=library_choices(),
-            selected="",
+            choices=choices,
+            selected=selected,
         )
 
     # -- Core reactive calcs (tel_file, mesh_geom, current_var, etc.) --
