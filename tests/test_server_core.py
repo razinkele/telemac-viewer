@@ -304,6 +304,44 @@ class TestPickFilePath:
             )
 
 
+class TestResolveLibraryArgs:
+    """`library_root()` always returns a Path, but the asymmetric guard
+    in `_pick_file_path` requires both `library_selection` and `lib_root`
+    to travel together. The reactive call site must normalize before
+    calling — this helper encapsulates that policy.
+    """
+
+    def test_no_selection_drops_root(self, tmp_path):
+        # Default startup state: nothing selected, library_root() resolves
+        # to a real Path. Asymmetric input would trip the guard.
+        from server_core import _resolve_library_args
+
+        assert _resolve_library_args(None, tmp_path) == (None, None)
+
+    def test_with_selection_passes_both(self, tmp_path):
+        from server_core import _resolve_library_args
+
+        sel = ("project", "results.slf")
+        assert _resolve_library_args(sel, tmp_path) == (sel, tmp_path)
+
+    def test_default_startup_falls_through_to_example(self, tmp_path):
+        # Regression: this exact arg shape (selection=None, root=<Path>)
+        # used to be passed verbatim to _pick_file_path and tripped the
+        # asymmetric-args guard at server_core.py:166.
+        from server_core import _pick_file_path, _resolve_library_args
+
+        sel, root = _resolve_library_args(None, tmp_path)
+        result = _pick_file_path(
+            uploaded=None,
+            use_upload=False,
+            library_selection=sel,
+            lib_root=root,
+            example_key="gouttedo",
+            examples={"gouttedo": "/some/path.slf"},
+        )
+        assert result == "/some/path.slf"
+
+
 class TestFindUploadedByExt:
     def test_none_uploaded_returns_none(self):
         from server_core import _find_uploaded_by_ext

@@ -182,6 +182,18 @@ def _pick_file_path(
     return examples.get(example_key, "")
 
 
+def _resolve_library_args(
+    selection: tuple[str, str] | None,
+    root: Path,
+) -> tuple[tuple[str, str] | None, Path | None]:
+    # `library_root()` always returns a Path, but `_pick_file_path` requires
+    # `library_selection` and `lib_root` to travel together. Normalize before
+    # calling so the no-selection case falls through to upload/example.
+    if selection is None:
+        return (None, None)
+    return (selection, root)
+
+
 def register_core_handlers(
     input,
     output,
@@ -279,11 +291,12 @@ def register_core_handlers(
     @reactive.calc
     def tel_file():
         try:
+            sel, root = _resolve_library_args(library_selection.get(), library_root())
             path = _pick_file_path(
                 uploaded=input.upload(),
                 use_upload=use_upload.get(),
-                library_selection=library_selection.get(),
-                lib_root=library_root(),
+                library_selection=sel,
+                lib_root=root,
                 example_key=input.example(),
                 examples=EXAMPLES,
             )
