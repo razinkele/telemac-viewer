@@ -70,3 +70,78 @@ def connect(db_path: Path = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
+
+
+# --- Schema ---
+
+SCHEMA_DDL = """
+CREATE TABLE IF NOT EXISTS users (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  username      TEXT NOT NULL UNIQUE COLLATE NOCASE
+                  CHECK(length(username) BETWEEN 1 AND 64),
+  password_hash TEXT NOT NULL,
+  display_name  TEXT CHECK(display_name IS NULL OR length(display_name) <= 64),
+  is_admin      INTEGER NOT NULL DEFAULT 0
+                  CHECK(is_admin IN (0, 1)),
+  preferences   TEXT NOT NULL DEFAULT '{}'
+                  CHECK(length(preferences) <= 8192),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+UPDATED_AT_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS users_updated_at
+AFTER UPDATE ON users
+FOR EACH ROW BEGIN
+  UPDATE users SET updated_at = datetime('now') WHERE id = NEW.id;
+END;
+"""
+
+# (name, type-uppercased, notnull, pk) — order-insensitive comparison.
+# Note: sqlite reports notnull=0 for INTEGER PRIMARY KEY because it is
+# technically a rowid alias and accepts NULL on INSERT (which the engine
+# auto-replaces with the next rowid). This is sqlite's documented quirk,
+# not a schema bug.
+EXPECTED_COLUMNS: frozenset[tuple[str, str, int, int]] = frozenset(
+    {
+        ("id", "INTEGER", 0, 1),
+        ("username", "TEXT", 1, 0),
+        ("password_hash", "TEXT", 1, 0),
+        ("display_name", "TEXT", 0, 0),
+        ("is_admin", "INTEGER", 1, 0),
+        ("preferences", "TEXT", 1, 0),
+        ("created_at", "TEXT", 1, 0),
+        ("updated_at", "TEXT", 1, 0),
+    }
+)
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create the users table + updated_at trigger, then verify shape."""
+    conn.executescript(SCHEMA_DDL + UPDATED_AT_TRIGGER)
+    _verify_schema(conn)
+
+
+def _verify_schema(conn: sqlite3.Connection) -> None:
+    """Compare PRAGMA table_info(users) against EXPECTED_COLUMNS.
+
+    CHECK constraint expression text is NOT verified (sqlite's pragma
+    doesn't expose it). Documented limitation in spec §5.
+    """
+    rows = list(conn.execute("PRAGMA table_info(users)"))
+    actual = frozenset(
+        (row[1], row[2].upper().split("(")[0], row[3], row[5]) for row in rows
+    )
+    if actual != EXPECTED_COLUMNS:
+        msg = (
+            "auth.db schema does not match v1 expectations.\n"
+            f"       Found columns: {sorted(c[0] for c in actual)}\n"
+            f"       Expected:      {sorted(c[0] for c in EXPECTED_COLUMNS)}\n"
+            "       v1 has no migration tool. Recovery options:\n"
+            "         (a) back up auth.db, remove it, and re-run "
+            "`python -m auth.cli create-admin`, or\n"
+            "         (b) downgrade telemac-viewer to the previous version.\n"
+            '       See README "Multi-user setup → Schema mismatch recovery".'
+        )
+        raise RuntimeError(msg)

@@ -24,3 +24,78 @@ def test_connect_creates_db_with_wal_and_0600(tmp_path: Path) -> None:
     assert oct(db_path.stat().st_mode & 0o777) == "0o600"
     # Parent dir created with 0o700
     assert oct(db_path.parent.stat().st_mode & 0o777) == "0o700"
+
+
+def test_ensure_schema_creates_users_table_with_expected_columns(
+    tmp_path: Path,
+) -> None:
+    from auth.core import connect, ensure_schema
+
+    db_path = tmp_path / "auth.db"
+    with connect(db_path) as conn:
+        ensure_schema(conn)
+        cols = {row[1]: row for row in conn.execute("PRAGMA table_info(users)")}
+
+    expected = {
+        "id",
+        "username",
+        "password_hash",
+        "display_name",
+        "is_admin",
+        "preferences",
+        "created_at",
+        "updated_at",
+    }
+    assert set(cols.keys()) == expected
+
+
+def test_updated_at_trigger_fires_on_update(tmp_path: Path) -> None:
+    from auth.core import connect, ensure_schema
+
+    db_path = tmp_path / "auth.db"
+    with connect(db_path) as conn:
+        ensure_schema(conn)
+        conn.execute(
+            "INSERT INTO users (username, password_hash, created_at, updated_at) "
+            "VALUES (?, ?, '2000-01-01 00:00:00', '2000-01-01 00:00:00')",
+            ("alice", "x"),
+        )
+        conn.execute("UPDATE users SET display_name='Alice' WHERE username='alice'")
+        after = conn.execute(
+            "SELECT updated_at FROM users WHERE username='alice'"
+        ).fetchone()[0]
+    assert after != "2000-01-01 00:00:00", (
+        "updated_at trigger did not fire — value is still the literal "
+        f"set on INSERT: {after!r}"
+    )
+
+
+def test_is_admin_check_constraint_rejects_invalid(tmp_path: Path) -> None:
+    from auth.core import connect, ensure_schema
+    import sqlite3
+
+    db_path = tmp_path / "auth.db"
+    with connect(db_path) as conn:
+        ensure_schema(conn)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO users (username, password_hash, is_admin) "
+                "VALUES (?, ?, ?)",
+                ("bob", "x", 2),  # invalid; CHECK rejects
+            )
+
+
+def test_verify_schema_detects_extra_column(tmp_path: Path) -> None:
+    from auth.core import connect, ensure_schema, _verify_schema
+
+    db_path = tmp_path / "auth.db"
+    with connect(db_path) as conn:
+        ensure_schema(conn)
+        conn.execute("ALTER TABLE users ADD COLUMN extra TEXT")
+        with pytest.raises(RuntimeError) as excinfo:
+            _verify_schema(conn)
+    msg = str(excinfo.value)
+    assert "schema does not match" in msg
+    assert "Recovery options" in msg
+    assert "create-admin" in msg
+    assert "README" in msg
