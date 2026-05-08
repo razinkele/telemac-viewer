@@ -13,12 +13,16 @@ separate `db.py` (connect + schema) and keep users CRUD here.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
+
+logger = logging.getLogger("auth")
 
 # --- Constants ---
 
@@ -145,3 +149,98 @@ def _verify_schema(conn: sqlite3.Connection) -> None:
             '       See README "Multi-user setup → Schema mismatch recovery".'
         )
         raise RuntimeError(msg)
+
+
+# --- User dataclass + CRUD ---
+
+
+@dataclass(frozen=True)
+class User:
+    id: int
+    username: str
+    password_hash: str
+    display_name: str | None
+    is_admin: bool
+    preferences: dict
+    created_at: str
+    updated_at: str
+
+
+def _row_to_user(row: tuple) -> User:
+    prefs_str = row[5] or "{}"
+    try:
+        prefs = json.loads(prefs_str)
+        if not isinstance(prefs, dict):
+            raise ValueError("not a dict")
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(
+            "Malformed preferences for user_id=%s, falling back to {}: %s",
+            row[0],
+            e,
+        )
+        prefs = {}
+    return User(
+        id=row[0],
+        username=row[1],
+        password_hash=row[2],
+        display_name=row[3],
+        is_admin=bool(row[4]),
+        preferences=prefs,
+        created_at=row[6],
+        updated_at=row[7],
+    )
+
+
+_SELECT_COLS = (
+    "id, username, password_hash, display_name, is_admin, "
+    "preferences, created_at, updated_at"
+)
+
+
+def get_user_by_username(conn: sqlite3.Connection, username: str) -> User | None:
+    row = conn.execute(
+        f"SELECT {_SELECT_COLS} FROM users WHERE username = ? COLLATE NOCASE",
+        (username,),
+    ).fetchone()
+    return _row_to_user(row) if row else None
+
+
+def get_user_by_id(conn: sqlite3.Connection, user_id: int) -> User | None:
+    row = conn.execute(
+        f"SELECT {_SELECT_COLS} FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    return _row_to_user(row) if row else None
+
+
+def create_user(
+    conn: sqlite3.Connection,
+    *,
+    username: str,
+    password_hash: str,
+    display_name: str | None = None,
+    is_admin: bool = False,
+) -> int:
+    """Insert a new user. Raises sqlite3.IntegrityError on duplicate username."""
+    cur = conn.execute(
+        "INSERT INTO users (username, password_hash, display_name, is_admin) "
+        "VALUES (?, ?, ?, ?)",
+        (username, password_hash, display_name, 1 if is_admin else 0),
+    )
+    return cur.lastrowid
+
+
+def list_users(conn: sqlite3.Connection) -> list[User]:
+    rows = conn.execute(
+        f"SELECT {_SELECT_COLS} FROM users ORDER BY username COLLATE NOCASE"
+    ).fetchall()
+    return [_row_to_user(r) for r in rows]
+
+
+def update_preferences(conn: sqlite3.Connection, *, user_id: int, prefs: dict) -> int:
+    """Persist preferences. Returns rowcount (0 if user no longer exists)."""
+    cur = conn.execute(
+        "UPDATE users SET preferences = ? WHERE id = ?",
+        (json.dumps(prefs), user_id),
+    )
+    return cur.rowcount

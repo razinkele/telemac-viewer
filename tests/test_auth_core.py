@@ -99,3 +99,121 @@ def test_verify_schema_detects_extra_column(tmp_path: Path) -> None:
     assert "Recovery options" in msg
     assert "create-admin" in msg
     assert "README" in msg
+
+
+def test_create_and_get_user(tmp_path: Path) -> None:
+    from auth.core import connect, create_user, ensure_schema, get_user_by_username
+
+    db = tmp_path / "auth.db"
+    with connect(db) as conn:
+        ensure_schema(conn)
+        uid = create_user(
+            conn,
+            username="alice",
+            password_hash="h",
+            display_name="Alice",
+            is_admin=True,
+        )
+        u = get_user_by_username(conn, "alice")
+    assert u is not None
+    assert u.id == uid
+    assert u.username == "alice"
+    assert u.display_name == "Alice"
+    assert u.is_admin is True
+    assert u.preferences == {}
+
+
+def test_get_user_by_username_case_insensitive(tmp_path: Path) -> None:
+    from auth.core import connect, create_user, ensure_schema, get_user_by_username
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        create_user(conn, username="Alice", password_hash="h")
+        assert get_user_by_username(conn, "alice") is not None
+        assert get_user_by_username(conn, "ALICE") is not None
+        assert get_user_by_username(conn, "bob") is None
+
+
+def test_get_user_by_id(tmp_path: Path) -> None:
+    from auth.core import connect, create_user, ensure_schema, get_user_by_id
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        uid = create_user(conn, username="alice", password_hash="h")
+        u = get_user_by_id(conn, uid)
+        assert u is not None
+        assert u.username == "alice"
+        assert get_user_by_id(conn, 99999) is None
+
+
+def test_create_user_rejects_duplicate(tmp_path: Path) -> None:
+    import sqlite3
+    from auth.core import connect, create_user, ensure_schema
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        create_user(conn, username="alice", password_hash="h")
+        with pytest.raises(sqlite3.IntegrityError):
+            create_user(
+                conn, username="ALICE", password_hash="h"
+            )  # case-insensitive UNIQUE
+
+
+def test_list_users_orders_by_username(tmp_path: Path) -> None:
+    from auth.core import connect, create_user, ensure_schema, list_users
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        for name in ("charlie", "alice", "bob"):
+            create_user(conn, username=name, password_hash="h")
+        users = list_users(conn)
+    assert [u.username for u in users] == ["alice", "bob", "charlie"]
+
+
+def test_user_preferences_round_trip(tmp_path: Path) -> None:
+    from auth.core import (
+        connect,
+        create_user,
+        ensure_schema,
+        get_user_by_username,
+        update_preferences,
+    )
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        create_user(conn, username="alice", password_hash="h")
+        update_preferences(
+            conn, user_id=1, prefs={"variable": "WATER DEPTH", "palette": "Viridis"}
+        )
+        u = get_user_by_username(conn, "alice")
+    assert u.preferences == {"variable": "WATER DEPTH", "palette": "Viridis"}
+
+
+def test_preferences_malformed_json_falls_back_to_empty(tmp_path: Path, caplog) -> None:
+    import logging
+
+    from auth.core import connect, create_user, ensure_schema, get_user_by_username
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        create_user(conn, username="alice", password_hash="h")
+        conn.execute("UPDATE users SET preferences='not-json' WHERE username='alice'")
+        with caplog.at_level(logging.WARNING, logger="auth"):
+            u = get_user_by_username(conn, "alice")
+    assert u.preferences == {}
+    assert any("Malformed preferences" in r.message for r in caplog.records), (
+        f"Expected WARNING log; got {[r.message for r in caplog.records]}"
+    )
+
+
+def test_update_preferences_returns_zero_rowcount_when_user_deleted(
+    tmp_path: Path,
+) -> None:
+    from auth.core import connect, create_user, ensure_schema, update_preferences
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        uid = create_user(conn, username="alice", password_hash="h")
+        conn.execute("DELETE FROM users WHERE id=?", (uid,))
+        rowcount = update_preferences(conn, user_id=uid, prefs={"variable": "X"})
+    assert rowcount == 0
