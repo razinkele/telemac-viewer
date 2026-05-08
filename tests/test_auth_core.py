@@ -516,3 +516,34 @@ def test_cli_create_admin_refuses_non_tty_stdin(tmp_path: Path) -> None:
     )
     assert r.returncode == 5, r.stderr
     assert "non-interactive" in r.stderr.lower() or "tty" in r.stderr.lower()
+
+
+def test_save_user_prefs_outcome_ok_gone_error(tmp_path: Path, caplog) -> None:
+    import logging
+    from unittest.mock import patch
+
+    from auth.core import connect, create_user, ensure_schema, save_user_prefs_outcome
+
+    db = tmp_path / "auth.db"
+    with connect(db) as conn:
+        ensure_schema(conn)
+        uid = create_user(conn, username="alice", password_hash="h")
+
+        # 'ok' path
+        assert save_user_prefs_outcome(conn, user_id=uid, prefs={"x": 1}) == "ok"
+
+        # 'gone' path — user deleted out from under us
+        conn.execute("DELETE FROM users WHERE id=?", (uid,))
+        assert save_user_prefs_outcome(conn, user_id=uid, prefs={"x": 1}) == "gone"
+
+        # 'error' path — DB write fails
+        with caplog.at_level(logging.ERROR, logger="auth"):
+            with patch(
+                "auth.core.update_preferences",
+                side_effect=__import__("sqlite3").OperationalError("locked"),
+            ):
+                assert (
+                    save_user_prefs_outcome(conn, user_id=uid, prefs={"x": 1})
+                    == "error"
+                )
+        assert any("Failed to save preferences" in r.message for r in caplog.records)

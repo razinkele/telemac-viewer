@@ -1028,6 +1028,22 @@ app_ui = ui.page_navbar(
                 ui.input_switch("loop", "Loop animation", value=True),
                 ui.output_ui("trail_length_ui"),
             ),
+            ui.accordion_panel(
+                "Account",
+                ui.input_action_button(
+                    "save_prefs",
+                    "Save current view as my preferences",
+                    class_="btn btn-sm btn-outline-primary",
+                ),
+                # Logout MUST be a POST form (the route is methods=["POST"] only;
+                # a plain link returns 405). Same pattern the admin templates use.
+                ui.HTML(
+                    '<form method="post" action="/logout" style="display:inline">'
+                    '<button type="submit" class="btn btn-link btn-sm">Log out</button>'
+                    "</form>"
+                ),
+                value="account",
+            ),
             id="sidebar_accordion",
             open=False,
             multiple=True,
@@ -1125,6 +1141,62 @@ app_ui = ui.page_navbar(
 
 def server(input, output, session):
     _tf_lock = threading.Lock()
+
+    # --- Auth: preferences hookup (spec §3.2, §7.4) ---
+    from auth.middleware import get_current_user_id_from_scope
+    from auth.core import connect as _auth_connect
+    from auth.core import DEFAULT_DB_PATH as _AUTH_DB
+    from auth.core import get_user_by_id as _auth_get_user
+    from auth.core import save_user_prefs_outcome as _auth_save_prefs
+
+    # Capture user_id ONCE at session start (closure variable). Never
+    # cache the User object — it would go stale if admin demotes/deletes
+    # mid-session.
+    _user_id = (
+        get_current_user_id_from_scope(session.http_conn.scope)
+        if session.http_conn
+        else None
+    )
+
+    # Restore preferences (palette + basemap apply immediately; variable
+    # is deferred to the post-mesh-load reactive — see existing variable
+    # update logic).
+    if _user_id is not None:
+        with _auth_connect(_AUTH_DB) as _conn:
+            _u = _auth_get_user(_conn, _user_id)
+        if _u is not None:
+            _prefs = _u.preferences
+            if p := _prefs.get("palette"):
+                ui.update_select("palette", selected=p)
+            if b := _prefs.get("basemap"):
+                ui.update_select("basemap", selected=b)
+            # Variable: stash for the post-mesh-load reactive below.
+            session._saved_pref_variable = _prefs.get("variable")
+
+    # The variable-restore reactive lives AFTER tel_file is bound by
+    # register_core_handlers — see _restore_saved_variable_pref below.
+
+    @reactive.effect
+    @reactive.event(input.save_prefs)
+    def _save_prefs():
+        if _user_id is None:
+            return  # not logged in (shouldn't happen behind middleware)
+        prefs = {
+            "variable": input.variable(),
+            "palette": input.palette(),
+            "basemap": input.basemap(),
+        }
+        with _auth_connect(_AUTH_DB) as _conn:
+            outcome = _auth_save_prefs(_conn, user_id=_user_id, prefs=prefs)
+        if outcome == "ok":
+            ui.notification_show("Preferences saved.", duration=3, type="message")
+        elif outcome == "error":
+            ui.notification_show(
+                "Could not save preferences — please retry.",
+                duration=5,
+                type="error",
+            )
+        # outcome == "gone" — silent no-op per spec §3.2
 
     # -----------------------------------------------------------------------
     # Reactive dependency chain:
@@ -1320,6 +1392,31 @@ def server(input, output, session):
         """Re-enable the .cli-missing warning when the user loads a new file."""
         tel_file()  # take dep on file change
         _cli_warn_shown.set(False)
+
+    # --- Auth: variable-preference restore on post-mesh-load (spec §7.4) ---
+    # The variable select is built dynamically by server_core.var_select_ui
+    # (which depends on tel_file()). We listen on tel_file() here and apply
+    # the saved preference once it's available, silently skipping (with an
+    # INFO log) when the saved variable isn't in the loaded mesh.
+    @reactive.effect
+    def _restore_saved_variable_pref():
+        tf = tel_file()  # take dep on file change
+        saved = getattr(session, "_saved_pref_variable", None)
+        if not saved:
+            return
+        vars_list = list(tf.varnames)
+        if saved in vars_list:
+            ui.update_select("variable", selected=saved)
+        else:
+            import logging as _logging
+
+            _logging.getLogger("auth").info(
+                "Saved preference variable=%r not in current mesh's variable "
+                "list (%d available); using default.",
+                saved,
+                len(vars_list),
+            )
+        session._saved_pref_variable = None  # one-shot
 
     # -- Mesh quality override --
 
@@ -1960,4 +2057,83 @@ def server(input, output, session):
     register_import_handlers(input, output, session)
 
 
-app = App(app_ui, server)
+# --- Auth integration (see docs/superpowers/specs/2026-05-08-user-accounts-design.md) ---
+import sys as _auth_sys
+from starlette.applications import Starlette as _AuthStarlette
+from starlette.routing import Mount as _AuthMount
+from auth.core import DEFAULT_DB_PATH as _AUTH_DB
+from auth.core import connect as _auth_connect
+from auth.core import ensure_schema as _auth_ensure_schema
+from auth.crypto import load_or_create_secret as _auth_load_secret
+from auth.middleware import auth_middleware as _auth_middleware
+from auth.routes import auth_routes as _auth_routes
+
+_shiny_app = App(app_ui, server)
+
+# Eagerly load (or create) the cookie signing secret at module import.
+# This is a small side-effect (~32 bytes file), unavoidable: the middleware
+# captures the secret at construction time (it runs before Starlette sets
+# scope["app"], so it cannot read the secret from app.state at request time).
+# Both the middleware AND routes.py read this same `bytes` object — the
+# routes.py `_get_secret` helper reads `request.app.state.auth_secret`
+# which is set by the lifespan handler below to point at the same object.
+#
+# Wrapped in try/except so a PermissionError / corrupt-secret exits with
+# the spec §5-mandated code 6 (chmod failure) rather than a raw traceback.
+import os as _auth_os
+
+try:
+    _AUTH_SECRET = _auth_load_secret(_AUTH_DB.parent / "auth_secret")
+except PermissionError as _e:
+    print(
+        f"ERROR: cannot read auth_secret with mode 0600: {_e}",
+        file=_auth_sys.stderr,
+    )
+    _auth_os._exit(6)  # os._exit, not sys.exit, so Shiny's runner can't swallow it
+except ValueError as _e:
+    print(f"ERROR: auth_secret is corrupt: {_e}", file=_auth_sys.stderr)
+    _auth_os._exit(6)
+
+# Schema check happens in a Starlette lifespan handler so plain
+# `import app` (e.g. test collection) doesn't create `auth.db` as a
+# side-effect. The lifespan handler also stamps `app.state.auth_secret`
+# so routes.py finds it without falling back to disk.
+from contextlib import asynccontextmanager as _auth_lifespan_cm
+
+
+@_auth_lifespan_cm
+async def _auth_lifespan(app):
+    # Use os._exit instead of `raise SystemExit(N)` — SystemExit raised
+    # inside an async generator can be swallowed by some ASGI runners
+    # (Starlette's lifespan handler catches BaseException up to a point,
+    # and Shiny's wrapping runner may not propagate it as a process exit).
+    # os._exit forces termination with the requested exit code regardless.
+    try:
+        with _auth_connect(_AUTH_DB) as _conn:
+            _auth_ensure_schema(_conn)
+    except PermissionError as _e:
+        print(
+            f"ERROR: cannot enforce 0600 on auth files: {_e}",
+            file=_auth_sys.stderr,
+        )
+        _auth_os._exit(6)
+    except RuntimeError as _e:
+        # Schema mismatch (raised by ensure_schema → _verify_schema). Spec §5
+        # mandates an actionable ERROR with recovery steps before refusing
+        # to serve.
+        print(f"ERROR: {_e}", file=_auth_sys.stderr)
+        _auth_os._exit(7)
+    app.state.auth_secret = _AUTH_SECRET
+    app.state.auth_db_path = _AUTH_DB
+    yield
+
+
+# Compose: Starlette app holds auth_routes + Shiny mount + lifespan;
+# middleware wraps the lot. The middleware closure captures _AUTH_SECRET
+# directly so it doesn't need to read scope["app"] (which is None at
+# middleware time anyway).
+_inner = _AuthStarlette(
+    routes=[*_auth_routes, _AuthMount("/", app=_shiny_app)],
+    lifespan=_auth_lifespan,
+)
+app = _auth_middleware(_inner, db_path=_AUTH_DB, secret=_AUTH_SECRET)

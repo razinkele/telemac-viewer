@@ -279,6 +279,26 @@ def update_password_hash(
     return cur.rowcount
 
 
+def save_user_prefs_outcome(
+    conn: sqlite3.Connection, *, user_id: int, prefs: dict
+) -> str:
+    """Persist preferences and return one of: 'ok', 'gone', 'error'.
+
+    'ok'    — saved (rowcount == 1)
+    'gone'  — user row no longer exists (rowcount == 0; Shiny shows nothing)
+    'error' — DB write failed (Shiny shows an error notification)
+
+    The Shiny `_save_prefs` reactive is a thin shim around this; tests
+    target the pure function so the error-toast contract is verifiable.
+    """
+    try:
+        rc = update_preferences(conn, user_id=user_id, prefs=prefs)
+    except sqlite3.Error:
+        logger.exception("Failed to save preferences for user_id=%s", user_id)
+        return "error"
+    return "ok" if rc > 0 else "gone"
+
+
 def delete_user_atomic(conn: sqlite3.Connection, *, user_id: int) -> bool:
     """Delete user. Refuses if doing so would leave zero admins.
 
