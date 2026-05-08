@@ -216,10 +216,248 @@ async def logout_post(request: Request) -> RedirectResponse:
     return response
 
 
-# --- Route table (admin routes added in Task 9) ---
+# --- Admin templates ---
+
+ADMIN_USERS_HTML = _jinja.from_string("""
+<!doctype html><html><head><title>Admin — Users</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem}
+table{width:100%;border-collapse:collapse}
+th,td{padding:.5rem;border-bottom:1px solid #ddd;text-align:left}
+.actions form{display:inline}
+button{background:#0a3d62;color:#fff;border:0;padding:.3rem .6rem;border-radius:.2rem;
+  cursor:pointer;margin:.1rem}
+.danger{background:#c0392b}
+.create{margin:1rem 0;padding:1rem;background:#f6f8fa;border-radius:.3rem}
+.create input,.create label{margin:.25rem .5rem .25rem 0}
+.err{color:#c0392b;background:#fdecea;padding:.5rem;border-radius:.3rem;margin:.5rem 0}
+</style></head><body>
+<h1>Users</h1>
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
+<form class="create" method="post" action="/admin/users/create">
+  <h3>Create user</h3>
+  <input name="username" placeholder="username" required>
+  <input name="display_name" placeholder="display name (optional)">
+  <input name="password" type="password" placeholder="password (≥8 chars, ≤72 bytes)" required>
+  <label><input type="checkbox" name="is_admin"> admin</label>
+  <button type="submit">Create</button>
+</form>
+<table><tr><th>id</th><th>username</th><th>display name</th><th>admin?</th>
+  <th>created</th><th>actions</th></tr>
+{% for u in users %}
+<tr>
+  <td>{{ u.id }}</td>
+  <td>{{ u.username }}</td>
+  <td>{{ u.display_name or "" }}</td>
+  <td>{{ "yes" if u.is_admin else "" }}</td>
+  <td>{{ u.created_at }}</td>
+  <td class="actions">
+    <form method="post" action="/admin/users/{{ u.id }}/edit" style="display:inline">
+      <input name="display_name" placeholder="new display name" value="{{ u.display_name or '' }}" style="width:8rem">
+      <input type="checkbox" name="is_admin"{% if u.is_admin %} checked{% endif %}>admin
+      <button type="submit">Save</button>
+    </form>
+    <form method="post" action="/admin/users/{{ u.id }}/reset-password" style="display:inline">
+      <input name="password" type="password" placeholder="new password" style="width:8rem">
+      <button type="submit">Reset PW</button>
+    </form>
+    <form method="post" action="/admin/users/{{ u.id }}/delete" style="display:inline"
+          onsubmit="return confirm('Delete {{ u.username }}?')">
+      <button type="submit" class="danger">Delete</button>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</table>
+<form method="post" action="/logout"><button type="submit">Log out</button></form>
+</body></html>
+""")
+
+
+# --- Validation helpers ---
+
+_USERNAME_RE = re.compile(r"^[\w.\-]{1,64}$")
+_DISPLAY_RE = re.compile(r"^[\w .\-]{1,64}$")
+
+
+def _validate_password(pw: str) -> str | None:
+    if len(pw) < 8:
+        return "Password must be at least 8 characters."
+    if len(pw.encode("utf-8")) > 72:
+        return "Password must be at most 72 UTF-8 bytes."
+    return None
+
+
+def _validate_username(name: str) -> str | None:
+    if not _USERNAME_RE.match(name):
+        return "Username must match [a-zA-Z0-9_.-], 1–64 chars."
+    return None
+
+
+def _render_users_page(
+    db_path: Path, error: str | None = None, status: int = 200
+) -> HTMLResponse:
+    with connect(db_path) as conn:
+        users = list_users(conn)
+    return HTMLResponse(
+        ADMIN_USERS_HTML.render(users=users, error=error),
+        status_code=status,
+    )
+
+
+# --- Admin handlers ---
+
+
+@handle_route_errors
+async def admin_users_get(request: Request) -> HTMLResponse:
+    require_admin(request)
+    return _render_users_page(_get_db_path(request))
+
+
+@handle_route_errors
+async def admin_users_create(request: Request) -> HTMLResponse | RedirectResponse:
+    require_admin(request)
+    form = await request.form()
+    username = (form.get("username") or "").strip()
+    display_name = (form.get("display_name") or "").strip() or None
+    password = form.get("password") or ""
+    is_admin = form.get("is_admin") in ("on", "true", "1")
+
+    if err := _validate_username(username):
+        return _render_users_page(_get_db_path(request), error=err, status=400)
+    if display_name and not _DISPLAY_RE.match(display_name):
+        return _render_users_page(
+            _get_db_path(request),
+            error="Display name must match [a-zA-Z0-9_ .-], 1–64 chars.",
+            status=400,
+        )
+    if err := _validate_password(password):
+        return _render_users_page(_get_db_path(request), error=err, status=400)
+
+    db = _get_db_path(request)
+    with connect(db) as conn:
+        # Pre-check (defense in depth; the INSERT is wrapped too)
+        if get_user_by_username(conn, username) is not None:
+            return _render_users_page(
+                db,
+                error=f"Username {username!r} already exists.",
+                status=400,
+            )
+        try:
+            create_user(
+                conn,
+                username=username,
+                password_hash=hash_password(password),
+                display_name=display_name,
+                is_admin=is_admin,
+            )
+        except sqlite3.IntegrityError:
+            return _render_users_page(
+                db,
+                error=f"Username {username!r} already exists.",
+                status=400,
+            )
+    logger.info("Admin created user: username=%s is_admin=%s", username, is_admin)
+    return RedirectResponse("/admin/users", status_code=302)
+
+
+@handle_route_errors
+async def admin_users_edit(request: Request) -> RedirectResponse | HTMLResponse:
+    require_admin(request)
+    user_id = int(request.path_params["user_id"])
+    form = await request.form()
+    display_name = (form.get("display_name") or "").strip() or None
+    is_admin = form.get("is_admin") in ("on", "true", "1")
+    if display_name and not _DISPLAY_RE.match(display_name):
+        return _render_users_page(
+            _get_db_path(request),
+            error="Display name must match [a-zA-Z0-9_ .-], 1–64 chars.",
+            status=400,
+        )
+    with connect(_get_db_path(request)) as conn:
+        rc = update_user(
+            conn, user_id=user_id, display_name=display_name, is_admin=is_admin
+        )
+    if rc == 0:
+        # User row was deleted by another admin between page load and form submit.
+        # Surface this rather than redirecting with a misleading "saved" log line.
+        return _render_users_page(
+            _get_db_path(request),
+            error=f"User id={user_id} no longer exists; refresh the page.",
+            status=400,
+        )
+    logger.info("Admin edited user_id=%s", user_id)
+    return RedirectResponse("/admin/users", status_code=302)
+
+
+@handle_route_errors
+async def admin_users_reset_password(
+    request: Request,
+) -> RedirectResponse | HTMLResponse:
+    require_admin(request)
+    user_id = int(request.path_params["user_id"])
+    form = await request.form()
+    password = form.get("password") or ""
+    if err := _validate_password(password):
+        return _render_users_page(_get_db_path(request), error=err, status=400)
+    with connect(_get_db_path(request)) as conn:
+        rc = update_password_hash(
+            conn, user_id=user_id, password_hash=hash_password(password)
+        )
+    if rc == 0:
+        # Worse-than-edit race: silently "succeeding" here would let the
+        # admin believe the user can now log in with the new password, but
+        # the user row is gone. Surface explicitly.
+        return _render_users_page(
+            _get_db_path(request),
+            error=f"User id={user_id} no longer exists; cannot reset password.",
+            status=400,
+        )
+    logger.info("Admin reset password for user_id=%s", user_id)
+    return RedirectResponse("/admin/users", status_code=302)
+
+
+@handle_route_errors
+async def admin_users_delete(request: Request) -> RedirectResponse | HTMLResponse:
+    require_admin(request)
+    user_id = int(request.path_params["user_id"])
+    db_path = _get_db_path(request)
+    with connect(db_path) as conn:
+        # Distinguish "last admin" from "already deleted" so the error
+        # message is honest instead of always saying "last admin".
+        target = get_user_by_id(conn, user_id)
+        if target is None:
+            return _render_users_page(
+                db_path,
+                error=f"User id={user_id} no longer exists.",
+                status=400,
+            )
+        deleted = delete_user_atomic(conn, user_id=user_id)
+    if not deleted:
+        # Atomic guard rejected the delete because target was the last admin
+        # (target existed in the SELECT above; only path to deleted=False).
+        return _render_users_page(
+            db_path,
+            error="Refusing to delete the last admin.",
+            status=400,
+        )
+    logger.info("Admin deleted user_id=%s", user_id)
+    return RedirectResponse("/admin/users", status_code=302)
+
+
+# --- Route table ---
 
 auth_routes = [
     Route("/login", login_get, methods=["GET"]),
     Route("/login", login_post, methods=["POST"]),
     Route("/logout", logout_post, methods=["POST"]),
+    Route("/admin/users", admin_users_get, methods=["GET"]),
+    Route("/admin/users/create", admin_users_create, methods=["POST"]),
+    Route("/admin/users/{user_id:int}/edit", admin_users_edit, methods=["POST"]),
+    Route(
+        "/admin/users/{user_id:int}/reset-password",
+        admin_users_reset_password,
+        methods=["POST"],
+    ),
+    Route("/admin/users/{user_id:int}/delete", admin_users_delete, methods=["POST"]),
 ]
