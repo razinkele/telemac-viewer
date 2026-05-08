@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/badge/version-3.5.0-blue.svg)](./CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-533%20passing-brightgreen.svg)](./tests)
+[![Tests](https://img.shields.io/badge/tests-603%20passing-brightgreen.svg)](./tests)
 [![License](https://img.shields.io/badge/license-LGPL%20v2.1-orange.svg)](#license)
 
 A web-based viewer for [TELEMAC](http://www.opentelemac.org/) simulation results,
@@ -22,6 +22,7 @@ engineering tools.
 - [Quick start](#quick-start)
 - [Usage](#usage)
 - [Configuration](#configuration)
+- [Multi-user setup](#multi-user-setup)
 - [Project structure](#project-structure)
 - [Development](#development)
 - [Testing](#testing)
@@ -169,6 +170,164 @@ shiny run app.py --port 8765
 
 Nothing in the viewer code auto-loads `.env` — wire up `python-dotenv` in
 `app.py` if you want that behavior.
+
+## Multi-user setup
+
+The viewer ships with a built-in account system so a small lab (2–10 users)
+can share one deployment without re-uploading data per person. Authentication
+is mandatory — every request goes through a Starlette ASGI middleware that
+redirects unauthenticated traffic to `/login`.
+
+State lives in two files under `~/.telemac-viewer/` (mode `0o700`):
+
+| File | Mode | Purpose |
+|---|---|---|
+| `auth.db` | `0o600` | sqlite (WAL) — `users` table only |
+| `auth_secret` | `0o600` | 32 random bytes used to sign session cookies |
+
+Both are created on first launch. Override the location by setting
+`TELEMAC_VIEWER_AUTH_DIR` before starting the app.
+
+### Deployment context (read this first)
+
+CSRF tokens and per-IP rate limits are intentionally **not** implemented in
+v1. The waivers depend on the viewer being deployed on a private host:
+
+- **Not publicly bound.** Run on `127.0.0.1` or an RFC1918 LAN interface; if
+  you must expose it via reverse proxy (nginx, gunicorn binding `0.0.0.0`),
+  add an ACL or VPN gate at the proxy layer. The app logs a `WARNING` on
+  startup if it detects a non-loopback / non-RFC1918 bind.
+- **No shared registrable domain** with another web app you don't control.
+  The session cookie uses `SameSite=Lax`, which protects against cross-site
+  POSTs but not against same-eTLD+1 sibling apps.
+
+Outside that envelope (public-internet deployment, multi-tenant cloud,
+shared corporate domain), wrap the viewer with an external auth proxy
+instead of relying on this module.
+
+### Bootstrap the first admin
+
+```bash
+cd telemac-viewer
+python -m auth.cli create-admin --username arturas --display-name "Arturas R."
+# password prompted twice via getpass; refused if stdin is not a tty
+```
+
+Refuses if any admin already exists — exit code `2` ("An admin already
+exists; use the /admin UI to add more users"). Once you have one admin,
+all further user management happens at `/admin/users` in the browser.
+
+#### Non-interactive (`--password-file`) for CI
+
+```bash
+echo -n 'correcthorsebatterystaple' > pwfile
+chmod 0600 pwfile
+python -m auth.cli create-admin --username svc --password-file pwfile
+```
+
+> **Trailing-newline trap.** `echo "secret" > pwfile` (no `-n`) writes
+> `secret\n`. The CLI strips a single trailing CR/LF (so the typical
+> mistake doesn't lock you out), but other trailing whitespace is treated
+> as part of the password. Prefer `printf '%s' "$pw" > pwfile` or
+> `echo -n` and verify with `xxd pwfile | tail -1`.
+
+The password file is rejected if its mode isn't exactly `0o600` (exit `5`).
+
+#### Reset a forgotten password
+
+```bash
+python -m auth.cli reset-password --username arturas
+# same tty / --password-file rules
+# exit 4 if user not found, 5 for stdin/file-mode errors
+```
+
+This does **not** invalidate existing sessions — see "Incident response" if
+that's what you need.
+
+### Admin UI
+
+Visit `/admin/users` while logged in as an admin. You can:
+
+- Create users (admin or non-admin)
+- Edit display name / role
+- Reset a user's password without knowing the old one
+- Delete users — except the last remaining admin (refused atomically inside
+  a transaction; the guard is not advisory)
+
+Templates use Jinja2 with `autoescape=True`, so usernames and display
+names containing HTML metacharacters render as text, never as markup.
+
+### Per-user preferences
+
+The "Account" accordion in the sidebar has a **Save current view as my
+preferences** button that stores the current variable, palette, and basemap
+choice on your user row. The next time you log in, those three knobs are
+restored automatically. (The variable preference is silently skipped — with
+an INFO log — when the saved variable isn't in the file you've loaded.)
+
+### Secret rotation
+
+Rotating `auth_secret` invalidates **every** active session — every user
+will be redirected to `/login` on their next request. Run when you suspect
+the secret has leaked, or as part of routine credential hygiene:
+
+```bash
+rm ~/.telemac-viewer/auth_secret
+systemctl restart telemac-viewer   # or however you launch the app
+```
+
+A fresh 32-byte secret is generated on the next launch (mode `0o600`).
+There is intentionally no `rotate-secret` CLI subcommand — the file-system
+operation is the contract.
+
+### Incident response
+
+If you suspect an account is compromised:
+
+1. **Reset the password.** Locks out the attacker if they only have the
+   password.
+   ```bash
+   python -m auth.cli reset-password --username <victim>
+   ```
+2. **Rotate the secret.** Required to evict the attacker's *live* session
+   cookie — password reset alone doesn't invalidate already-issued cookies.
+   ```bash
+   rm ~/.telemac-viewer/auth_secret
+   systemctl restart telemac-viewer
+   ```
+3. **Audit `users.last_login_at`** in `auth.db` for unfamiliar timestamps.
+
+If you suspect the attacker created an account, log in as admin and delete
+it from `/admin/users` *before* step 2 (otherwise they get logged out
+mid-rampage but the row remains).
+
+### Schema mismatch recovery
+
+The v1 schema has no migration tool. If you upgrade the viewer to a future
+version that changes the `users` table, the app refuses to start with a
+message like:
+
+```
+ERROR: auth.db schema does not match v1 expectations.
+       Found columns: ...
+       Expected:      ...
+       v1 has no migration tool. Recovery options:
+         (a) back up auth.db, remove it, and re-run
+             `python -m auth.cli create-admin`, or
+         (b) downgrade telemac-viewer to the previous version.
+```
+
+For option (a):
+
+```bash
+cp ~/.telemac-viewer/auth.db ~/.telemac-viewer/auth.db.bak.$(date +%F)
+rm ~/.telemac-viewer/auth.db
+python -m auth.cli create-admin --username <yours>
+# every other user must be re-created from /admin/users
+```
+
+Preferences and history are lost; passwords from the backup are not
+portable across schema changes.
 
 ## Project structure
 
