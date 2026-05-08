@@ -351,3 +351,168 @@ def test_delete_user_atomic_serializes_concurrent_admin_deletes(tmp_path: Path) 
         remaining = list_users(conn)
     admin_count = sum(1 for u in remaining if u.is_admin)
     assert admin_count == 1, f"Expected exactly 1 admin remaining; got {admin_count}"
+
+
+# --- CLI smoke tests (Task 10) ---
+
+
+def _run_cli(*args, env_extra=None, input_text=None):
+    """Run `python -m auth.cli ...` as a subprocess. Returns CompletedProcess."""
+    import os
+    import subprocess
+    import sys
+
+    env = os.environ.copy()
+    # Prepend, don't overwrite — preserve any inherited PYTHONPATH the
+    # project's pytest config may rely on for stub modules.
+    env["PYTHONPATH"] = (
+        "/home/razinka/telemac/telemac-viewer" + os.pathsep + env.get("PYTHONPATH", "")
+    )
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run(
+        [sys.executable, "-m", "auth.cli", *args],
+        capture_output=True,
+        text=True,
+        input=input_text,
+        env=env,
+    )
+
+
+def test_cli_create_admin_with_password_file(tmp_path: Path) -> None:
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("hunter2longenough\n")  # trailing newline must be stripped
+    pwfile.chmod(0o600)
+    db = tmp_path / "auth.db"
+
+    r = _run_cli(
+        "create-admin",
+        "--username",
+        "alice",
+        "--display-name",
+        "A",
+        "--password-file",
+        str(pwfile),
+        env_extra={"TELEMAC_VIEWER_DB": str(db)},
+    )
+    assert r.returncode == 0, r.stderr
+    # Verify the user was created and the password works (i.e. trailing \n was stripped)
+    from auth.core import connect, get_user_by_username
+    from auth.crypto import verify_password
+
+    with connect(db) as conn:
+        u = get_user_by_username(conn, "alice")
+    assert u is not None
+    assert u.is_admin is True
+    assert verify_password("hunter2longenough", u.password_hash), (
+        "trailing newline was not stripped — password mismatch"
+    )
+
+
+def test_cli_create_admin_refuses_when_admin_exists(tmp_path: Path) -> None:
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("hunter2longenough")
+    pwfile.chmod(0o600)
+    db = tmp_path / "auth.db"
+
+    r1 = _run_cli(
+        "create-admin",
+        "--username",
+        "alice",
+        "--password-file",
+        str(pwfile),
+        env_extra={"TELEMAC_VIEWER_DB": str(db)},
+    )
+    assert r1.returncode == 0
+
+    r2 = _run_cli(
+        "create-admin",
+        "--username",
+        "bob",
+        "--password-file",
+        str(pwfile),
+        env_extra={"TELEMAC_VIEWER_DB": str(db)},
+    )
+    assert r2.returncode == 2, r2.stderr
+    assert "admin already exists" in r2.stderr.lower()
+
+
+def test_cli_create_admin_refuses_loose_password_file_mode(tmp_path: Path) -> None:
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("hunter2longenough")
+    pwfile.chmod(0o644)  # too loose
+    db = tmp_path / "auth.db"
+
+    r = _run_cli(
+        "create-admin",
+        "--username",
+        "alice",
+        "--password-file",
+        str(pwfile),
+        env_extra={"TELEMAC_VIEWER_DB": str(db)},
+    )
+    assert r.returncode == 5, r.stderr
+    assert "0600" in r.stderr or "mode" in r.stderr.lower()
+
+
+def test_cli_reset_password_user_not_found(tmp_path: Path) -> None:
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("longenough")
+    pwfile.chmod(0o600)
+    db = tmp_path / "auth.db"
+    # ensure schema exists but no users
+    from auth.core import connect, ensure_schema
+
+    with connect(db) as conn:
+        ensure_schema(conn)
+
+    r = _run_cli(
+        "reset-password",
+        "--username",
+        "ghost",
+        "--password-file",
+        str(pwfile),
+        env_extra={"TELEMAC_VIEWER_DB": str(db)},
+    )
+    assert r.returncode == 4
+    assert "not found" in r.stderr.lower()
+
+
+def test_cli_create_admin_short_password_rejected(tmp_path: Path) -> None:
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("short")
+    pwfile.chmod(0o600)
+    db = tmp_path / "auth.db"
+
+    r = _run_cli(
+        "create-admin",
+        "--username",
+        "alice",
+        "--password-file",
+        str(pwfile),
+        env_extra={"TELEMAC_VIEWER_DB": str(db)},
+    )
+    assert r.returncode != 0
+    assert "8" in r.stderr
+
+
+def test_cli_create_admin_refuses_non_tty_stdin(tmp_path: Path) -> None:
+    """Spec §8: non-tty stdin without --password-file refuses with exit 5."""
+    import subprocess
+    import sys
+
+    db = tmp_path / "auth.db"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = (
+        "/home/razinka/telemac/telemac-viewer" + os.pathsep + env.get("PYTHONPATH", "")
+    )
+    env["TELEMAC_VIEWER_DB"] = str(db)
+    r = subprocess.run(
+        [sys.executable, "-m", "auth.cli", "create-admin", "--username", "x"],
+        capture_output=True,
+        text=True,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
+    assert r.returncode == 5, r.stderr
+    assert "non-interactive" in r.stderr.lower() or "tty" in r.stderr.lower()
