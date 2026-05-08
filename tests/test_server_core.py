@@ -342,6 +342,57 @@ class TestResolveLibraryArgs:
         assert result == "/some/path.slf"
 
 
+class TestLibraryRoundTrip:
+    """End-to-end exercise of the chain `tel_file()` performs in production:
+    `_resolve_library_args` → `_pick_file_path` → real path on disk.
+
+    Yesterday's regression (selection=None, root=<Path> → TypeError) lived
+    on this chain, between two correctly-tested helpers. These tests lock
+    the chain itself in.
+    """
+
+    @staticmethod
+    def _make_library(root):
+        for proj, slf_name in (
+            ("alpha", "alpha_geo.slf"),
+            ("beta", "beta_results.slf"),
+        ):
+            d = root / proj
+            d.mkdir()
+            (d / slf_name).write_bytes(b"")  # placeholder; not parsed here
+
+    def test_picked_project_resolves_to_disk_path(self, tmp_path):
+        from server_core import _pick_file_path, _resolve_library_args
+
+        self._make_library(tmp_path)
+        sel, root = _resolve_library_args(("alpha", "alpha_geo.slf"), tmp_path)
+        path = _pick_file_path(
+            uploaded=None,
+            use_upload=False,
+            library_selection=sel,
+            lib_root=root,
+            example_key="X",
+            examples={"X": "/x.slf"},
+        )
+        assert path == str(tmp_path / "alpha" / "alpha_geo.slf")
+
+    def test_upload_wins_over_library_pick(self, tmp_path):
+        from server_core import _pick_file_path, _resolve_library_args
+
+        self._make_library(tmp_path)
+        sel, root = _resolve_library_args(("alpha", "alpha_geo.slf"), tmp_path)
+        # User has a library project picked AND an upload — upload wins.
+        path = _pick_file_path(
+            uploaded=[{"datapath": "/uploads/u.slf", "name": "u.slf"}],
+            use_upload=True,
+            library_selection=sel,
+            lib_root=root,
+            example_key="X",
+            examples={"X": "/x.slf"},
+        )
+        assert path == "/uploads/u.slf"
+
+
 class TestFindUploadedByExt:
     def test_none_uploaded_returns_none(self):
         from server_core import _find_uploaded_by_ext
