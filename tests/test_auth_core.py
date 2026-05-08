@@ -217,3 +217,137 @@ def test_update_preferences_returns_zero_rowcount_when_user_deleted(
         conn.execute("DELETE FROM users WHERE id=?", (uid,))
         rowcount = update_preferences(conn, user_id=uid, prefs={"variable": "X"})
     assert rowcount == 0
+
+
+def test_update_user_modifies_display_name_and_is_admin(tmp_path: Path) -> None:
+    from auth.core import (
+        connect,
+        create_user,
+        ensure_schema,
+        get_user_by_id,
+        update_user,
+    )
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        uid = create_user(
+            conn, username="alice", password_hash="h", display_name="A", is_admin=False
+        )
+        update_user(conn, user_id=uid, display_name="Alice", is_admin=True)
+        u = get_user_by_id(conn, uid)
+    assert u.display_name == "Alice"
+    assert u.is_admin is True
+
+
+def test_update_password_hash(tmp_path: Path) -> None:
+    from auth.core import (
+        connect,
+        create_user,
+        ensure_schema,
+        get_user_by_id,
+        update_password_hash,
+    )
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        uid = create_user(conn, username="alice", password_hash="old")
+        update_password_hash(conn, user_id=uid, password_hash="new")
+        u = get_user_by_id(conn, uid)
+    assert u.password_hash == "new"
+
+
+def test_delete_user_atomic_succeeds_when_other_admins_exist(tmp_path: Path) -> None:
+    from auth.core import (
+        connect,
+        create_user,
+        ensure_schema,
+        delete_user_atomic,
+        get_user_by_id,
+    )
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        a = create_user(conn, username="alice", password_hash="h", is_admin=True)
+        b = create_user(conn, username="bob", password_hash="h", is_admin=True)
+        deleted = delete_user_atomic(conn, user_id=a)
+        assert deleted is True
+        assert get_user_by_id(conn, a) is None
+        assert get_user_by_id(conn, b) is not None
+
+
+def test_delete_user_atomic_refuses_last_admin(tmp_path: Path) -> None:
+    from auth.core import (
+        connect,
+        create_user,
+        ensure_schema,
+        delete_user_atomic,
+        get_user_by_id,
+    )
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        a = create_user(conn, username="alice", password_hash="h", is_admin=True)
+        deleted = delete_user_atomic(conn, user_id=a)
+        assert deleted is False
+        assert get_user_by_id(conn, a) is not None  # still there
+
+
+def test_delete_user_atomic_allows_non_admin_when_only_admin(tmp_path: Path) -> None:
+    from auth.core import (
+        connect,
+        create_user,
+        ensure_schema,
+        delete_user_atomic,
+        get_user_by_id,
+    )
+
+    with connect(tmp_path / "auth.db") as conn:
+        ensure_schema(conn)
+        admin = create_user(conn, username="admin", password_hash="h", is_admin=True)
+        bob = create_user(conn, username="bob", password_hash="h", is_admin=False)
+        assert delete_user_atomic(conn, user_id=bob) is True
+        assert get_user_by_id(conn, admin) is not None
+
+
+def test_delete_user_atomic_serializes_concurrent_admin_deletes(tmp_path: Path) -> None:
+    """Race regression: two admin sessions deleting each other simultaneously
+    must NOT both succeed. BEGIN IMMEDIATE serializes them.
+    """
+    import threading
+    from auth.core import (
+        connect,
+        create_user,
+        ensure_schema,
+        delete_user_atomic,
+        list_users,
+    )
+
+    db = tmp_path / "auth.db"
+    with connect(db) as conn:
+        ensure_schema(conn)
+        a = create_user(conn, username="alpha", password_hash="h", is_admin=True)
+        b = create_user(conn, username="bravo", password_hash="h", is_admin=True)
+
+    results: list[bool] = []
+    barrier = threading.Barrier(2)
+
+    def attempt_delete(target_id: int) -> None:
+        with connect(db) as conn:
+            barrier.wait()
+            results.append(delete_user_atomic(conn, user_id=target_id))
+
+    t1 = threading.Thread(target=attempt_delete, args=(b,))
+    t2 = threading.Thread(target=attempt_delete, args=(a,))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert sorted(results) == [False, True], (
+        f"Expected exactly one delete to succeed; got {results}. "
+        "Both succeeding means the last-admin guard race-condition is back."
+    )
+    with connect(db) as conn:
+        remaining = list_users(conn)
+    admin_count = sum(1 for u in remaining if u.is_admin)
+    assert admin_count == 1, f"Expected exactly 1 admin remaining; got {admin_count}"

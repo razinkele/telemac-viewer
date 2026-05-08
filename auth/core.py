@@ -244,3 +244,70 @@ def update_preferences(conn: sqlite3.Connection, *, user_id: int, prefs: dict) -
         (json.dumps(prefs), user_id),
     )
     return cur.rowcount
+
+
+def update_user(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    display_name: str | None = None,
+    is_admin: bool | None = None,
+) -> int:
+    """Update display_name and/or is_admin. Returns rowcount."""
+    sets = []
+    args: list = []
+    if display_name is not None:
+        sets.append("display_name = ?")
+        args.append(display_name)
+    if is_admin is not None:
+        sets.append("is_admin = ?")
+        args.append(1 if is_admin else 0)
+    if not sets:
+        return 0
+    args.append(user_id)
+    cur = conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", args)
+    return cur.rowcount
+
+
+def update_password_hash(
+    conn: sqlite3.Connection, *, user_id: int, password_hash: str
+) -> int:
+    cur = conn.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        (password_hash, user_id),
+    )
+    return cur.rowcount
+
+
+def delete_user_atomic(conn: sqlite3.Connection, *, user_id: int) -> bool:
+    """Delete user. Refuses if doing so would leave zero admins.
+
+    Returns True if a row was deleted, False if blocked by the
+    last-admin guard (or the user didn't exist).
+
+    SAFETY NOTE: the predicate `count(*) > 1` is evaluated within the
+    transaction's read snapshot. Without explicit serialization, two
+    concurrent admin sessions could each see count=2 and both delete,
+    leaving zero admins. The function therefore acquires an IMMEDIATE
+    (reserved-lock) transaction so only one writer at a time evaluates
+    the count + delete.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cur = conn.execute(
+            """
+            DELETE FROM users
+             WHERE id = ?
+               AND (
+                 is_admin = 0
+                 OR (SELECT count(*) FROM users WHERE is_admin = 1) > 1
+               )
+            """,
+            (user_id,),
+        )
+        deleted = cur.rowcount > 0
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return deleted
