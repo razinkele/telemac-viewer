@@ -1,6 +1,6 @@
 # TELEMAC Viewer
 
-[![Version](https://img.shields.io/badge/version-3.5.0-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.6.0-blue.svg)](./CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/tests-603%20passing-brightgreen.svg)](./tests)
 [![License](https://img.shields.io/badge/license-LGPL%20v2.1-orange.svg)](#license)
@@ -348,13 +348,19 @@ telemac-viewer/
 ├── telemac_defaults.py    # Variable semantics, module detection, velocity pairs
 ├── validation.py          # Observation parsing, RMSE, NSE, .liq parser
 ├── viewer_types.py        # Shared types (MeshGeometry, TelemacFileProtocol)
+├── auth/                  # Multi-user authentication
+│   ├── core.py            #   sqlite + users CRUD + schema verification
+│   ├── crypto.py          #   bcrypt + cookie sign/verify (NULL_HASH timing equalization)
+│   ├── middleware.py      #   ASGI function + scope accessors + warn_if_public_bind
+│   ├── routes.py          #   /login, /logout, /admin/* (Jinja2 + autoescape)
+│   └── cli.py             #   create-admin, reset-password
 ├── telemac_tools/         # HEC-RAS import pipeline
 │   ├── model.py           #   Data model (Reach, Mesh2D, BoundaryCondition)
 │   ├── hecras/            #   HEC-RAS HDF5 parsers (1D, 2D, BC time series)
 │   ├── domain/            #   Domain builder (DEM sampling, channel carving)
 │   ├── meshing/           #   Mesh generation (Triangle, Gmsh backends)
 │   └── telemac/           #   SELAFIN / CLI / CAS / LIQ file writers
-├── tests/                 # pytest suite (533 tests)
+├── tests/                 # pytest suite (603 tests)
 ├── docs/
 │   ├── API.md             # Module-level API reference
 │   ├── plans/             # Design documents for features

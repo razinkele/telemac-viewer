@@ -4,14 +4,25 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-05-09
+
 ### Added
 - **Multi-user authentication.** Mandatory login wraps the viewer in a Starlette ASGI middleware backed by a single-table sqlite (`~/.telemac-viewer/auth.db`, mode `0o600`, WAL) and stateless signed cookies (`itsdangerous`, 30-day fixed expiry). Bootstrap the first admin via `python -m auth.cli create-admin`; all further user management lives at `/admin/users` (Jinja2 templates with `autoescape=True`). Bcrypt via `passlib[bcrypt]` with a `BCRYPT_ROUNDS` constant pinning the cost factor for both real hashes and the timing-equalization NULL_HASH (so user-not-found and wrong-password cost the same wall-clock). Last-admin delete is refused atomically inside a transaction. CSRF and rate-limit are intentionally waived on the documented assumption of a private deploy host (see README "Multi-user setup → Deployment context"); the middleware logs a `WARNING` if it detects a non-loopback / non-RFC1918 bind.
 - New `auth/` package: `core.py` (sqlite + CRUD, schema-mismatch refuse-to-start), `crypto.py` (bcrypt + cookie sign/verify), `middleware.py` (ASGI function + accessors + `warn_if_public_bind`), `routes.py` (`/login`, `/logout`, `/admin/*`), `cli.py` (`create-admin`, `reset-password`).
 - "Account" accordion in the sidebar with a **Save current view as my preferences** button (stores current `variable` / `palette` / `basemap` on the user row) and a POST-form Logout link. Preferences are restored at session start; saved variable that isn't in the loaded mesh is silently skipped with an INFO log.
 - 65 new tests across `test_auth_core.py`, `test_auth_crypto.py`, `test_auth_middleware.py`, `test_auth_routes.py` covering the threat model: NULL_HASH cost-factor parity, fail-closed on DB error, autoescape XSS, last-admin delete guard, `next`-param open-redirect block, `--password-file` mode-0600 enforcement and trailing-CR/LF rstrip, schema-mismatch refusal, WebSocket cookie upgrade.
 
+### Fixed
+- **Startup TypeError when no library project is selected.** `tel_file()` was calling `_pick_file_path` with `lib_root` set but `library_selection=None`, tripping the asymmetry guard from 7e8593f on every fresh session before any example could load. Added `_resolve_library_args()` to drop `lib_root` when no selection is made; three regression tests now lock the default-startup combo.
+- **"My models" refresh button no longer drops the current selection.** The `↻` handler was passing `selected=""` on every render, which the reactive effect interpreted as a clear. The handler now reads the current selection value and preserves it across rescans (or clears only if the project was actually removed from the library).
+- bcrypt pinned to `<4.1` for passlib 1.7 compatibility — passlib reads `bcrypt.__about__.__version__`, removed in bcrypt 4.1, which made the version-detection probe fail for all passwords.
+- `auth.db` is now pre-created at `0o600` via `os.open(O_CREAT|O_EXCL|O_WRONLY, 0o600)` before sqlite3 connects, closing the brief world-readable window the prior post-connect chmod left open.
+
 ### Changed
 - Bumped test count badge: 533 → 603 passing.
+
+### Tests
+- New integration tests for `tel_file()`'s library round-trip chain (picked-project resolves to disk; upload wins over a picked library) — locks the surface that previously regressed silently between two well-tested helpers.
 
 ### Documentation
 - New README "Multi-user setup" section: `create-admin` walkthrough, `--password-file` trailing-newline trap warning, secret-rotation runbook (`rm auth_secret && restart`), incident-response runbook (reset-password + secret rotation to evict live sessions), §2.1 deployment-context expectations, schema-mismatch recovery procedure.
