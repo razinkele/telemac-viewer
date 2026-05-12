@@ -19,6 +19,19 @@ from layers import _COORD_METER_OFFSETS
 
 _logger = logging.getLogger(__name__)
 
+# Chunk size for streaming download handlers. The previous `yield f.read()`
+# pattern slurped the entire output file into memory before yielding —
+# fine for kilobyte CAS/CLI files, OOM-prone for multi-GB SLF outputs from
+# large HEC-RAS imports.
+_DOWNLOAD_CHUNK_SIZE = 64 * 1024
+
+
+def _stream_file_chunks(path: str):
+    """Yield a file's contents in fixed-size chunks for @render.download."""
+    with open(path, "rb") as f:
+        while chunk := f.read(_DOWNLOAD_CHUNK_SIZE):
+            yield chunk
+
 
 # shiny_deckgl.MapWidget is a native Shiny component (not an ipywidget),
 # so it is embedded via its .ui() method directly in app.py — it must NOT
@@ -114,29 +127,25 @@ def register_import_handlers(input, output, session):
     def dl_slf():
         path = _import_file_path(".slf")
         if path:
-            with open(path, "rb") as f:
-                yield f.read()
+            yield from _stream_file_chunks(path)
 
     @render.download(filename=lambda: _import_filename(".cli"))
     def dl_cli():
         path = _import_file_path(".cli")
         if path:
-            with open(path, "rb") as f:
-                yield f.read()
+            yield from _stream_file_chunks(path)
 
     @render.download(filename=lambda: _import_filename(".cas"))
     def dl_cas():
         path = _import_file_path(".cas")
         if path:
-            with open(path, "rb") as f:
-                yield f.read()
+            yield from _stream_file_chunks(path)
 
     @render.download(filename=lambda: _import_filename(".liq"))
     def dl_liq():
         path = _import_file_path(".liq")
         if path:
-            with open(path, "rb") as f:
-                yield f.read()
+            yield from _stream_file_chunks(path)
 
     # -- layer builder --
 
