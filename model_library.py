@@ -226,18 +226,39 @@ def library_root() -> Path:
     return root
 
 
-def scan_library(root: Path) -> list[ProjectEntry]:
-    """List one-level-deep project folders containing at least one .slf.
+def _scan_one(root: Path, source: LibrarySource) -> list[ProjectEntry]:
+    """Scan a single root directory and return its ProjectEntry list.
 
-    Detection rules (per spec §scan_library):
+    Preserves the v3.5.0 scan_library detection rules:
+    - Path-safety guard: refuse anything inside the viewer source tree.
     - Skip non-directories, hidden names, unresolvable symlinks.
     - Skip folders with no .slf inside.
-    - Sort projects and .slf files alphabetically.
+    - Sort projects and .slf files alphabetically (case-insensitive).
+
+    Corruption: if `root` exists but is not a directory (e.g., a regular
+    file), log a warning and return a single sentinel ProjectEntry so the
+    UI can render the problem visibly instead of an indistinguishable
+    empty list. A non-existent root is returned as an empty list — only an
+    existing non-directory triggers the sentinel.
     """
     if _VIEWER_TREE in root.parents or root == _VIEWER_TREE:
         return []
-    if not root.is_dir():
+    if not root.exists():
         return []
+    if not root.is_dir():
+        _warn_once(
+            f"corrupt-root:{root}",
+            f"library root {root} exists but is not a directory; "
+            "surfacing sentinel entry",
+        )
+        return [
+            ProjectEntry(
+                name="⚠ library unreadable",
+                path=root,
+                slf_files=(),
+                source=source,
+            )
+        ]
     try:
         with os.scandir(root) as it:
             candidates = sorted(it, key=lambda e: e.name.lower())
@@ -270,8 +291,51 @@ def scan_library(root: Path) -> list[ProjectEntry]:
             continue
         if not slfs:
             continue
-        entries.append(ProjectEntry(name=child.name, path=proj_path, slf_files=slfs))
+        entries.append(
+            ProjectEntry(
+                name=child.name,
+                path=proj_path,
+                slf_files=slfs,
+                source=source,
+            )
+        )
     return entries
+
+
+def scan_library(
+    root: Path | None = None,
+    *,
+    user_id: int | None = None,
+) -> list[ProjectEntry]:
+    """Walk the library root(s) and return a ProjectEntry list.
+
+    Call shapes:
+    - ``scan_library()`` / ``scan_library(some_root)`` — pre-existing
+      shared-only behavior; each returned entry has
+      ``source = LibrarySource.SHARED``.
+    - ``scan_library(user_id=N)`` — per-user library merged with the
+      shared overlay. Per-user wins on name collision: the shadowed
+      shared entry is NOT included (load-bearing invariant making the
+      dropdown unambiguous).
+    - ``scan_library(some_root, user_id=N)`` — same merge using
+      ``some_root`` as the shared root.
+
+    Corruption: if a root exists but is not a directory, a sentinel
+    ``ProjectEntry(name="⚠ library unreadable", slf_files=())`` is
+    emitted for that root's source so the UI surfaces the problem.
+    """
+    shared_root = root if root is not None else library_root()
+    shared_entries = _scan_one(shared_root, LibrarySource.SHARED)
+    if user_id is None:
+        return shared_entries
+
+    user_root = user_library_root(user_id)
+    user_entries = _scan_one(user_root, LibrarySource.USER)
+
+    # O(P_u + P_s) collision filter via set membership.
+    user_names = {e.name for e in user_entries}
+    shared_filtered = [s for s in shared_entries if s.name not in user_names]
+    return list(user_entries) + shared_filtered
 
 
 def resolve_project(entry: ProjectEntry, slf_name: str) -> ProjectFiles:

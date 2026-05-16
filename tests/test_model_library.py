@@ -525,3 +525,92 @@ def test_project_entry_can_be_constructed_with_user_source():
 
     e = ProjectEntry(name="x", path=Path("/x"), slf_files=(), source=LibrarySource.USER)
     assert e.source == LibrarySource.USER
+
+
+# --- Task 4: scan_library user_id merge + collision filter ---
+
+
+def test_scan_library_merges_per_user_and_shared(isolated_telemac_dirs):
+    from model_library import (
+        user_library_root,
+        library_root,
+        scan_library,
+        LibrarySource,
+    )
+
+    user_root = user_library_root(42)
+    (user_root / "alpha").mkdir()
+    (user_root / "alpha" / "case.slf").touch()
+    shared = library_root()
+    (shared / "beta").mkdir(parents=True)
+    (shared / "beta" / "case.slf").touch()
+
+    entries = scan_library(user_id=42)
+    by_name = {e.name: e for e in entries}
+    assert by_name["alpha"].source == LibrarySource.USER
+    assert by_name["beta"].source == LibrarySource.SHARED
+
+
+def test_scan_library_per_user_wins_collision_and_shadows_shared(
+    isolated_telemac_dirs,
+):
+    from model_library import (
+        user_library_root,
+        library_root,
+        scan_library,
+        LibrarySource,
+    )
+
+    user_root = user_library_root(43)
+    (user_root / "alpha").mkdir()
+    (user_root / "alpha" / "u.slf").touch()
+    shared = library_root()
+    (shared / "alpha").mkdir(parents=True)
+    (shared / "alpha" / "s.slf").touch()
+
+    entries = scan_library(user_id=43)
+    matching = [e for e in entries if e.name == "alpha"]
+    assert len(matching) == 1, "shared duplicate must be omitted"
+    assert matching[0].source == LibrarySource.USER
+    assert matching[0].slf_files[0].name == "u.slf"
+
+
+def test_scan_library_with_no_user_id_returns_shared_only(isolated_telemac_dirs):
+    from model_library import library_root, scan_library, LibrarySource
+
+    shared = library_root()
+    (shared / "gamma").mkdir(parents=True)
+    (shared / "gamma" / "case.slf").touch()
+
+    entries = scan_library()
+    assert all(e.source == LibrarySource.SHARED for e in entries)
+
+
+def test_scan_library_corrupt_user_root_returns_sentinel(
+    isolated_telemac_dirs, monkeypatch
+):
+    from model_library import scan_library, LibrarySource
+
+    base = isolated_telemac_dirs / "users" / "44"
+    base.mkdir(parents=True, exist_ok=True)
+    (base / "models").write_text("not a dir")
+
+    import model_library
+
+    monkeypatch.setattr(model_library, "user_library_root", lambda uid: base / "models")
+
+    entries = scan_library(user_id=44)
+    sentinels = [e for e in entries if e.name.startswith("⚠")]
+    assert len(sentinels) == 1
+    assert sentinels[0].source == LibrarySource.USER
+    assert sentinels[0].slf_files == ()
+
+
+def test_scan_library_ignores_leading_dot_dirs(isolated_telemac_dirs):
+    from model_library import library_root, scan_library
+
+    shared = library_root()
+    (shared / ".hidden").mkdir(parents=True)
+    (shared / ".hidden" / "case.slf").touch()
+    entries = scan_library()
+    assert all(not e.name.startswith(".") for e in entries)
