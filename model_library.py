@@ -375,11 +375,12 @@ def _sweep_stale_partials(models_dir: Path, *, user_id: int) -> int:
             continue
         candidates.append((entry, int(m.group(2))))
 
-    if len(candidates) > _SWEEP_MAX_PER_STARTUP:
+    available = max(0, _SWEEP_MAX_PER_STARTUP - _sweep_total_count)
+    if len(candidates) > available:
         print(
             f"[viewer] _sweep_stale_partials uid={user_id} found "
             f"{len(candidates)} stale partials; will sweep up to "
-            f"{_SWEEP_MAX_PER_STARTUP - _sweep_total_count} this restart",
+            f"{available} this restart (process cap reached after {_sweep_total_count})",
             file=sys.stderr,
         )
 

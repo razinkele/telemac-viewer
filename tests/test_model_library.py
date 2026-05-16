@@ -429,10 +429,18 @@ def test_sweep_stale_partials_bounded_at_max_per_startup(isolated_telemac_dirs):
     root = user_library_root(9)
     for i in range(_SWEEP_MAX_PER_STARTUP + 3):
         (root / f".bar{i}.partial-{99000 + i}").mkdir()
+    # Reset module-level state so we can call _sweep_stale_partials directly
+    # without going through user_library_root (which would also sweep and
+    # consume budget, causing double-counting).
     model_library._reset_for_testing()
-    root = user_library_root(9)
     removed = _sweep_stale_partials(root, user_id=9)
-    assert removed <= _SWEEP_MAX_PER_STARTUP
+    # Strict equality verifies the cap IS the limit, not a coincidental
+    # upper bound that would hold even if the mechanism were absent.
+    assert removed == _SWEEP_MAX_PER_STARTUP
+    leftover = [
+        p for p in root.iterdir() if p.name.startswith(".bar") and ".partial-" in p.name
+    ]
+    assert len(leftover) == 3
 
 
 def test_sweep_stale_partials_pid_alive_old_mtime_removed(
@@ -453,21 +461,24 @@ def test_sweep_stale_partials_pid_alive_old_mtime_removed(
     partial.mkdir()
     old = time.time() - 60 * 60
     os.utime(partial, (old, old))
-    model_library._reset_for_testing()
-    root = user_library_root(10)
+    # Reset the counter so this sweep starts with a fresh budget; then call
+    # _sweep_stale_partials directly (avoid going through user_library_root,
+    # which would also sweep and confuse the return-value contract check).
     model_library._reset_for_testing()
     removed = _sweep_stale_partials(root, user_id=10)
     assert not partial.exists()
+    assert removed == 1
 
 
 def test_sweep_stale_partials_permission_error_skips(
     isolated_telemac_dirs, monkeypatch
 ):
+    import model_library
     from model_library import user_library_root, _sweep_stale_partials
     import shutil
 
     root = user_library_root(11)
-    own_pid = __import__("os").getpid()
+    own_pid = os.getpid()
     partial = root / f".foo.partial-{own_pid}"
     partial.mkdir()
     monkeypatch.setattr(
@@ -482,10 +493,9 @@ def test_sweep_stale_partials_permission_error_skips(
         return real_rmtree(*a, **kw)
 
     monkeypatch.setattr("model_library.shutil.rmtree", spy)
-    import model_library
 
     model_library._reset_for_testing()
-    root = user_library_root(11)
-    _sweep_stale_partials(root, user_id=11)
+    removed = _sweep_stale_partials(root, user_id=11)
     assert partial.exists()
     assert called["rmtree"] is False
+    assert removed == 0
