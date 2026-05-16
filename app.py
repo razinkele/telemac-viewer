@@ -1,11 +1,14 @@
 # app.py — TELEMAC Viewer
+import errno
 import logging
 import threading
+from pathlib import Path
 
 from __version__ import __version__
 
 import numpy as np
 from shiny import App, reactive, render, ui
+from shiny.types import FileInfo
 from server_import import import_map_widget
 from shiny_deckgl import (
     MapWidget,
@@ -60,7 +63,14 @@ from analysis import (
 )
 from telemac_defaults import is_bipolar
 from app_dispatch import decide_dispatch
-from model_library import library_root, scan_library
+from model_library import (
+    library_root,
+    scan_library,
+    save_upload_to_library,
+    ProjectFiles,
+    _validate_companion_basename,
+    _validate_project_name,
+)
 
 # ---------------------------------------------------------------------------
 # Map widget
@@ -906,6 +916,12 @@ app_ui = ui.page_navbar(
             accept=[".slf", ".cas", ".cli", ".liq"],
             multiple=True,
         ),
+        ui.input_text("upload_save_name", "Save as…", placeholder="my_project"),
+        ui.input_action_button(
+            "upload_save",
+            "Save to my library",
+            class_="btn btn-sm btn-outline-primary",
+        ),
         ui.output_ui("clear_upload_ui"),
         ui.input_select(
             "basemap",
@@ -1139,6 +1155,45 @@ app_ui = ui.page_navbar(
 # ---------------------------------------------------------------------------
 
 
+def _build_project_files(uploaded: list[FileInfo]) -> ProjectFiles:
+    """Sort uploaded FileInfo list into a typed ProjectFiles bundle.
+
+    Validates client-supplied `name` fields via _validate_companion_basename
+    (strips path components + applies the extension whitelist).
+    Refuses duplicate suffixes (two .cas files, etc) and a missing .slf.
+    """
+    by_suffix: dict[str, Path] = {}
+    for fi in uploaded:
+        bare = _validate_companion_basename(fi["name"])  # raises ValueError
+        suffix = Path(bare).suffix.lower()
+        if suffix in by_suffix:
+            raise ValueError(
+                f"Multiple uploads with extension {suffix!r}; pick one and re-upload."
+            )
+        by_suffix[suffix] = Path(fi["datapath"])
+    if ".slf" not in by_suffix:
+        raise ValueError("No .slf file in upload.")
+    return ProjectFiles(
+        slf=by_suffix[".slf"],
+        cas=by_suffix.get(".cas"),
+        cli=by_suffix.get(".cli"),
+        liq=by_suffix.get(".liq"),
+    )
+
+
+def _empty_state() -> dict[str, dict[str, str]]:
+    """Empty-state choices dict for the library dropdown.
+
+    Returned by ``library_choices`` when both the user's library and the
+    shared overlay are empty. The friendly hint mirrors the path users
+    can drop folders into.
+    """
+    return {
+        "My models": {"": "(no saves yet — use 'Save to my library' on upload)"},
+        "Shared": {"": f"(no shared models — drop folders into {library_root()})"},
+    }
+
+
 def server(input, output, session):
     _tf_lock = threading.Lock()
 
@@ -1293,6 +1348,79 @@ def server(input, output, session):
             ui.update_select("library_project", selected="")
             use_upload.set(False)
 
+    # -- Save uploaded files to the user's library (per-user storage, v3.7.0) --
+    @reactive.effect
+    @reactive.event(input.upload_save)
+    async def _handle_upload_save():
+        import asyncio
+
+        # Re-resolve user_id at click time, NOT from closure-captured _user_id
+        scope = session.http_conn.scope if session.http_conn else {}
+        user_id = get_current_user_id_from_scope(scope)
+        if user_id is None:
+            _logger.warning("upload_save without user_id — defensive skip")
+            ui.notification_show("Not logged in.", type="error", duration=5)
+            return
+
+        # Verify the user still exists (admin may have deleted them mid-session).
+        with _auth_connect(_AUTH_DB) as _conn:
+            if _auth_get_user(_conn, user_id) is None:
+                _logger.warning("upload_save user_id=%d no longer exists", user_id)
+                ui.notification_show(
+                    "Your account was removed during this session — contact admin.",
+                    type="error",
+                    duration=8,
+                )
+                return
+
+        raw_name = (input.upload_save_name() or "").strip()
+        try:
+            validated_name = _validate_project_name(raw_name)
+        except ValueError as e:
+            ui.notification_show(str(e), type="error", duration=5)
+            return
+
+        try:
+            files = _build_project_files(input.upload())
+        except ValueError as e:
+            ui.notification_show(str(e), type="error", duration=5)
+            return
+
+        try:
+            with ui.Progress(min=0, max=1) as p:
+                p.set(
+                    0.0,
+                    message=f"Saving {validated_name}…",
+                    detail="(may take ~10–30 s for large files)",
+                )
+                saved = await asyncio.to_thread(
+                    save_upload_to_library,
+                    user_id,
+                    files,
+                    validated_name,
+                )
+                p.set(1.0, message="Saved.")
+        except FileExistsError:
+            ui.notification_show(
+                f"A project named '{validated_name}' already exists — pick a different name.",
+                type="error",
+                duration=6,
+            )
+            return
+        except OSError as e:
+            errno_name = errno.errorcode.get(getattr(e, "errno", None), "?")
+            _logger.exception("save_upload_to_library OSError uid=%d", user_id)
+            msg = (
+                "Save failed: disk full."
+                if e.errno == errno.ENOSPC
+                else f"Save failed ({errno_name})."
+            )
+            ui.notification_show(msg, type="error", duration=6)
+            return
+
+        library_version.set(library_version.get() + 1)
+        ui.notification_show(f"Saved to My models → {validated_name}.", duration=3)
+
     # -- Stat chip outputs (Map tab header) --
     @output
     @render.text
@@ -1332,44 +1460,63 @@ def server(input, output, session):
 
     # -- My-models library dropdown --
     @reactive.calc
-    def library_choices() -> dict[str, str]:
-        """Build the My-models dropdown choice dict.
+    def library_choices() -> dict[str, dict[str, str]]:
+        """Returns a grouped choices dict: {group_label: {dropdown_value: display}}.
 
-        Subscribes to ``merged_entries()`` (the per-session reactive that is
-        the single source of truth for the library view). Invalidation of
-        merged_entries — driven by input.library_refresh or library_version
-        — automatically reruns this calc.
+        dropdown_value preserves the existing "name::slf_basename" format so
+        _library_project_changed's partition("::") parser keeps working.
+        The source dimension surfaces only as the group_label (My models /
+        Shared).
+
+        Reads from merged_entries() — never calls scan_library directly.
         """
-        entries = merged_entries()
+        try:
+            entries = merged_entries()
+        except Exception:
+            _logger.exception("library_choices scan failed — returning stale view")
+            ui.notification_show(
+                "Could not refresh library — using last-known view. Check server log.",
+                type="warning",
+                duration=8,
+            )
+            return _last_known_library_choices.get() or _empty_state()
+
         if not entries:
-            root = library_root()
-            return {"": f"(no models — drop folders into {root})"}
-        out: dict[str, str] = {"": "— pick a project —"}
-        for entry in entries:
-            if len(entry.slf_files) == 1:
-                slf = entry.slf_files[0]
-                out[f"{entry.name}::{slf.name}"] = entry.name
+            return _empty_state()
+
+        grouped: dict[str, dict[str, str]] = {}
+        for e in entries:
+            # Sentinel entry from scan_library corruption handling — render visibly
+            if not e.slf_files:
+                grouped.setdefault(e.source.display_label, {})[
+                    f"!sentinel:{e.name}"
+                ] = e.name
+                continue
+            group = grouped.setdefault(e.source.display_label, {})
+            if len(e.slf_files) == 1:
+                slf = e.slf_files[0]
+                group[f"{e.name}::{slf.name}"] = e.name
             else:
-                for slf in entry.slf_files:
-                    out[f"{entry.name}::{slf.name}"] = f"{entry.name} / {slf.name}"
-        return out
+                for slf in e.slf_files:
+                    group[f"{e.name}::{slf.name}"] = f"{e.name} / {slf.name}"
+
+        _last_known_library_choices.set(grouped)
+        return grouped
 
     @output
     @render.ui
     def library_select_ui():
         choices = library_choices()
         sel = library_selection.get()
-        if sel is None:
-            selected = ""
-        else:
+        if sel:
             project_name, slf_name = sel
             candidate = f"{project_name}::{slf_name}"
-            selected = candidate if candidate in choices else ""
+            present = any(candidate in group for group in choices.values())
+            selected = candidate if present else ""
+        else:
+            selected = ""
         return ui.input_select(
-            "library_project",
-            label=None,
-            choices=choices,
-            selected=selected,
+            "library_project", "My models", choices=choices, selected=selected
         )
 
     # -- Core reactive calcs (tel_file, mesh_geom, current_var, etc.) --
