@@ -1380,8 +1380,17 @@ def server(input, output, session):
             ui.notification_show(str(e), type="error", duration=5)
             return
 
+        uploaded = input.upload()
+        if not uploaded:
+            ui.notification_show(
+                "No file uploaded yet — pick a .slf (+ optional companions) first.",
+                type="error",
+                duration=5,
+            )
+            return
+
         try:
-            files = _build_project_files(input.upload())
+            files = _build_project_files(uploaded)
         except ValueError as e:
             ui.notification_show(str(e), type="error", duration=5)
             return
