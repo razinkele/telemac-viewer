@@ -417,6 +417,7 @@ def register_analysis_handlers(
     # shared lock helper
     _run_with_lock,
     library_selection=None,  # NEW — optional until Task 10
+    merged_entries=None,  # NEW (v3.7.0) — per-session merged library reactive.calc
 ):
     """Register all analysis panel, chart, stats, and CSV download handlers."""
 
@@ -424,6 +425,15 @@ def register_analysis_handlers(
     # use a sentinel reactive value that always reads None.
     if library_selection is None:
         library_selection = reactive.value(None)
+
+    # When merged_entries is None (caller hasn't migrated to the per-session
+    # reactive yet), provide a sentinel that always reads an empty list.
+    if merged_entries is None:
+
+        def _empty_entries():
+            return []
+
+        merged_entries = _empty_entries
 
     # -- Analysis panel UI --
 
@@ -943,11 +953,10 @@ def register_analysis_handlers(
         """
         from constants import EXAMPLES
         from server_core import _find_uploaded_by_ext
-        from model_library import find_companion, scan_library
+        from model_library import find_companion
 
         if library_selection.get() is not None:
-            # TODO(Task 8): pass merged_entries() instead of scan_library().
-            liq_path = find_companion(library_selection.get(), scan_library(), ".liq")
+            liq_path = find_companion(library_selection.get(), merged_entries(), ".liq")
             return parse_liq_file(str(liq_path)) if liq_path else None
         uploaded = input.upload()
         if uploaded and use_upload.get():

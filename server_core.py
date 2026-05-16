@@ -145,6 +145,7 @@ def _pick_file_path(
     use_upload: bool,
     library_selection: tuple[str, str] | None = None,
     lib_root: Path | None = None,
+    merged_entries: list | None = None,
     example_key: str,
     examples: dict[str, str],
 ) -> str:
@@ -153,9 +154,13 @@ def _pick_file_path(
     `library_selection` and `lib_root` default to `None` so existing call sites
     can migrate one-by-one. When both are set, the library branch is consulted.
 
-    Raises FileNotFoundError if `library_selection` names a project that is no
-    longer in `lib_root` (folder deleted or renamed under the running app).
-    Caller is expected to clear the selection and re-evaluate.
+    `merged_entries` (when provided) is used as the source-of-truth project list
+    for the library branch — this is the per-session ``merged_entries()`` reactive
+    set up in app.server() (v3.7.0). When not provided, falls back to a direct
+    ``scan_library(lib_root)`` call. Either form raises FileNotFoundError if
+    `library_selection` names a project that is no longer present (folder
+    deleted or renamed under the running app); caller is expected to clear the
+    selection and re-evaluate.
     """
     if uploaded and use_upload:
         slf_path = _find_uploaded_by_ext(uploaded, ".slf")
@@ -170,10 +175,15 @@ def _pick_file_path(
         from model_library import scan_library, resolve_project
 
         project_name, slf_name = library_selection
-        # scan_library() applies the path-safety guard and is cheap relative
-        # to the reactive cadence (called on selection/upload changes, not on
-        # every render). Direct resolution would skip the safety guard.
-        for entry in scan_library(lib_root):
+        # Prefer the caller-provided merged_entries (per-session reactive cache);
+        # fall back to a direct scan_library() lookup when not provided so
+        # callers can migrate one at a time. scan_library() applies the
+        # path-safety guard, and merged_entries() goes through the same
+        # helper so the guard is preserved either way.
+        entries = (
+            merged_entries if merged_entries is not None else scan_library(lib_root)
+        )
+        for entry in entries:
             if entry.name == project_name:
                 return str(resolve_project(entry, slf_name).slf)
         raise FileNotFoundError(
@@ -218,6 +228,7 @@ def register_core_handlers(
     use_upload,
     is_3d_mode,
     library_selection=None,  # NEW — optional until Task 10
+    merged_entries=None,  # NEW (v3.7.0) — per-session merged library reactive.calc
 ):
     """Register core reactive calcs and return them for use by other modules.
 
@@ -235,12 +246,23 @@ def register_core_handlers(
         with _tf_lock:
             return fn(*args)
 
-    from model_library import library_root, find_companion, scan_library
+    from model_library import library_root, find_companion
 
     # When library_selection is None (pre-Task-10 transitional state),
     # use a sentinel reactive value that always reads None.
     if library_selection is None:
         library_selection = reactive.value(None)
+
+    # When merged_entries is None (caller hasn't migrated to the per-session
+    # reactive yet), provide a sentinel that always reads an empty list. The
+    # find_companion call sites and tel_file() fall through to upload/example
+    # paths in that case, mirroring the no-selection behavior.
+    if merged_entries is None:
+
+        def _empty_entries():
+            return []
+
+        merged_entries = _empty_entries
 
     _warned_session: set[str] = set()
 
@@ -297,6 +319,7 @@ def register_core_handlers(
                 use_upload=use_upload.get(),
                 library_selection=sel,
                 lib_root=root,
+                merged_entries=merged_entries(),
                 example_key=input.example(),
                 examples=EXAMPLES,
             )
@@ -414,8 +437,7 @@ def register_core_handlers(
             auto_crs_enabled = True
         uploaded = input.upload()
         if library_selection.get() is not None:
-            # TODO(Task 8): pass merged_entries() instead of scan_library().
-            cas_path = find_companion(library_selection.get(), scan_library(), ".cas")
+            cas_path = find_companion(library_selection.get(), merged_entries(), ".cas")
             cas_candidates: tuple[str, ...] = (str(cas_path),) if cas_path else ()
         elif uploaded and use_upload.get():
             # If the user uploaded a companion .cas alongside the .slf,
@@ -607,8 +629,7 @@ def register_core_handlers(
         else from the example file's directory.
         """
         if library_selection.get() is not None:
-            # TODO(Task 8): pass merged_entries() instead of scan_library().
-            cli_path = find_companion(library_selection.get(), scan_library(), ".cli")
+            cli_path = find_companion(library_selection.get(), merged_entries(), ".cli")
             return read_cli_file(str(cli_path)) if cli_path else None
         uploaded = input.upload()
         if uploaded and use_upload.get():

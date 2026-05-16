@@ -1231,6 +1231,26 @@ def server(input, output, session):
     measure_mode = reactive.value(False)  # True when waiting for measurement clicks
     use_upload = reactive.value(False)  # True when uploaded file should be used
     library_selection: reactive.value[tuple[str, str] | None] = reactive.value(None)
+
+    # --- Per-user storage (v3.7.0) ---
+    library_version = reactive.value(0)
+    _last_known_library_choices = reactive.value({})
+
+    @reactive.calc
+    def merged_entries():
+        """Single source of truth for the user's library view (per-session).
+
+        Bumped by input.library_refresh (↻ button) or library_version
+        (set by save / convert handlers). library_choices, _pick_file_path,
+        and find_companion all subscribe — eliminates the double-scan
+        + consistency-skew window from earlier drafts (spec §4.5 item 1b).
+        """
+        input.library_refresh()
+        library_version()
+        scope = session.http_conn.scope if session.http_conn else {}
+        user_id = get_current_user_id_from_scope(scope)
+        return scan_library(user_id=user_id)
+
     obs_data = reactive.value(
         None
     )  # parsed observation CSV: (times, values, varname) or None
@@ -1313,13 +1333,16 @@ def server(input, output, session):
     # -- My-models library dropdown --
     @reactive.calc
     def library_choices() -> dict[str, str]:
-        """Build the My-models dropdown choice dict, refreshed on every
-        click of the ↻ button via the input.library_refresh dependency.
+        """Build the My-models dropdown choice dict.
+
+        Subscribes to ``merged_entries()`` (the per-session reactive that is
+        the single source of truth for the library view). Invalidation of
+        merged_entries — driven by input.library_refresh or library_version
+        — automatically reruns this calc.
         """
-        input.library_refresh()  # take dependency; rescan on each click
-        root = library_root()
-        entries = scan_library(root)
+        entries = merged_entries()
         if not entries:
+            root = library_root()
             return {"": f"(no models — drop folders into {root})"}
         out: dict[str, str] = {"": "— pick a project —"}
         for entry in entries:
@@ -1374,6 +1397,7 @@ def server(input, output, session):
         use_upload,
         is_3d_mode,
         library_selection=library_selection,
+        merged_entries=merged_entries,
     )
     tel_file = _core["tel_file"]
     mesh_geom = _core["mesh_geom"]
@@ -1474,6 +1498,7 @@ def server(input, output, session):
             use_upload=use_upload.get(),
             library_selection=library_selection.get(),
             lib_root=library_root(),
+            merged_entries=merged_entries(),
             example_key=input.example(),
             examples=EXAMPLES,
         )
@@ -1673,6 +1698,7 @@ def server(input, output, session):
         is_3d_mode,
         _run_with_lock,
         library_selection=library_selection,
+        merged_entries=merged_entries,
     )
 
     # -- Simulation launcher --
@@ -2005,6 +2031,7 @@ def server(input, output, session):
             use_upload=use_upload.get(),
             library_selection=library_selection.get(),
             lib_root=library_root(),
+            merged_entries=merged_entries(),
             example_key=input.example(),
             examples=EXAMPLES,
         )
