@@ -12,6 +12,7 @@ access; refuses paths inside the viewer source tree.
 from __future__ import annotations
 
 import datetime
+import fcntl
 import os
 import re
 import shutil
@@ -520,3 +521,66 @@ def user_library_root(user_id: int) -> Path:
         _sweep_stale_partials(root, user_id=user_id)
 
     return root
+
+
+def save_upload_to_library(
+    user_id: int,
+    files: ProjectFiles,
+    name: str,
+) -> Path:
+    """Atomically save .slf + companions as a new per-user project.
+
+    Algorithm from spec §5.3:
+      1. Validate name + companion basenames (no FS side-effects yet)
+      2. Acquire per-user fcntl.flock on .lock (O_NOFOLLOW)
+      3. Pre-stat target — refuse if exists
+      4. mkdir .<name>.partial-<pid>
+      5. Copy each file in under sanitized basename, chmod 0o644
+      6. os.rename partial → final
+      7. Release flock; any failure step 4-6 → rmtree partial, re-raise
+
+    Raises ValueError on bad name, FileExistsError on collision/pre-staged,
+    OSError on anything else (errno preserved). Partial dir is always
+    cleaned up before re-raise.
+    """
+    name = _validate_project_name(name)
+
+    models_dir = user_library_root(user_id)
+    final = models_dir / name
+    partial = models_dir / f".{name}.partial-{os.getpid()}"
+    lock_path = models_dir / ".lock"
+
+    # Validate companion basenames BEFORE creating any partial dir
+    dest_basenames: dict[Path, str] = {}
+    for p in files.iter_existing():
+        dest_basenames[p] = _validate_companion_basename(p.name)
+    if len(set(dest_basenames.values())) != len(dest_basenames):
+        raise ValueError("Duplicate destination basenames in upload")
+
+    # O_NOFOLLOW defends against a hostile pre-placed .lock symlink
+    lock_fd = os.open(
+        lock_path,
+        os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        if final.exists():
+            raise FileExistsError(f"users/{user_id}/models/{name} already exists")
+
+        partial.mkdir(mode=0o755, parents=False)
+        try:
+            for src, dst_name in dest_basenames.items():
+                dst = partial / dst_name
+                shutil.copy(src, dst)
+                os.chmod(dst, 0o644)
+            os.rename(partial, final)
+        except BaseException:
+            shutil.rmtree(partial, ignore_errors=True)
+            raise
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+    return final

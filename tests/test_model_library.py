@@ -615,3 +615,200 @@ def test_scan_library_ignores_leading_dot_dirs(isolated_telemac_dirs):
     (shared / ".hidden" / "case.slf").touch()
     entries = scan_library()
     assert all(not e.name.startswith(".") for e in entries)
+
+
+# --- Task 5: save_upload_to_library ---
+
+
+def test_save_upload_round_trip_with_companions(isolated_telemac_dirs, tmp_path):
+    from model_library import (
+        save_upload_to_library,
+        ProjectFiles,
+        user_library_root,
+        LibrarySource,
+    )
+
+    src = tmp_path / "src"
+    src.mkdir()
+    slf = src / "case.slf"
+    slf.write_bytes(b"x" * 100)
+    cas = src / "case.cas"
+    cas.write_text("steering")
+    pf = ProjectFiles(slf=slf, cas=cas, cli=None, liq=None)
+
+    saved = save_upload_to_library(7, pf, "alpha_run")
+    assert saved.name == "alpha_run"
+    assert (saved / "case.slf").read_bytes() == b"x" * 100
+    assert (saved / "case.cas").read_text() == "steering"
+    # Project dir 0o755, files 0o644
+    assert oct(saved.stat().st_mode & 0o777) == "0o755"
+    assert oct((saved / "case.slf").stat().st_mode & 0o777) == "0o644"
+
+
+def test_save_upload_refuses_existing_name(isolated_telemac_dirs, tmp_path):
+    from model_library import save_upload_to_library, ProjectFiles, user_library_root
+
+    root = user_library_root(8)
+    (root / "alpha_run").mkdir()
+    slf = tmp_path / "case.slf"
+    slf.touch()
+    pf = ProjectFiles(slf=slf, cas=None, cli=None, liq=None)
+    with pytest.raises(FileExistsError):
+        save_upload_to_library(8, pf, "alpha_run")
+    assert not list(root.glob(".alpha_run.partial-*"))
+
+
+def test_save_upload_pre_stat_rejects_pre_staged_empty_dir(
+    isolated_telemac_dirs, tmp_path
+):
+    """os.rename would silently replace an existing empty dir; the pre-stat
+    refuses regardless of the target being empty or non-empty."""
+    from model_library import save_upload_to_library, ProjectFiles, user_library_root
+
+    root = user_library_root(9)
+    (root / "alpha_run").mkdir()
+    slf = tmp_path / "case.slf"
+    slf.touch()
+    pf = ProjectFiles(slf=slf, cas=None, cli=None, liq=None)
+    with pytest.raises(FileExistsError):
+        save_upload_to_library(9, pf, "alpha_run")
+
+
+def test_save_upload_cleans_up_partial_on_copy_failure(
+    isolated_telemac_dirs, tmp_path, monkeypatch
+):
+    import errno
+    from model_library import save_upload_to_library, ProjectFiles, user_library_root
+
+    root = user_library_root(10)
+    slf = tmp_path / "case.slf"
+    slf.touch()
+    cas = tmp_path / "case.cas"
+    cas.touch()
+    pf = ProjectFiles(slf=slf, cas=cas, cli=None, liq=None)
+
+    import shutil as _shutil_real
+
+    real_copy = _shutil_real.copy
+    call_count = {"n": 0}
+
+    def flaky_copy(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real_copy(src, dst)
+
+    monkeypatch.setattr("model_library.shutil.copy", flaky_copy)
+
+    with pytest.raises(OSError) as exc_info:
+        save_upload_to_library(10, pf, "alpha_run")
+    assert exc_info.value.errno == errno.ENOSPC
+    assert not list(root.glob(".alpha_run.partial-*"))
+    assert not (root / "alpha_run").exists()
+
+
+def test_save_upload_rejects_hostile_companion_basename(
+    isolated_telemac_dirs, tmp_path
+):
+    """Defense-in-depth: _validate_companion_basename catches hostile chars
+    in companion filenames before any FS write."""
+    from model_library import save_upload_to_library, ProjectFiles, user_library_root
+
+    user_library_root(11)
+    slf = tmp_path / "case.slf"
+    slf.touch()
+    bad = tmp_path / "case\x00.cli"  # NUL byte in name
+    pf = ProjectFiles(slf=slf, cas=None, cli=bad, liq=None)
+    with pytest.raises(ValueError):
+        save_upload_to_library(11, pf, "alpha_run")
+
+
+def test_save_upload_rejects_duplicate_companion_basenames(
+    isolated_telemac_dirs, tmp_path
+):
+    """Two companions resolving to the same basename are refused before
+    any copy. ProjectFiles slots cas + cli pointed at files both named
+    case.cas — by-suffix routing in _build_project_files would prevent
+    this normally, but defense-in-depth at save_upload_to_library is
+    tested here."""
+    from model_library import save_upload_to_library, ProjectFiles, user_library_root
+
+    user_library_root(12)
+    slf = tmp_path / "case.slf"
+    slf.touch()
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    cas_a = tmp_path / "case.cas"
+    cas_a.touch()
+    cas_b = sub / "case.cas"
+    cas_b.touch()
+    pf = ProjectFiles(slf=slf, cas=cas_a, cli=cas_b, liq=None)
+    with pytest.raises(ValueError, match="Duplicate destination basenames"):
+        save_upload_to_library(12, pf, "alpha_run")
+
+
+def test_save_upload_concurrent_same_name_serializes(isolated_telemac_dirs, tmp_path):
+    """flock serializes the pre-stat → rename window. One wins, the other
+    sees the target existing and raises FileExistsError."""
+    import threading
+    from model_library import save_upload_to_library, ProjectFiles, user_library_root
+
+    user_library_root(13)
+    slf_a = tmp_path / "a.slf"
+    slf_a.write_bytes(b"a")
+    slf_b = tmp_path / "b.slf"
+    slf_b.write_bytes(b"b")
+    pf_a = ProjectFiles(slf=slf_a, cas=None, cli=None, liq=None)
+    pf_b = ProjectFiles(slf=slf_b, cas=None, cli=None, liq=None)
+
+    results = []
+    barrier = threading.Barrier(2)
+
+    def worker(pf):
+        barrier.wait()
+        try:
+            results.append(("ok", save_upload_to_library(13, pf, "alpha")))
+        except FileExistsError as e:
+            results.append(("collision", e))
+
+    t1 = threading.Thread(target=worker, args=(pf_a,))
+    t2 = threading.Thread(target=worker, args=(pf_b,))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    outcomes = sorted(r[0] for r in results)
+    assert outcomes == ["collision", "ok"]
+
+
+def test_save_upload_lock_file_is_symlink_raises_oserror(
+    isolated_telemac_dirs, tmp_path
+):
+    """O_NOFOLLOW on the lock open defends against pre-placed symlinks."""
+    import os as _os
+    from model_library import save_upload_to_library, ProjectFiles, user_library_root
+
+    root = user_library_root(14)
+    target = tmp_path / "decoy"
+    target.touch()
+    _os.symlink(target, root / ".lock")
+    slf = tmp_path / "case.slf"
+    slf.touch()
+    pf = ProjectFiles(slf=slf, cas=None, cli=None, liq=None)
+    with pytest.raises(OSError):
+        save_upload_to_library(14, pf, "alpha_run")
+
+
+def test_save_upload_partial_dir_invisible_to_scan_during_save(
+    isolated_telemac_dirs, tmp_path
+):
+    """scan_library skips leading-dot entries, so a .name.partial-pid dir
+    is never returned even mid-save."""
+    from model_library import scan_library, user_library_root
+
+    root = user_library_root(15)
+    (root / ".alpha.partial-99999").mkdir()
+    (root / ".alpha.partial-99999" / "case.slf").touch()
+    entries = scan_library(user_id=15)
+    assert all(not e.name.startswith(".") for e in entries)
