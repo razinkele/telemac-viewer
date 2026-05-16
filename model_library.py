@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Iterator
 
 _VIEWER_TREE = Path(__file__).resolve().parent
 
@@ -169,6 +170,7 @@ class ProjectEntry:
     name: str
     path: Path
     slf_files: tuple[Path, ...]
+    source: LibrarySource = LibrarySource.SHARED
 
 
 @dataclass(frozen=True)
@@ -177,6 +179,13 @@ class ProjectFiles:
     cas: Path | None
     cli: Path | None
     liq: Path | None
+
+    def iter_existing(self) -> Iterator[Path]:
+        """Yield slf + each non-None companion. Used by save_upload_to_library."""
+        yield self.slf
+        for p in (self.cas, self.cli, self.liq):
+            if p is not None:
+                yield p
 
 
 def library_root() -> Path:

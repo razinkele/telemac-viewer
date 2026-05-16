@@ -499,3 +499,29 @@ def test_sweep_stale_partials_permission_error_skips(
     assert partial.exists()
     assert called["rmtree"] is False
     assert removed == 0
+
+
+def test_project_files_iter_existing_yields_slf_and_non_none_companions(tmp_path):
+    from model_library import ProjectFiles
+
+    slf = tmp_path / "case.slf"
+    cas = tmp_path / "case.cas"
+    slf.touch()
+    cas.touch()
+    pf = ProjectFiles(slf=slf, cas=cas, cli=None, liq=None)
+    files = list(pf.iter_existing())
+    assert files == [slf, cas]
+
+
+def test_project_entry_default_source_is_shared():
+    from model_library import ProjectEntry, LibrarySource
+
+    e = ProjectEntry(name="x", path=Path("/x"), slf_files=())
+    assert e.source == LibrarySource.SHARED
+
+
+def test_project_entry_can_be_constructed_with_user_source():
+    from model_library import ProjectEntry, LibrarySource
+
+    e = ProjectEntry(name="x", path=Path("/x"), slf_files=(), source=LibrarySource.USER)
+    assert e.source == LibrarySource.USER
