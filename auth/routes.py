@@ -9,10 +9,12 @@ import logging
 import re
 import sqlite3
 from pathlib import Path
+from typing import Literal
 
+import itsdangerous
 from jinja2 import Environment, BaseLoader, select_autoescape
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse
+from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from starlette.routing import Route
 
 from auth.core import (
@@ -144,6 +146,87 @@ def _get_db_path(request: Request) -> Path:
     return getattr(request.app.state, "auth_db_path", DEFAULT_DB_PATH)
 
 
+# --- Admin flash + confirm-token helpers (Task 10) ---
+
+
+def _admin_actor_id(request: Request) -> int:
+    """Return the authenticated admin's user_id from the request scope.
+
+    Safe to call only after require_admin has run on the request.
+    """
+    uid = request.scope.get("user_id")
+    if not isinstance(uid, int) or uid <= 0:
+        raise RuntimeError("admin route reached without scope user_id")
+    return uid
+
+
+def _flash(
+    request: Request,
+    response,
+    level: Literal["info", "warn", "error"],
+    message: str,
+) -> None:
+    """Set a one-shot signed flash cookie. Read + cleared by the next
+    /admin/users render via _read_flash(request, response).
+
+    Takes ``request`` because the secret is loaded per-request via
+    ``_get_secret(request)`` — there is no module-level secret constant.
+    """
+    payload = itsdangerous.URLSafeTimedSerializer(
+        _get_secret(request),
+        salt="admin-flash",
+    ).dumps({"level": level, "message": message})
+    response.set_cookie(
+        "admin_flash",
+        payload,
+        max_age=60,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        path="/admin",
+    )
+
+
+def _read_flash(request: Request, response) -> dict | None:
+    """Read + clear the one-shot admin_flash cookie.
+
+    Returns the decoded {"level", "message"} payload, or None if the
+    cookie is missing, expired, or has a bad signature. In all
+    cookie-present cases, instructs the browser to clear the cookie so
+    the banner shows exactly once.
+    """
+    raw = request.cookies.get("admin_flash")
+    if not raw:
+        return None
+    response.delete_cookie("admin_flash", path="/admin")
+    try:
+        return itsdangerous.URLSafeTimedSerializer(
+            _get_secret(request),
+            salt="admin-flash",
+        ).loads(raw, max_age=60)
+    except itsdangerous.SignatureExpired:
+        logger.info("admin flash cookie expired — clearing")
+        return None
+    except itsdangerous.BadSignature:
+        logger.warning("admin flash cookie bad signature — clearing")
+        return None
+
+
+def _redirect_with_flash(
+    request: Request,
+    level: Literal["info", "warn", "error"],
+    message: str,
+) -> RedirectResponse:
+    """Construct the /admin/users redirect AND attach the signed flash cookie.
+
+    Folds the response-construct + cookie-mutate pattern into one call so
+    every branch in admin_users_delete_post returns one of these.
+    """
+    response = RedirectResponse("/admin/users", status_code=303)
+    _flash(request, response, level, message)
+    return response
+
+
 # --- Routes ---
 
 
@@ -231,8 +314,15 @@ button{background:#0a3d62;color:#fff;border:0;padding:.3rem .6rem;border-radius:
 .create{margin:1rem 0;padding:1rem;background:#f6f8fa;border-radius:.3rem}
 .create input,.create label{margin:.25rem .5rem .25rem 0}
 .err{color:#c0392b;background:#fdecea;padding:.5rem;border-radius:.3rem;margin:.5rem 0}
+.alert{padding:.5rem;border-radius:.3rem;margin:.5rem 0}
+.alert-info{color:#0a3d62;background:#e8f4ff}
+.alert-warn{color:#8a6d3b;background:#fcf2dc}
+.alert-error{color:#c0392b;background:#fdecea}
+.del-link{color:#c0392b;text-decoration:none;padding:.3rem .6rem;
+  border:1px solid #c0392b;border-radius:.2rem;display:inline-block;margin:.1rem}
 </style></head><body>
 <h1>Users</h1>
+{% if flash %}<div class="alert alert-{{ flash.level }}">{{ flash.message }}</div>{% endif %}
 {% if error %}<div class="err">{{ error }}</div>{% endif %}
 <form class="create" method="post" action="/admin/users/create">
   <h3>Create user</h3>
@@ -261,15 +351,37 @@ button{background:#0a3d62;color:#fff;border:0;padding:.3rem .6rem;border-radius:
       <input name="password" type="password" placeholder="new password" style="width:8rem">
       <button type="submit">Reset PW</button>
     </form>
-    <form method="post" action="/admin/users/{{ u.id }}/delete" style="display:inline"
-          onsubmit="return confirm('Delete {{ u.username }}?')">
-      <button type="submit" class="danger">Delete</button>
-    </form>
+    <a class="del-link" href="/admin/users/{{ u.id }}/delete">Delete</a>
   </td>
 </tr>
 {% endfor %}
 </table>
 <form method="post" action="/logout"><button type="submit">Log out</button></form>
+</body></html>
+""")
+
+
+ADMIN_DELETE_CONFIRM_HTML = _jinja.from_string("""
+<!doctype html>
+<html><head><title>Delete user — TELEMAC Viewer</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem}
+h1{color:#c0392b}
+pre{background:#f6f8fa;padding:.5rem;border-radius:.3rem;overflow-x:auto}
+button{background:#c0392b;color:#fff;border:0;padding:.5rem 1rem;
+  border-radius:.2rem;cursor:pointer}
+a.cancel{margin-left:1rem;color:#0a3d62}
+</style></head><body>
+<h1>Delete user &lsquo;{{ user.username }}&rsquo;?</h1>
+<p>This will permanently delete the user account AND
+  {{ usage.files }} file(s) / {{ usage.size_human }} from:</p>
+<pre><code>{{ resolved_path }}</code></pre>
+<p><strong>This action cannot be undone.</strong></p>
+<form method="post" action="/admin/users/{{ user.id }}/delete">
+  <input type="hidden" name="confirm_token" value="{{ token }}">
+  <button type="submit">Delete user + files</button>
+  <a class="cancel" href="/admin/users">Cancel</a>
+</form>
 </body></html>
 """)
 
@@ -295,12 +407,15 @@ def _validate_username(name: str) -> str | None:
 
 
 def _render_users_page(
-    db_path: Path, error: str | None = None, status: int = 200
+    db_path: Path,
+    error: str | None = None,
+    status: int = 200,
+    flash: dict | None = None,
 ) -> HTMLResponse:
     with connect(db_path) as conn:
         users = list_users(conn)
     return HTMLResponse(
-        ADMIN_USERS_HTML.render(users=users, error=error),
+        ADMIN_USERS_HTML.render(users=users, error=error, flash=flash),
         status_code=status,
     )
 
@@ -311,7 +426,22 @@ def _render_users_page(
 @handle_route_errors
 async def admin_users_get(request: Request) -> HTMLResponse:
     require_admin(request)
-    return _render_users_page(_get_db_path(request))
+    # Build the response first (mutable) so _read_flash can attach
+    # the delete-cookie header for the one-shot banner semantics.
+    with connect(_get_db_path(request)) as conn:
+        users = list_users(conn)
+    response = HTMLResponse(
+        ADMIN_USERS_HTML.render(users=users, error=None, flash=None)
+    )
+    flash = _read_flash(request, response)
+    if flash is not None:
+        # Re-render with the flash payload threaded in. (delete_cookie
+        # header is already attached by _read_flash; rebuilding the body
+        # via HTMLResponse() would discard it, so set body via .body=.)
+        response.body = ADMIN_USERS_HTML.render(
+            users=users, error=None, flash=flash
+        ).encode("utf-8")
+    return response
 
 
 @handle_route_errors
@@ -418,31 +548,157 @@ async def admin_users_reset_password(
 
 
 @handle_route_errors
-async def admin_users_delete(request: Request) -> RedirectResponse | HTMLResponse:
+async def admin_users_delete_get(request: Request) -> HTMLResponse:
+    """Render the two-step delete-confirm page.
+
+    Shows the username, file count, size_human, and resolved
+    library path so the admin can verify what's about to be removed.
+    Embeds a signed (actor_id, target_id) confirm token (salt
+    'admin-delete-confirm') in a hidden form field; the POST handler
+    verifies the token within a 10-minute window.
+    """
     require_admin(request)
     user_id = int(request.path_params["user_id"])
+    with connect(_get_db_path(request)) as conn:
+        user = get_user_by_id(conn, user_id)
+    if user is None:
+        return PlainTextResponse("Not found", status_code=404)
+
+    from model_library import measure_user_library, user_library_default_base
+
+    usage = measure_user_library(user_id)
+    # Use the base (no mkdir side-effect) so a GET on the confirm page
+    # never creates a `users/<uid>/` dir for a user that has none yet.
+    resolved_path = str((user_library_default_base() / str(user_id)).resolve())
+    token = itsdangerous.URLSafeTimedSerializer(
+        _get_secret(request),
+        salt="admin-delete-confirm",
+    ).dumps({"actor_id": _admin_actor_id(request), "target_id": user_id})
+    body = ADMIN_DELETE_CONFIRM_HTML.render(
+        user=user, usage=usage, resolved_path=resolved_path, token=token
+    )
+    return HTMLResponse(body)
+
+
+@handle_route_errors
+async def admin_users_delete_post(
+    request: Request,
+) -> RedirectResponse | HTMLResponse:
+    """POST handler — verify confirm token, then cascade delete.
+
+    Cascade order: capture username + orphan path BEFORE delete; on
+    delete_user_atomic returning False (last-admin guard), library MUST
+    NOT be cascaded; on OSError/ValueError during library rm, auth row
+    is NOT rolled back (auth is source of truth).
+
+    All branches return _redirect_with_flash() — a fresh
+    /admin/users 303 redirect with a signed-cookie flash banner.
+    """
+    require_admin(request)
+    actor_id = _admin_actor_id(request)
+    target_id = int(request.path_params["user_id"])
+    form = await request.form()
+
     db_path = _get_db_path(request)
     with connect(db_path) as conn:
-        # Distinguish "last admin" from "already deleted" so the error
-        # message is honest instead of always saying "last admin".
-        target = get_user_by_id(conn, user_id)
-        if target is None:
-            return _render_users_page(
-                db_path,
-                error=f"User id={user_id} no longer exists.",
-                status=400,
+        user_to_delete = get_user_by_id(conn, target_id)
+        if user_to_delete is None:
+            return _redirect_with_flash(
+                request,
+                "warn",
+                f"User uid={target_id} already gone — nothing to do.",
             )
-        deleted = delete_user_atomic(conn, user_id=user_id)
-    if not deleted:
-        # Atomic guard rejected the delete because target was the last admin
-        # (target existed in the SELECT above; only path to deleted=False).
-        return _render_users_page(
-            db_path,
-            error="Refusing to delete the last admin.",
-            status=400,
+        username = user_to_delete.username
+
+        raw_token = form.get("confirm_token", "")
+        try:
+            payload = itsdangerous.URLSafeTimedSerializer(
+                _get_secret(request),
+                salt="admin-delete-confirm",
+            ).loads(raw_token, max_age=600)
+        except itsdangerous.SignatureExpired:
+            return _redirect_with_flash(
+                request,
+                "warn",
+                "Confirm page expired — please re-open the delete page.",
+            )
+        except itsdangerous.BadSignature:
+            logger.warning(
+                "admin delete POST with bad confirm token actor=%d target=%d",
+                actor_id,
+                target_id,
+            )
+            return _redirect_with_flash(
+                request,
+                "warn",
+                "Invalid confirmation token — please use the Delete link.",
+            )
+
+        if payload.get("actor_id") != actor_id or payload.get("target_id") != target_id:
+            logger.warning(
+                "admin delete confirm token actor/target mismatch "
+                "(actor=%d target=%d payload=%r)",
+                actor_id,
+                target_id,
+                payload,
+            )
+            return _redirect_with_flash(
+                request,
+                "warn",
+                "Confirmation mismatch — please re-open the delete page.",
+            )
+
+        from model_library import user_library_default_base
+
+        orphan_path = user_library_default_base() / str(target_id)
+
+        try:
+            deleted = delete_user_atomic(conn, user_id=target_id)
+        except sqlite3.Error:
+            logger.exception("auth db error during cascade delete uid=%d", target_id)
+            return _redirect_with_flash(
+                request,
+                "error",
+                "Database error — see server log.",
+            )
+
+        if not deleted:
+            # Atomic guard rejected: target was the last admin. Library
+            # MUST NOT be cascaded — the account is still active.
+            return _redirect_with_flash(
+                request,
+                "warn",
+                "Refused — would remove the last admin.",
+            )
+        # Auth row is gone (committed when `with connect` exits, below).
+
+    # Cascade library cleanup AFTER the auth transaction commits.
+    from model_library import delete_user_library
+
+    try:
+        usage = delete_user_library(target_id)
+    except (OSError, ValueError):
+        logger.exception(
+            "library cascade failed uid=%d path=%s", target_id, orphan_path
         )
-    logger.info("Admin deleted user_id=%s", user_id)
-    return RedirectResponse("/admin/users", status_code=302)
+        return _redirect_with_flash(
+            request,
+            "warn",
+            f"User deleted but files remain at {orphan_path} — see log.",
+        )
+
+    logger.info(
+        "admin uid=%d deleted user uid=%d files=%d bytes=%d",
+        actor_id,
+        target_id,
+        usage.files,
+        usage.size_bytes,
+    )
+    return _redirect_with_flash(
+        request,
+        "info",
+        f"Deleted user '{username}' ({usage.files} files / {usage.size_human}).",
+    )
 
 
 # --- Route table ---
@@ -459,5 +715,14 @@ auth_routes = [
         admin_users_reset_password,
         methods=["POST"],
     ),
-    Route("/admin/users/{user_id:int}/delete", admin_users_delete, methods=["POST"]),
+    Route(
+        "/admin/users/{user_id:int}/delete",
+        admin_users_delete_get,
+        methods=["GET"],
+    ),
+    Route(
+        "/admin/users/{user_id:int}/delete",
+        admin_users_delete_post,
+        methods=["POST"],
+    ),
 ]
