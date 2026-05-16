@@ -11,16 +11,15 @@ access; refuses paths inside the viewer source tree.
 
 from __future__ import annotations
 
+import datetime
 import os
+import re
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 _VIEWER_TREE = Path(__file__).resolve().parent
-
-import re
-from enum import Enum
-from typing import Iterator
 
 
 # --- Per-user storage foundation (v3.7.0 per-user-storage feature) ---
@@ -108,8 +107,6 @@ def _sanitize_for_project_name(raw: str) -> str:
     be empty OR is just `hecras` OR matches `hecras_\d{8}-\d{6}` (only the
     prefix + timestamp survived).
     """
-    import datetime
-
     cleaned = re.sub(r"[^A-Za-z0-9_-]", "_", raw)
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")[:64]
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
