@@ -589,7 +589,7 @@ def test_scan_library_with_no_user_id_returns_shared_only(isolated_telemac_dirs)
 def test_scan_library_corrupt_user_root_returns_sentinel(
     isolated_telemac_dirs, monkeypatch
 ):
-    from model_library import scan_library, LibrarySource
+    from model_library import LIBRARY_SENTINEL_NAME, scan_library, LibrarySource
 
     base = isolated_telemac_dirs / "users" / "44"
     base.mkdir(parents=True, exist_ok=True)
@@ -600,8 +600,9 @@ def test_scan_library_corrupt_user_root_returns_sentinel(
     monkeypatch.setattr(model_library, "user_library_root", lambda uid: base / "models")
 
     entries = scan_library(user_id=44)
-    sentinels = [e for e in entries if e.name.startswith("⚠")]
+    sentinels = [e for e in entries if e.name == LIBRARY_SENTINEL_NAME]
     assert len(sentinels) == 1
+    assert sentinels[0].name == LIBRARY_SENTINEL_NAME
     assert sentinels[0].source == LibrarySource.USER
     assert sentinels[0].slf_files == ()
 

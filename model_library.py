@@ -64,6 +64,7 @@ _PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _COMPANION_BASENAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _ALLOWED_COMPANION_SUFFIXES = frozenset({".slf", ".cas", ".cli", ".liq"})
 _PARTIAL_DIR_RE = re.compile(r"^\.(.+)\.partial-(\d+)$")
+LIBRARY_SENTINEL_NAME = "⚠ library unreadable"
 _SWEEP_MAX_PER_STARTUP = 5
 _STALE_MTIME_FALLBACK_SECONDS = (
     30 * 60
@@ -253,7 +254,7 @@ def _scan_one(root: Path, source: LibrarySource) -> list[ProjectEntry]:
         )
         return [
             ProjectEntry(
-                name="⚠ library unreadable",
+                name=LIBRARY_SENTINEL_NAME,
                 path=root,
                 slf_files=(),
                 source=source,
