@@ -781,6 +781,17 @@ def test_save_upload_concurrent_same_name_serializes(isolated_telemac_dirs, tmp_
     outcomes = sorted(r[0] for r in results)
     assert outcomes == ["collision", "ok"]
 
+    # The winner's slf must survive intact — defends against a future
+    # regression where both writers race past pre-stat and one clobbers
+    # the other's renamed directory.
+    from model_library import user_library_default_base
+
+    final_dir = user_library_default_base() / "13" / "models" / "alpha"
+    assert final_dir.is_dir()
+    surviving = list(final_dir.glob("*.slf"))
+    assert len(surviving) == 1
+    assert surviving[0].read_bytes() in {b"a", b"b"}
+
 
 def test_save_upload_lock_file_is_symlink_raises_oserror(
     isolated_telemac_dirs, tmp_path

@@ -570,6 +570,9 @@ def save_upload_to_library(
             raise FileExistsError(f"users/{user_id}/models/{name} already exists")
 
         partial.mkdir(mode=0o755, parents=False)
+        os.chmod(
+            partial, 0o755
+        )  # umask-independent — matches the pattern in user_library_root
         try:
             for src, dst_name in dest_basenames.items():
                 dst = partial / dst_name
