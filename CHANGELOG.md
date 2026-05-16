@@ -4,6 +4,23 @@ All notable changes to the TELEMAC Viewer are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Per-user persistent storage** for uploaded `.slf` files and HEC-RAS conversion outputs. Each authenticated user gets `~/.telemac-viewer/users/<user_id>/models/` (mode `0o700`) that survives across sessions. "Save to my library" button on the upload widget; HEC-RAS Convert auto-saves to the user's library. Library dropdown groups entries into "My models" (per-user, writable) and "Shared" (read-only overlay, the existing `~/.telemac-viewer/models/`). Two-step admin delete with signed `confirm_token` (10-min window, distinct itsdangerous salt) cascades the user's directory atomically; size + resolved path shown before commit.
+- New helpers in `model_library`: `LibrarySource`, `LibraryUsage`, `user_library_root`, `user_library_default_base`, `save_upload_to_library`, `save_imported_to_library`, `measure_user_library`, `delete_user_library`; `ProjectEntry.source` field; `ProjectFiles.iter_existing` method.
+- New helpers in `auth/routes`: `_admin_actor_id`, `_flash`, `_read_flash`, `_redirect_with_flash`; two routes `GET /admin/users/<uid>/delete` (confirm page) and `POST` (cascade).
+- Signed-cookie one-shot admin flash (60-second `URLSafeTimedSerializer` max_age, `samesite=lax`, `path=/admin`).
+- Per-session `merged_entries` reactive in `app.py` — single source of truth for library scans; eliminates double-scan on save and consistency-skew between `library_choices` and `_pick_file_path`.
+
+### Fixed
+- `import_output_dir` (download source) is now properly decoupled from `_import_out_dir` (cleanup target) after a successful auto-save — the prior single-reactive design would have caused the next conversion's cleanup to `rmtree` the saved library entry.
+- Cleanup `rmtree` in `server_import.py` hardened with `Path.resolve(strict=True).is_relative_to(...)` — defends against symlink and `..` path bypasses that the prior `startswith(tempfile.gettempdir())` would have admitted.
+
+### Changed
+- `find_companion` signature: `find_companion(library_selection, entries, suffix)` where `entries` is the merged list from `scan_library(user_id=N)`. Three existing call sites in `server_core.py` and `server_analysis.py` updated to pass `merged_entries()`.
+- Bumped test count: 606 → 690 passing.
+
+**Tested by:** `save_upload_concurrent_same_name_serializes` (flock collision serialization), `cleanup_rmtree_refuses_to_delete_via_symlink_escape` (Path.resolve defense), `admin_delete_post_when_last_admin_refuses_and_preserves_library` (cascade refused on bool-False return), `admin_delete_post_bad_signature_confirm_token_rejects` (signed confirm token), `save_imported_keeps_tempdir_intact_on_oserror` (download buttons survive auto-save failure), `test_merged_entries_scans_once_per_invalidation` (single source of truth).
+
 ## [3.6.0] - 2026-05-09
 
 ### Added

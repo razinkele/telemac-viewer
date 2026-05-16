@@ -329,6 +329,228 @@ python -m auth.cli create-admin --username <yours>
 Preferences and history are lost; passwords from the backup are not
 portable across schema changes.
 
+## Per-user storage
+
+Each authenticated user gets a private, persistent library at
+`~/.telemac-viewer/users/<user_id>/models/` (mode `0o700`). Uploaded
+`.slf` files and HEC-RAS conversion outputs survive across sessions
+without re-uploading. The existing `~/.telemac-viewer/models/` directory
+becomes a read-only **shared overlay** every user sees alongside their
+own "My models" group.
+
+### Deployment context (read this first)
+
+If `/home` is on a small partition, set `TELEMAC_VIEWER_USERS_ROOT` to a
+larger mount **before first launch**:
+
+```bash
+export TELEMAC_VIEWER_USERS_ROOT=/data/telemac-viewer/users
+systemctl restart telemac-viewer
+```
+
+`TELEMAC_VIEWER_USERS_ROOT` and `TELEMAC_VIEWER_MODELS` **must be
+disjoint** — neither may be a parent of the other, and they must not be
+the same directory. The app refuses to start otherwise: collapsing the
+two would let a non-admin write into the shared overlay, defeating the
+read-only invariant. Pick distinct roots like
+`/data/telemac-viewer/users/` and `/srv/telemac-viewer/shared-models/`.
+
+### Per-user directory layout
+
+```
+~/.telemac-viewer/
+├── auth.db                  (0600 — existing)
+├── auth_secret              (0600 — existing)
+├── models/                  (0700 — existing — now shared, read-only overlay)
+│   └── <project>/
+└── users/                   (0700 — new)
+    └── <uid>/               (0700)
+        └── models/          (0700)
+            └── <project>/
+                ├── case.slf
+                ├── case.cas
+                ├── .lock                       (fcntl per-project)
+                └── .case.partial-<pid>/        (atomic-save staging)
+```
+
+- `.lock` is a per-project fcntl lockfile (`save_upload` serializes
+  same-name saves so two browser tabs racing the same "Save as…" name
+  can't corrupt each other).
+- `.<name>.partial-<pid>/` is the staging directory used by the atomic
+  rename pattern: write into staging, `os.rename` into place, then
+  remove staging. A SIGKILL'd save leaves staging behind; the in-process
+  sweep at startup removes up to 5 stale partials per user, per launch.
+
+### What persists vs not
+
+| Action | Persists? |
+|---|---|
+| Upload `.slf` + click **Save to my library** | Yes — moved to `users/<uid>/models/<name>/` |
+| Upload `.slf` without clicking save | No — cleared on session end (Shiny tempdir) |
+| HEC-RAS Convert output | Yes — auto-saved on conversion success |
+| Raw HDF input to HEC-RAS Convert | No — discarded after conversion; re-upload to re-convert |
+| "Save current view as my preferences" | Yes — on `auth.db` user row (existing v3.6.0 behavior) |
+
+### Save-to-library button
+
+The upload accordion now has a **Save as…** textbox and a **Save to my
+library** button. Type a project name (letters, digits, `_`, `-`, `.`,
+1–64 chars; no leading dot, no `..`), click the button, and the uploaded
+`.slf` + any companion `.cas`/`.cli`/`.liq` are atomically moved into
+`users/<uid>/models/<name>/`. The project then appears under **My
+models** in the library dropdown. Re-using an existing name shows a
+"already exists — pick a new name" toast; the save is refused
+(prevents accidental clobber).
+
+### Cascade-delete behavior
+
+Admin `Delete` on `/admin/users/<uid>` is now a **two-step confirm**:
+
+1. **GET `/admin/users/<uid>/delete`** renders a confirmation page that
+   shows the user's saved library size (`du -sh`) and the resolved
+   absolute path that will be removed. A signed `confirm_token`
+   (`itsdangerous.URLSafeTimedSerializer`, distinct salt from the
+   session cookie, 10-minute window) is embedded in the form.
+2. **POST** with the matching token verifies the signature, captures the
+   username for audit logs, removes the `auth.db` row inside the
+   existing last-admin-guard transaction, then cascade-`rmtree`s
+   `users/<uid>/`.
+
+If you're uncertain, copy the dir aside before clicking Delete:
+
+```bash
+cp -r ~/.telemac-viewer/users/<uid>/ /backup/uid-<uid>-$(date +%F)/
+```
+
+A direct POST with no GET, or with a tampered token, returns 400 — the
+two-step flow is not optional.
+
+### Monitoring & log patterns
+
+```bash
+# User N hitting save errors:
+journalctl -u telemac-viewer | grep -E "(save_upload|auto-save).*uid=N"
+# Disk-full events:
+journalctl -u telemac-viewer | grep ENOSPC
+# Per-user disk usage:
+du -sh ~/.telemac-viewer/users/*/
+```
+
+Every save logs a structured line including `uid=`, `project=`, and
+either `bytes=` (success) or `error=` (failure). `ENOSPC` is logged at
+ERROR level and surfaces a user-facing "disk full — contact admin"
+toast; the partial dir is removed before the error returns.
+
+### Manual library surgery
+
+When a user asks to wipe one project without deleting their account:
+
+```bash
+# Safe while the app is running on Linux (inode semantics).
+# User clicks ↻ in the browser to see the dropdown update.
+rm -rf ~/.telemac-viewer/users/<uid>/models/<project>/
+```
+
+### Backup & restore — the sync invariant
+
+`auth.db` is the source of truth; `users/<uid>/` is best-effort
+persistent storage anchored to it. The four states:
+
+| `auth.db` row | `users/<uid>/` dir | Meaning |
+|---|---|---|
+| present | present | Normal user with saved content |
+| present | absent | Normal user who has never saved (created on first save) |
+| absent  | present | **Orphan** — admin deleted user but cascade failed (or out-of-order restore). Safe to `rm -rf` after audit. |
+| absent  | absent | User never existed or was cleanly deleted |
+
+The dangerous state — `auth.db` rolled back **past** a uid that already
+has files — would let SQLite re-issue that uid to a new user, mapping
+them onto someone else's old data.
+
+**Ordering rule:** always back up `auth.db` **BEFORE or WITH, but never
+AFTER** `users/`. Never restore `auth.db` to a state older than `users/`
+without first auditing for orphans.
+
+```bash
+# Consistent backup (run while service is stopped, or accept WAL semantics):
+sqlite3 ~/.telemac-viewer/auth.db ".backup /backup/auth-$(date +%F).db"
+tar -czf /backup/users-$(date +%F).tar.gz -C ~/.telemac-viewer users
+```
+
+**Find orphan dirs after a partial restore:**
+
+```bash
+comm -23 \
+    <(ls ~/.telemac-viewer/users/ | sort) \
+    <(sqlite3 ~/.telemac-viewer/auth.db "SELECT id FROM users" | sort)
+# For each id printed, inspect then remove:
+#   rm -rf ~/.telemac-viewer/users/<id>/
+```
+
+### Migration from the existing shared library
+
+To move a project out of the shared overlay (`~/.telemac-viewer/models/`)
+into a specific user's private library:
+
+```bash
+sudo systemctl stop telemac-viewer
+# Verify the target uid exists:
+sqlite3 ~/.telemac-viewer/auth.db "SELECT id, username FROM users WHERE id=<uid>"
+# Create the parent dirs with correct mode:
+mkdir -p ~/.telemac-viewer/users/<uid>/models/
+chmod 0700 ~/.telemac-viewer/users/<uid> ~/.telemac-viewer/users/<uid>/models
+# Move (or `cp -a` if you want it visible in both, but then the shared
+# copy stays read-only and the user's copy is the one they edit):
+mv ~/.telemac-viewer/models/<project> ~/.telemac-viewer/users/<uid>/models/<project>
+sudo systemctl start telemac-viewer
+# User sees the project under "My models" on next dropdown refresh.
+```
+
+Common pitfalls:
+
+- **Typo in `<uid>`** → silently creates a folder under a non-existent
+  uid (becomes an orphan). Verify the `SELECT` above first.
+- **Forgetting `chmod 0700`** on `users/<uid>` and `users/<uid>/models/`
+  after a manual `mkdir` → leaks the user's project names to other OS
+  users. The service running as one user makes this only matter on
+  multi-user hosts, but the model invariant says `0o700` everywhere.
+
+### Recovery from a corrupted user dir
+
+**Symptom:** the library dropdown shows `⚠ library unreadable` next to
+the user's row (or scoped to one project name); the affected user's
+saves return a "library unreadable" toast.
+
+**Procedure:**
+
+```bash
+ls -la ~/.telemac-viewer/users/<uid>/models/
+# Diagnose: regular file where a dir should be? bad permissions?
+# broken symlink? wrong owner?
+mv ~/.telemac-viewer/users/<uid>/models/ ~/.telemac-viewer/users/<uid>/models.broken-$(date +%F)/
+# Restart not required — the app re-creates the dir on next save.
+```
+
+The user resumes from an empty library. Recoverable data can be pulled
+out of `models.broken-*/` offline.
+
+### Stale `.partial-*` cleanup
+
+**Symptom:** `du -sh ~/.telemac-viewer/users/*/` shows GBs occupied by
+`.*.partial-*` directories. Cause: SIGKILL or OOM during a save, before
+the atomic rename completed.
+
+The in-process sweep clears up to 5 stale partials per user per startup.
+For larger backlogs (rare; usually after a crash storm):
+
+```bash
+find ~/.telemac-viewer/users -maxdepth 3 -name '.*.partial-*' -mtime +1 -exec rm -rf {} +
+```
+
+The `-mtime +1` guard is intentional: a save currently in progress
+creates a `.partial-*` that is less than a day old. Don't drop the
+guard.
+
 ## Project structure
 
 ```
