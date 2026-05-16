@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime
 import fcntl
+import logging
 import os
 import re
 import shutil
@@ -22,6 +23,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Iterator
+
+_logger = logging.getLogger(__name__)
 
 _VIEWER_TREE = Path(__file__).resolve().parent
 
@@ -587,3 +590,77 @@ def save_upload_to_library(
         os.close(lock_fd)
 
     return final
+
+
+def save_imported_to_library(
+    user_id: int,
+    tmpdir: Path,
+    name: str,
+) -> Path:
+    """Save converted HEC-RAS outputs from a tempdir to the user's library.
+
+    Copy-then-rename-then-unlink (NOT move). If anything fails before the
+    final rename, tmpdir is intact — so the caller's download buttons keep
+    working from the tempdir. shutil.copy handles cross-FS (tmpfs → ext4)
+    without EXDEV.
+    """
+    tmpdir = Path(tmpdir)
+    slf_files = sorted(tmpdir.glob("*.slf"))
+    if not slf_files:
+        raise ValueError(f"No .slf file found in tmpdir {tmpdir}")
+    slf = slf_files[0]
+    base = slf.stem
+    pf = ProjectFiles(
+        slf=slf,
+        cas=tmpdir / f"{base}.cas" if (tmpdir / f"{base}.cas").exists() else None,
+        cli=tmpdir / f"{base}.cli" if (tmpdir / f"{base}.cli").exists() else None,
+        liq=tmpdir / f"{base}.liq" if (tmpdir / f"{base}.liq").exists() else None,
+    )
+
+    saved = save_upload_to_library(user_id, pf, name)
+    # ONLY rmtree on success — keeps download buttons functional otherwise
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    return saved
+
+
+def measure_user_library(user_id: int) -> LibraryUsage:
+    """Walk users/<uid>/ and return (files, bytes).
+
+    Routine calls log DEBUG; large libs (>1000 files or >1GB) escalate to
+    INFO so operators can spot wrong-base bugs without log-grep noise.
+    """
+    _validate_user_id(user_id)
+    base = user_library_default_base() / str(user_id)
+    if not base.is_dir():
+        return LibraryUsage(0, 0)
+
+    files = 0
+    total_bytes = 0
+    for p in base.rglob("*"):
+        try:
+            if p.is_file():
+                files += 1
+                total_bytes += p.stat().st_size
+        except (PermissionError, OSError) as e:
+            _logger.warning("measure_user_library skipping unreadable %s: %s", p, e)
+            continue
+
+    msg = "measure_user_library uid=%d path=%s files=%d bytes=%d"
+    args = (user_id, str(base.resolve()), files, total_bytes)
+    if files > 1000 or total_bytes > (1 << 30):
+        _logger.info(msg, *args)
+    else:
+        _logger.debug(msg, *args)
+    return LibraryUsage(files, total_bytes)
+
+
+def delete_user_library(user_id: int) -> LibraryUsage:
+    """Recursively remove users/<uid>/. Returns measured (files, bytes)
+    BEFORE deletion. Idempotent: missing dir returns (0,0).
+    """
+    _validate_user_id(user_id)
+    usage = measure_user_library(user_id)
+    base = user_library_default_base() / str(user_id)
+    if base.exists():
+        shutil.rmtree(base)
+    return usage

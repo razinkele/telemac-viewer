@@ -823,3 +823,104 @@ def test_save_upload_partial_dir_invisible_to_scan_during_save(
     (root / ".alpha.partial-99999" / "case.slf").touch()
     entries = scan_library(user_id=15)
     assert all(not e.name.startswith(".") for e in entries)
+
+
+# --- Task 6: save_imported_to_library + measure + delete ---
+
+
+def test_save_imported_round_trip_and_cleans_tmpdir(isolated_telemac_dirs, tmp_path):
+    from model_library import save_imported_to_library
+
+    src = tmp_path / "imp"
+    src.mkdir()
+    (src / "model.slf").write_bytes(b"slf_data")
+    (src / "model.cas").write_text("cas_data")
+    (src / "model.cli").write_text("cli_data")
+
+    saved = save_imported_to_library(20, src, "hecras_run")
+    assert saved.name == "hecras_run"
+    assert (saved / "model.slf").read_bytes() == b"slf_data"
+    # tmpdir consumed
+    assert not src.exists()
+
+
+def test_save_imported_keeps_tmpdir_intact_on_failure(
+    isolated_telemac_dirs, tmp_path, monkeypatch
+):
+    """If save_upload_to_library raises, the tmpdir is NOT rmtree'd —
+    download buttons keep working. This is the load-bearing property
+    that distinguishes copy-then-unlink from move."""
+    from model_library import save_imported_to_library
+
+    src = tmp_path / "imp"
+    src.mkdir()
+    (src / "model.slf").touch()
+
+    monkeypatch.setattr(
+        "model_library.save_upload_to_library",
+        lambda uid, files, name: (_ for _ in ()).throw(OSError(28, "ENOSPC")),
+    )
+
+    with pytest.raises(OSError):
+        save_imported_to_library(20, src, "hecras_run")
+    # tmpdir still there, files intact
+    assert src.exists()
+    assert (src / "model.slf").exists()
+
+
+def test_measure_user_library_empty_returns_zero(isolated_telemac_dirs):
+    from model_library import measure_user_library, LibraryUsage
+
+    assert measure_user_library(30) == LibraryUsage(0, 0)
+
+
+def test_measure_user_library_walks_files_and_returns_dataclass(isolated_telemac_dirs):
+    from model_library import measure_user_library, user_library_root
+
+    root = user_library_root(31)
+    proj = root / "alpha"
+    proj.mkdir()
+    (proj / "f1.slf").write_bytes(b"x" * 100)
+    (proj / "f2.cas").write_bytes(b"y" * 50)
+    usage = measure_user_library(31)
+    assert usage.files == 2
+    assert usage.size_bytes == 150
+
+
+def test_measure_user_library_unreadable_subdir_skips_and_warns(isolated_telemac_dirs):
+    import os
+    from model_library import measure_user_library, user_library_root
+
+    root = user_library_root(32)
+    good = root / "alpha"
+    good.mkdir()
+    (good / "f.slf").write_bytes(b"x" * 10)
+    bad = root / "beta"
+    bad.mkdir()
+    (bad / "f.slf").write_bytes(b"y" * 20)
+    os.chmod(bad, 0o000)
+    try:
+        usage = measure_user_library(32)
+    finally:
+        os.chmod(bad, 0o755)
+    assert usage.files >= 1
+    assert usage.size_bytes >= 10
+
+
+def test_delete_user_library_idempotent_on_missing_dir(isolated_telemac_dirs):
+    from model_library import delete_user_library, LibraryUsage
+
+    assert delete_user_library(99) == LibraryUsage(0, 0)
+
+
+def test_delete_user_library_returns_pre_deletion_usage(isolated_telemac_dirs):
+    from model_library import delete_user_library, user_library_root
+
+    root = user_library_root(33)
+    proj = root / "alpha"
+    proj.mkdir()
+    (proj / "f.slf").write_bytes(b"x" * 1234)
+    usage = delete_user_library(33)
+    assert usage.files == 1
+    assert usage.size_bytes == 1234
+    assert not root.parent.exists()
