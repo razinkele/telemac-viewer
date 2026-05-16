@@ -1,10 +1,15 @@
 # server_import.py — Import tab server handlers
 from __future__ import annotations
 
+import asyncio
+import datetime
+import errno
 import logging
 import math
 import os as _os
 import shutil
+import tempfile
+from pathlib import Path
 
 import numpy as np
 from shiny import reactive, render, ui
@@ -14,8 +19,10 @@ from shiny_deckgl import (
     scatterplot_layer,
     path_layer,
 )
+from auth.middleware import get_current_user_id_from_scope
 from constants import MAP_BG_LIGHT
 from layers import _COORD_METER_OFFSETS
+from model_library import _sanitize_for_project_name, save_imported_to_library
 
 _logger = logging.getLogger(__name__)
 
@@ -43,11 +50,17 @@ import_map_widget = MapWidget(
 )
 
 
-def register_import_handlers(input, output, session):
+def register_import_handlers(input, output, session, library_version=None):
     """Register all server handlers for the Import tab.
 
     All state is local to this function — nothing is shared with the
     main server, because the import tab is fully self-contained.
+
+    ``library_version`` is the app-level reactive that drives the My-Models
+    library view. The HEC-RAS convert handler bumps it after a successful
+    auto-save so the user's library refreshes without a manual click. If
+    None (back-compat for tests that don't pass it), auto-save still runs
+    but the UI bump is skipped.
     """
 
     import_model = reactive.value(None)  # parsed HecRasModel
@@ -342,8 +355,13 @@ def register_import_handlers(input, output, session):
 
     @reactive.effect
     @reactive.event(input.import_convert)
-    def handle_import_convert():
-        """Run full conversion pipeline."""
+    async def handle_import_convert():
+        """Run full conversion pipeline, then auto-save to the user's library.
+
+        Async so the auto-save (potentially ~30 s on multi-GB SLFs) can run
+        on a thread via ``asyncio.to_thread`` while ``ui.Progress`` keeps the
+        WebSocket heartbeat alive.
+        """
         model = import_model.get()
         if model is None:
             _append_log("Please click Preview first to parse the HEC-RAS file.")
@@ -366,12 +384,27 @@ def register_import_handlers(input, output, session):
             _append_log("ERROR: DEM file required for 1D→2D conversion")
             return
 
-        import tempfile
-
-        # Clean up previous temp dir
+        # Clean up previous temp dir (hardened with Path.resolve.is_relative_to
+        # against `..` / symlink escapes that a naive startswith would admit).
         old_dir = _import_out_dir.get()
         if old_dir and _os.path.isdir(old_dir):
-            shutil.rmtree(old_dir, ignore_errors=True)
+            try:
+                old_resolved = Path(old_dir).resolve(strict=True)
+                tmp_resolved = Path(tempfile.gettempdir()).resolve(strict=True)
+                if old_resolved.is_relative_to(tmp_resolved):
+                    shutil.rmtree(old_resolved, ignore_errors=True)
+                else:
+                    _logger.warning(
+                        "refusing to rmtree _import_out_dir=%r — resolved %r is not "
+                        "under tempfile.gettempdir()=%r; clearing reactive only",
+                        old_dir,
+                        str(old_resolved),
+                        str(tmp_resolved),
+                    )
+            except (OSError, ValueError) as e:
+                _logger.warning(
+                    "could not resolve old _import_out_dir=%r: %s", old_dir, e
+                )
 
         out_dir = tempfile.mkdtemp(prefix="telemac_import_")
         _import_out_dir.set(out_dir)
@@ -405,7 +438,6 @@ def register_import_handlers(input, output, session):
                 cas_overrides=cas_overrides if cas_overrides else None,
             )
 
-            import_output_dir.set(out_dir)
             _append_log(f"Output directory: {out_dir}")
             _append_log(f"  {hdf_name}.slf — mesh + variables")
             _append_log(f"  {hdf_name}.cli — boundary conditions")
@@ -423,7 +455,88 @@ def register_import_handlers(input, output, session):
             finally:
                 tf.close()
 
-            _append_log("\nConversion complete. Use Download buttons below.")
+            _append_log("\nConversion complete.")
+
+            # --- Auto-save to user library -------------------------------
+            user_id = (
+                get_current_user_id_from_scope(session.http_conn.scope)
+                if session.http_conn
+                else None
+            )
+            if user_id is None:
+                _logger.warning(
+                    "HEC-RAS import without user_id — skipping auto-save (defensive)"
+                )
+                _append_log("Warning: not logged in; outputs in /tmp only.")
+                import_output_dir.set(out_dir)
+            else:
+                timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                auto_name = _sanitize_for_project_name(f"hecras_{hdf_name}_{timestamp}")
+                try:
+                    with ui.Progress(min=0, max=1) as p:
+                        p.set(
+                            0.0,
+                            message="Saving to your library…",
+                            detail=f"{auto_name} (this may take ~30 s for large meshes)",
+                        )
+                        saved = await asyncio.to_thread(
+                            save_imported_to_library,
+                            user_id,
+                            Path(out_dir),
+                            auto_name,
+                        )
+                        p.set(1.0, message="Saved.")
+                    _append_log(f"Auto-saved to library: My models → {auto_name}")
+                    if library_version is not None:
+                        library_version.set(library_version.get() + 1)
+                    # Diverge: _import_out_dir = cleanup target (NEVER library path);
+                    # import_output_dir = download source (can be library path).
+                    _import_out_dir.set(None)
+                    import_output_dir.set(str(saved))
+                except FileExistsError:
+                    _logger.warning(
+                        "auto-save name collision uid=%d name=%s — keeping outputs in /tmp",
+                        user_id,
+                        auto_name,
+                    )
+                    _append_log(
+                        f"WARNING: A library entry named {auto_name} already exists. "
+                        "Use Download buttons to save manually."
+                    )
+                    import_output_dir.set(out_dir)
+                    ui.notification_show(
+                        "Library name collision — auto-save skipped; "
+                        "outputs available via Download.",
+                        type="warning",
+                        duration=5,
+                    )
+                except OSError as e:
+                    errno_name = errno.errorcode.get(getattr(e, "errno", None), "?")
+                    _logger.exception(
+                        "auto-save OSError uid=%d errno=%s(%s) name=%s",
+                        user_id,
+                        e.errno,
+                        errno_name,
+                        auto_name,
+                    )
+                    if e.errno == errno.ENOSPC:
+                        msg = (
+                            "Auto-save failed: disk full. "
+                            "Use Download buttons to save manually."
+                        )
+                    elif e.errno in (errno.EACCES, errno.EPERM):
+                        msg = (
+                            "Auto-save failed: permission denied on library dir. "
+                            "Contact admin."
+                        )
+                    else:
+                        msg = (
+                            f"Auto-save failed ({errno_name}). "
+                            "Use Download buttons to save manually."
+                        )
+                    _append_log(f"WARNING: {msg}")
+                    import_output_dir.set(out_dir)
+                    ui.notification_show(msg, type="warning", duration=8)
 
         except (OSError, ValueError, KeyError, RuntimeError) as e:
             _logger.exception("HEC-RAS conversion failed")

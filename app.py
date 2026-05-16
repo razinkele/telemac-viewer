@@ -2081,7 +2081,7 @@ def server(input, output, session):
     # ── Import tab server logic ─────────────────────────────────────────
     from server_import import register_import_handlers
 
-    register_import_handlers(input, output, session)
+    register_import_handlers(input, output, session, library_version=library_version)
 
 
 # --- Auth integration (see docs/superpowers/specs/2026-05-08-user-accounts-design.md) ---
