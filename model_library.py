@@ -14,7 +14,9 @@ from __future__ import annotations
 import datetime
 import os
 import re
+import shutil
 import sys
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -136,6 +138,8 @@ def _validate_user_id(user_id: int) -> None:
 
 _initialized: set[Path] = set()
 _warned: set[str] = set()
+_swept_for: set[Path] = set()
+_sweep_total_count: int = 0
 
 
 def _default_library_root() -> Path:
@@ -153,8 +157,11 @@ def _warn_once(key: str, message: str) -> None:
 
 def _reset_for_testing() -> None:
     """Clear module-level memoization. Tests only."""
+    global _sweep_total_count
     _initialized.clear()
     _warned.clear()
+    _swept_for.clear()
+    _sweep_total_count = 0
 
 
 @dataclass(frozen=True)
@@ -326,3 +333,115 @@ def find_companion(
     except FileNotFoundError:
         pass
     return None
+
+
+def user_library_default_base() -> Path:
+    """Read TELEMAC_VIEWER_USERS_ROOT or fall back to ~/.telemac-viewer/users.
+
+    Public (no leading underscore) because auth/routes.py uses this from the
+    admin-delete error handler to compute the orphan path WITHOUT triggering
+    the mkdir side-effect of user_library_root().
+
+    Pattern mirrors _default_library_root(). Tests monkeypatch the env var.
+    """
+    raw = os.environ.get("TELEMAC_VIEWER_USERS_ROOT")
+    return (
+        Path(raw).expanduser().resolve()
+        if raw
+        else Path.home() / ".telemac-viewer" / "users"
+    )
+
+
+def _sweep_stale_partials(models_dir: Path, *, user_id: int) -> int:
+    """Remove .<name>.partial-<digits> dirs whose pid is no longer running
+    or whose dir is older than _STALE_MTIME_FALLBACK_SECONDS.
+
+    See spec §4.1 for the full semantics: strict regex (skips .lock);
+    PID-reuse defense via mtime fallback; PermissionError treated as
+    alive-skip; per-process cap (_SWEEP_MAX_PER_STARTUP) NOT per-uid;
+    WARN log on overflow with the uid.
+    """
+    global _sweep_total_count
+    if _sweep_total_count >= _SWEEP_MAX_PER_STARTUP:
+        return 0
+
+    removed = 0
+    candidates = []
+    if not models_dir.is_dir():
+        return 0
+    for entry in models_dir.iterdir():
+        m = _PARTIAL_DIR_RE.match(entry.name)
+        if not m or not entry.is_dir():
+            continue
+        candidates.append((entry, int(m.group(2))))
+
+    if len(candidates) > _SWEEP_MAX_PER_STARTUP:
+        print(
+            f"[viewer] _sweep_stale_partials uid={user_id} found "
+            f"{len(candidates)} stale partials; will sweep up to "
+            f"{_SWEEP_MAX_PER_STARTUP - _sweep_total_count} this restart",
+            file=sys.stderr,
+        )
+
+    for partial, pid in candidates:
+        if _sweep_total_count >= _SWEEP_MAX_PER_STARTUP:
+            break
+        try:
+            os.kill(pid, 0)
+            # Process alive (or pid is reused by another process). Apply
+            # the mtime fallback: if the partial dir is older than the
+            # cutoff, treat as stale regardless.
+            mtime = partial.stat().st_mtime
+            if time.time() - mtime <= _STALE_MTIME_FALLBACK_SECONDS:
+                continue  # alive AND recent — skip
+        except ProcessLookupError:
+            pass  # dead — safe to remove
+        except PermissionError:
+            continue  # alive other-owned — skip
+
+        try:
+            shutil.rmtree(partial, ignore_errors=False)
+            removed += 1
+            _sweep_total_count += 1
+        except OSError as e:
+            print(
+                f"[viewer] _sweep_stale_partials uid={user_id} could not "
+                f"rmtree {partial}: {e}",
+                file=sys.stderr,
+            )
+
+    return removed
+
+
+def user_library_root(user_id: int) -> Path:
+    """Return the per-user models directory; mkdir(0o700) if missing.
+
+    Steps (see spec §4.1):
+      1. validate user_id (TypeError/ValueError)
+      2. compute root path under user_library_default_base()
+      3. refuse if root is inside _VIEWER_TREE
+      4. mkdir(mode=0o700) + explicit chmod (umask defense)
+      5. chmod the user_id parent dir too
+      6. _sweep_stale_partials once per process per (uid, base)
+    """
+    _validate_user_id(user_id)
+    base = user_library_default_base()
+    parent = base / str(user_id)
+    root = parent / "models"
+
+    if _VIEWER_TREE in root.parents or root == _VIEWER_TREE:
+        raise ValueError(
+            f"user_library_root resolves to {root} which is inside the "
+            "viewer source tree; refuse to operate"
+        )
+
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(parent, 0o700)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(root, 0o700)
+
+    if root not in _swept_for:
+        _swept_for.add(root)
+        _sweep_stale_partials(root, user_id=user_id)
+
+    return root

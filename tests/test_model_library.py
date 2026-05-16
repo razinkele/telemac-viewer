@@ -358,3 +358,134 @@ def test_library_source_display_label():
 
     assert LibrarySource.USER.display_label == "My models"
     assert LibrarySource.SHARED.display_label == "Shared"
+
+
+# --- user_library_root + _sweep_stale_partials (v3.7.0 per-user-storage) ---
+
+
+def test_user_library_root_creates_0o700_under_default_umask(
+    isolated_telemac_dirs, monkeypatch
+):
+    import os
+    from model_library import user_library_root
+
+    old = os.umask(0o022)
+    try:
+        root = user_library_root(7)
+    finally:
+        os.umask(old)
+
+    assert root.exists() and root.is_dir()
+    assert oct(root.stat().st_mode & 0o777) == "0o700"
+    assert oct(root.parent.stat().st_mode & 0o777) == "0o700"
+
+
+def test_user_library_root_refuses_viewer_tree_base(isolated_telemac_dirs, monkeypatch):
+    import model_library
+
+    viewer_tree = str(Path(model_library.__file__).resolve().parent)
+    monkeypatch.setenv("TELEMAC_VIEWER_USERS_ROOT", viewer_tree)
+    model_library._reset_for_testing()
+    with pytest.raises(ValueError, match="inside the viewer source tree"):
+        model_library.user_library_root(1)
+
+
+def test_user_library_root_rejects_bool_subtype(isolated_telemac_dirs):
+    from model_library import user_library_root
+
+    with pytest.raises(TypeError):
+        user_library_root(True)
+
+
+def test_user_library_root_rejects_non_positive_uid(isolated_telemac_dirs):
+    from model_library import user_library_root
+
+    with pytest.raises(ValueError):
+        user_library_root(0)
+    with pytest.raises(ValueError):
+        user_library_root(-1)
+
+
+def test_sweep_stale_partials_does_not_remove_lock_file(isolated_telemac_dirs):
+    import os
+    from model_library import user_library_root, _sweep_stale_partials
+
+    root = user_library_root(8)
+    (root / ".lock").touch()
+    (root / ".foo.partial-99999").mkdir()  # dead pid (unlikely to be running)
+    _sweep_stale_partials(root, user_id=8)
+    assert (root / ".lock").exists()
+    assert not (root / ".foo.partial-99999").exists()
+
+
+def test_sweep_stale_partials_bounded_at_max_per_startup(isolated_telemac_dirs):
+    import model_library
+    from model_library import (
+        user_library_root,
+        _sweep_stale_partials,
+        _SWEEP_MAX_PER_STARTUP,
+    )
+
+    root = user_library_root(9)
+    for i in range(_SWEEP_MAX_PER_STARTUP + 3):
+        (root / f".bar{i}.partial-{99000 + i}").mkdir()
+    model_library._reset_for_testing()
+    root = user_library_root(9)
+    removed = _sweep_stale_partials(root, user_id=9)
+    assert removed <= _SWEEP_MAX_PER_STARTUP
+
+
+def test_sweep_stale_partials_pid_alive_old_mtime_removed(
+    isolated_telemac_dirs, monkeypatch
+):
+    import os
+    import time
+    import model_library
+    from model_library import (
+        user_library_root,
+        _sweep_stale_partials,
+        _STALE_MTIME_FALLBACK_SECONDS,
+    )
+
+    root = user_library_root(10)
+    own_pid = os.getpid()
+    partial = root / f".foo.partial-{own_pid}"
+    partial.mkdir()
+    old = time.time() - 60 * 60
+    os.utime(partial, (old, old))
+    model_library._reset_for_testing()
+    root = user_library_root(10)
+    model_library._reset_for_testing()
+    removed = _sweep_stale_partials(root, user_id=10)
+    assert not partial.exists()
+
+
+def test_sweep_stale_partials_permission_error_skips(
+    isolated_telemac_dirs, monkeypatch
+):
+    from model_library import user_library_root, _sweep_stale_partials
+    import shutil
+
+    root = user_library_root(11)
+    own_pid = __import__("os").getpid()
+    partial = root / f".foo.partial-{own_pid}"
+    partial.mkdir()
+    monkeypatch.setattr(
+        "model_library.os.kill",
+        lambda pid, sig: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+    called = {"rmtree": False}
+    real_rmtree = shutil.rmtree
+
+    def spy(*a, **kw):
+        called["rmtree"] = True
+        return real_rmtree(*a, **kw)
+
+    monkeypatch.setattr("model_library.shutil.rmtree", spy)
+    import model_library
+
+    model_library._reset_for_testing()
+    root = user_library_root(11)
+    _sweep_stale_partials(root, user_id=11)
+    assert partial.exists()
+    assert called["rmtree"] is False
