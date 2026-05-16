@@ -171,63 +171,96 @@ class TestResolveProject:
 
 class TestFindCompanion:
     def test_returns_none_when_selection_is_none(self, tmp_path):
-        from model_library import find_companion
+        from model_library import find_companion, scan_library
 
-        assert find_companion(None, tmp_path, ".cas") is None
+        assert find_companion(None, scan_library(tmp_path), ".cas") is None
 
     def test_returns_path_when_basename_matches(self, tmp_path):
-        from model_library import find_companion
+        from model_library import find_companion, scan_library
 
         proj = tmp_path / "curonian"
         proj.mkdir()
         (proj / "results.slf").write_bytes(b"")
         (proj / "results.cas").write_text("X")
-        result = find_companion(("curonian", "results.slf"), tmp_path, ".cas")
+        result = find_companion(
+            ("curonian", "results.slf"), scan_library(tmp_path), ".cas"
+        )
         assert result == proj / "results.cas"
 
     def test_returns_none_when_project_has_no_slf(self, tmp_path):
         """A project folder with companions but no .slf is filtered out by
         scan_library, so find_companion never reaches it.
         """
-        from model_library import find_companion
+        from model_library import find_companion, scan_library
 
         proj = tmp_path / "curonian"
         proj.mkdir()
         (proj / "results.cas").write_text("X")
-        result = find_companion(("curonian", "results.slf"), tmp_path, ".cas")
+        result = find_companion(
+            ("curonian", "results.slf"), scan_library(tmp_path), ".cas"
+        )
         assert result is None
 
-    def test_swallows_filenotfound_when_slf_deleted_after_scan(
-        self, tmp_path, monkeypatch
-    ):
-        """Race: scan_library returns an entry, but the .slf is gone by
-        the time resolve_project reads it. Helper silently returns None.
+    def test_returns_none_when_companion_missing_after_scan(self, tmp_path):
+        """Companion disappears between scan and lookup: helper returns None
+        (no longer needs to swallow FileNotFoundError — the new signature
+        works on the pre-scanned entries list directly and just checks
+        whether the candidate path exists).
         """
-        import model_library
-        from model_library import find_companion, ProjectEntry
+        from model_library import find_companion, scan_library
 
         proj = tmp_path / "curonian"
         proj.mkdir()
         slf = proj / "results.slf"
         slf.write_bytes(b"")
-        (proj / "results.cas").write_text("X")
-        # Snapshot the entry, then delete the .slf to simulate a race.
-        stale_entry = ProjectEntry(name="curonian", path=proj, slf_files=(slf,))
-        slf.unlink()
-        monkeypatch.setattr(model_library, "scan_library", lambda r: [stale_entry])
+        cas = proj / "results.cas"
+        cas.write_text("X")
+        entries = scan_library(tmp_path)
+        # Companion vanishes after the entry was captured.
+        cas.unlink()
 
-        result = find_companion(("curonian", "results.slf"), tmp_path, ".cas")
+        result = find_companion(("curonian", "results.slf"), entries, ".cas")
         assert result is None
 
     def test_returns_none_when_project_renamed(self, tmp_path):
-        from model_library import find_companion
+        from model_library import find_companion, scan_library
 
         proj = tmp_path / "actual-name"
         proj.mkdir()
         (proj / "results.slf").write_bytes(b"")
         (proj / "results.cas").write_text("X")
-        result = find_companion(("old-name", "results.slf"), tmp_path, ".cas")
+        result = find_companion(
+            ("old-name", "results.slf"), scan_library(tmp_path), ".cas"
+        )
         assert result is None
+
+    def test_find_companion_finds_per_user_project(self, isolated_telemac_dirs):
+        from model_library import find_companion, scan_library, user_library_root
+
+        root = user_library_root(50)
+        proj = root / "alpha"
+        proj.mkdir()
+        (proj / "case.slf").touch()
+        cas = proj / "case.cas"
+        cas.touch()
+        entries = scan_library(user_id=50)
+        result = find_companion(("alpha", "case.slf"), entries, ".cas")
+        assert result == cas
+
+    def test_find_companion_finds_shared_when_no_user_collision(
+        self, isolated_telemac_dirs
+    ):
+        from model_library import find_companion, scan_library, library_root
+
+        shared = library_root()
+        proj = shared / "beta"
+        proj.mkdir(parents=True)
+        (proj / "case.slf").touch()
+        cli = proj / "case.cli"
+        cli.touch()
+        entries = scan_library(user_id=51)
+        result = find_companion(("beta", "case.slf"), entries, ".cli")
+        assert result == cli
 
 
 # --- Foundation types and validators (v3.7.0 per-user-storage) ---

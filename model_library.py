@@ -390,26 +390,35 @@ def resolve_project(entry: ProjectEntry, slf_name: str) -> ProjectFiles:
 
 def find_companion(
     library_selection: tuple[str, str] | None,
-    lib_root: Path,
-    ext: str,
+    entries: list[ProjectEntry],
+    suffix: str,
 ) -> Path | None:
-    """Look up a companion file (.cas/.cli/.liq) for the selected library project.
+    """Look up a companion file (.cas/.cli/.liq) next to a project's .slf.
 
-    Returns None when no project is selected, when the project has been
-    renamed/deleted, or when the requested companion is missing. Companions
-    are optional, so we silently degrade — `tel_file()` clears the
-    selection on its own when the .slf becomes unreachable.
+    `entries` is the merged + collision-filtered list from ``scan_library``
+    (typically via the per-session ``merged_entries()`` reactive). Each
+    entry's path is absolute and source-correct, so this function does
+    NOT need to know the source.
+
+    Companion resolution is exact-basename-match against the chosen .slf
+    (e.g., ``case.slf`` -> ``case.cas``). Companions are optional, so we
+    silently degrade when missing — ``tel_file()`` clears the selection
+    on its own when the .slf itself becomes unreachable.
+
+    Returns the companion Path if it exists on disk; None otherwise
+    (including when no selection is supplied or the named project is not
+    in ``entries``).
     """
     if library_selection is None:
         return None
     project_name, slf_name = library_selection
-    try:
-        for entry in scan_library(lib_root):
-            if entry.name == project_name:
-                attr = ext.lstrip(".").lower()
-                return getattr(resolve_project(entry, slf_name), attr)
-    except FileNotFoundError:
-        pass
+    suffix = suffix.lower()
+    for entry in entries:
+        if entry.name != project_name:
+            continue
+        base = Path(slf_name).stem
+        candidate = entry.path / f"{base}{suffix}"
+        return candidate if candidate.exists() else None
     return None
 
 

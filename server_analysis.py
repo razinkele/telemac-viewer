@@ -943,10 +943,11 @@ def register_analysis_handlers(
         """
         from constants import EXAMPLES
         from server_core import _find_uploaded_by_ext
-        from model_library import find_companion, library_root
+        from model_library import find_companion, scan_library
 
         if library_selection.get() is not None:
-            liq_path = find_companion(library_selection.get(), library_root(), ".liq")
+            # TODO(Task 8): pass merged_entries() instead of scan_library().
+            liq_path = find_companion(library_selection.get(), scan_library(), ".liq")
             return parse_liq_file(str(liq_path)) if liq_path else None
         uploaded = input.upload()
         if uploaded and use_upload.get():

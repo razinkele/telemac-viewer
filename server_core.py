@@ -235,7 +235,7 @@ def register_core_handlers(
         with _tf_lock:
             return fn(*args)
 
-    from model_library import library_root, find_companion
+    from model_library import library_root, find_companion, scan_library
 
     # When library_selection is None (pre-Task-10 transitional state),
     # use a sentinel reactive value that always reads None.
@@ -414,7 +414,8 @@ def register_core_handlers(
             auto_crs_enabled = True
         uploaded = input.upload()
         if library_selection.get() is not None:
-            cas_path = find_companion(library_selection.get(), library_root(), ".cas")
+            # TODO(Task 8): pass merged_entries() instead of scan_library().
+            cas_path = find_companion(library_selection.get(), scan_library(), ".cas")
             cas_candidates: tuple[str, ...] = (str(cas_path),) if cas_path else ()
         elif uploaded and use_upload.get():
             # If the user uploaded a companion .cas alongside the .slf,
@@ -606,7 +607,8 @@ def register_core_handlers(
         else from the example file's directory.
         """
         if library_selection.get() is not None:
-            cli_path = find_companion(library_selection.get(), library_root(), ".cli")
+            # TODO(Task 8): pass merged_entries() instead of scan_library().
+            cli_path = find_companion(library_selection.get(), scan_library(), ".cli")
             return read_cli_file(str(cli_path)) if cli_path else None
         uploaded = input.upload()
         if uploaded and use_upload.get():
