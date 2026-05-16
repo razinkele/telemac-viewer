@@ -228,3 +228,133 @@ class TestFindCompanion:
         (proj / "results.cas").write_text("X")
         result = find_companion(("old-name", "results.slf"), tmp_path, ".cas")
         assert result is None
+
+
+# --- Foundation types and validators (v3.7.0 per-user-storage) ---
+
+_VALID_PROJECT_NAMES = ["a", "Z", "1", "A_b-1", "abc-def_ghi", "a" * 64]
+_INVALID_PROJECT_NAMES = [
+    "",  # empty
+    "a" * 65,  # too long
+    ".hidden",  # leading dot
+    "foo.bar",  # dot in middle
+    ".",  # current dir
+    "..",  # parent dir
+    "foo/bar",  # slash
+    "foo bar",  # space
+    "föö",  # unicode
+    "a\x00b",  # NUL byte
+]
+
+
+@pytest.mark.parametrize("name", _VALID_PROJECT_NAMES)
+def test_validate_project_name_accepts_safe_names(name):
+    from model_library import _validate_project_name
+
+    assert _validate_project_name(name) == name
+
+
+@pytest.mark.parametrize("name", _INVALID_PROJECT_NAMES)
+def test_validate_project_name_rejects_unsafe_names(name):
+    from model_library import _validate_project_name
+
+    with pytest.raises(ValueError):
+        _validate_project_name(name)
+
+
+def test_validate_companion_basename_strips_path_components():
+    from model_library import _validate_companion_basename
+
+    assert _validate_companion_basename("../../etc/passwd.slf") == "passwd.slf"
+    assert _validate_companion_basename("subdir/case.cas") == "case.cas"
+
+
+def test_validate_companion_basename_rejects_disallowed_extension():
+    from model_library import _validate_companion_basename
+
+    with pytest.raises(ValueError, match="disallowed extension"):
+        _validate_companion_basename("case.exe")
+
+
+def test_validate_companion_basename_accepts_case_insensitive_suffix():
+    from model_library import _validate_companion_basename
+
+    assert _validate_companion_basename("Case.SLF") == "Case.SLF"
+
+
+def test_sanitize_for_project_name_passes_clean_input():
+    from model_library import _sanitize_for_project_name
+
+    assert _sanitize_for_project_name("alpha_run_1") == "alpha_run_1"
+
+
+def test_sanitize_for_project_name_replaces_unsafe_chars():
+    from model_library import _sanitize_for_project_name
+
+    out = _sanitize_for_project_name("alpha run!1")
+    assert out == "alpha_run_1"
+
+
+def test_sanitize_for_project_name_falls_back_on_empty():
+    from model_library import _sanitize_for_project_name
+
+    out = _sanitize_for_project_name("???")
+    assert out.startswith("hecras_import_")
+    assert len(out) <= 64
+
+
+def test_sanitize_for_project_name_falls_back_on_bare_prefix():
+    from model_library import _sanitize_for_project_name
+
+    out = _sanitize_for_project_name("hecras")
+    assert out.startswith("hecras_import_")
+
+
+def test_validate_user_id_rejects_bool_subtype():
+    from model_library import _validate_user_id
+
+    with pytest.raises(TypeError):
+        _validate_user_id(True)
+    with pytest.raises(TypeError):
+        _validate_user_id(False)
+
+
+def test_validate_user_id_rejects_non_positive():
+    from model_library import _validate_user_id
+
+    with pytest.raises(ValueError):
+        _validate_user_id(0)
+    with pytest.raises(ValueError):
+        _validate_user_id(-1)
+
+
+def test_validate_user_id_rejects_huge():
+    from model_library import _validate_user_id
+
+    with pytest.raises(ValueError):
+        _validate_user_id(2**63)
+
+
+def test_validate_user_id_accepts_positive_int():
+    from model_library import _validate_user_id
+
+    _validate_user_id(1)
+    _validate_user_id(42)
+    _validate_user_id(2**63 - 1)
+
+
+def test_library_usage_size_human():
+    from model_library import LibraryUsage
+
+    assert LibraryUsage(0, 0).size_human == "0 B"
+    assert LibraryUsage(0, 1023).size_human == "1023 B"
+    assert LibraryUsage(0, 1024).size_human == "1.0 kB"
+    assert LibraryUsage(0, 5 * (1 << 20)).size_human == "5.0 MB"
+    assert LibraryUsage(0, 3 * (1 << 30)).size_human == "3.0 GB"
+
+
+def test_library_source_display_label():
+    from model_library import LibrarySource
+
+    assert LibrarySource.USER.display_label == "My models"
+    assert LibrarySource.SHARED.display_label == "Shared"

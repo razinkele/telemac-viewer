@@ -18,6 +18,125 @@ from pathlib import Path
 
 _VIEWER_TREE = Path(__file__).resolve().parent
 
+import re
+from enum import Enum
+from typing import Iterator
+
+
+# --- Per-user storage foundation (v3.7.0 per-user-storage feature) ---
+
+
+class LibrarySource(Enum):
+    """Where a ProjectEntry lives: in the user's own dir, or in the shared overlay."""
+
+    USER = "user"
+    SHARED = "shared"
+
+    @property
+    def display_label(self) -> str:
+        return {"user": "My models", "shared": "Shared"}[self.value]
+
+
+@dataclass(frozen=True)
+class LibraryUsage:
+    """Return type of measure_user_library / delete_user_library.
+
+    Single dataclass shared by both so the (int, int) tuple order cannot
+    silently swap between caller sites. The bytes field is renamed
+    `size_bytes` to avoid shadowing the bytes builtin.
+    """
+
+    files: int
+    size_bytes: int
+
+    @property
+    def size_human(self) -> str:
+        n = self.size_bytes
+        for unit, scale in [("GB", 1 << 30), ("MB", 1 << 20), ("kB", 1 << 10)]:
+            if n >= scale:
+                return f"{n / scale:.1f} {unit}"
+        return f"{n} B"
+
+
+_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_COMPANION_BASENAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_ALLOWED_COMPANION_SUFFIXES = frozenset({".slf", ".cas", ".cli", ".liq"})
+_PARTIAL_DIR_RE = re.compile(r"^\.(.+)\.partial-(\d+)$")
+_SWEEP_MAX_PER_STARTUP = 5
+_STALE_MTIME_FALLBACK_SECONDS = (
+    30 * 60
+)  # 30 min — older than any plausible in-progress save
+
+
+def _validate_project_name(name: str) -> str:
+    """Return the validated name; raise ValueError if unsafe.
+
+    `.` and `..` are excluded by the regex (the dot is not in the
+    character class), so no separate check needed.
+    """
+    if not isinstance(name, str) or not _PROJECT_NAME_RE.fullmatch(name):
+        raise ValueError(f"Project name {name!r} must be 1-64 chars of [A-Za-z0-9_-]")
+    return name
+
+
+def _validate_companion_basename(name: str) -> str:
+    """Sanitize a client-supplied filename to use as a destination basename.
+
+    Shiny's FileInfo['name'] is client-controlled. Strip path components
+    via os.path.basename, then enforce the regex and an extension whitelist.
+    """
+    if not isinstance(name, str):
+        raise ValueError(f"Companion filename must be str, got {type(name).__name__}")
+    bare = os.path.basename(name)
+    if not _COMPANION_BASENAME_RE.fullmatch(bare):
+        raise ValueError(f"Companion filename {name!r} contains unsafe characters")
+    suffix = Path(bare).suffix.lower()
+    if suffix not in _ALLOWED_COMPANION_SUFFIXES:
+        raise ValueError(
+            f"Companion {bare!r} has disallowed extension {suffix!r}; "
+            f"allowed: {sorted(_ALLOWED_COMPANION_SUFFIXES)}"
+        )
+    return bare
+
+
+def _sanitize_for_project_name(raw: str) -> str:
+    """Best-effort coerce arbitrary text to a valid project name.
+
+    Used for the HEC-RAS auto-name. Replaces any non-[A-Za-z0-9_-] character
+    with `_`, collapses runs of underscores, trims to 64 chars, strips
+    leading/trailing `_`. Returns `hecras_import_<ts>` if the result would
+    be empty OR is just `hecras` OR matches `hecras_\d{8}-\d{6}` (only the
+    prefix + timestamp survived).
+    """
+    import datetime
+
+    cleaned = re.sub(r"[^A-Za-z0-9_-]", "_", raw)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")[:64]
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    fallback = f"hecras_import_{ts}"
+    if (
+        not cleaned
+        or cleaned == "hecras"
+        or re.fullmatch(r"hecras_\d{8}-\d{6}", cleaned)
+    ):
+        return fallback
+    return cleaned
+
+
+def _validate_user_id(user_id: int) -> None:
+    """Reject non-positive, bool-subtype, or out-of-range user ids.
+
+    bool is a subclass of int in Python; without the isinstance(bool)
+    guard, user_id=True would silently map to user 1's library.
+
+    Upper bound 2**63 matches SQLite's signed INTEGER range.
+    """
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        raise TypeError(f"user_id must be int (not bool), got {type(user_id).__name__}")
+    if not (0 < user_id < 2**63):
+        raise ValueError(f"user_id out of SQLite INTEGER range: {user_id}")
+
+
 _initialized: set[Path] = set()
 _warned: set[str] = set()
 
