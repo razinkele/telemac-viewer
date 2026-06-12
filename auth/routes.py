@@ -10,6 +10,7 @@ import re
 import sqlite3
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 import itsdangerous
 from jinja2 import Environment, BaseLoader, select_autoescape
@@ -65,7 +66,7 @@ button{background:#0a3d62;color:#fff;border:0;padding:.6rem 1rem;border-radius:.
 .err{color:#c0392b;margin:.5rem 0;font-size:.9rem}
 .info{color:#2c7;margin:.5rem 0;font-size:.9rem}
 </style></head><body>
-<form class="card" method="post" action="/login{% if next %}?next={{ next }}{% endif %}">
+<form class="card" method="post" action="{{ prefix }}/login{% if next %}?next={{ next }}{% endif %}">
   <h1>TELEMAC Viewer</h1>
   {% if error %}<div class="err">Invalid username or password.</div>{% endif %}
   {% if logged_out %}<div class="info">Logged out.</div>{% endif %}
@@ -86,7 +87,7 @@ _SAFE_NEXT_RE = re.compile(r"^/(?![/\\])[^\x00-\x1f\x7f]*$")
 _NEXT_MAX_LEN = 256
 
 
-def _safe_next(raw: str | None) -> str:
+def _safe_next(raw: str | None, default: str = "/") -> str:
     """Validate the `next` query param — only relative paths are allowed.
 
     Blocks:
@@ -99,10 +100,13 @@ def _safe_next(raw: str | None) -> str:
     URL-encoded variants are decoded by Starlette before this check so
     `next=%2F%2Fevil` is decoded to `//evil` and rejected; `%5C` decodes
     to `\` and is rejected; `%0D%0A` decodes to CRLF and is rejected.
+
+    `default` is the fallback for missing/rejected values — behind a
+    proxy prefix this is `<prefix>/`, NOT site root.
     """
     if raw and len(raw) <= _NEXT_MAX_LEN and _SAFE_NEXT_RE.fullmatch(raw):
         return raw
-    return "/"
+    return default
 
 
 def _set_session_cookie(response, user_id: int, secret: bytes, secure: bool) -> None:
@@ -146,6 +150,13 @@ def _get_db_path(request: Request) -> Path:
     return getattr(request.app.state, "auth_db_path", DEFAULT_DB_PATH)
 
 
+def _prefix(request: Request) -> str:
+    """Browser-facing mount prefix (e.g. '/telemac'), set into the scope
+    by auth_middleware from the validated X-Forwarded-Prefix header.
+    Empty string when running without a reverse proxy."""
+    return request.scope.get("url_prefix", "")
+
+
 # --- Admin flash + confirm-token helpers (Task 10) ---
 
 
@@ -176,6 +187,9 @@ def _flash(
         _get_secret(request),
         salt="admin-flash",
     ).dumps({"level": level, "message": message})
+    # Cookie paths are BROWSER-facing: behind a proxy prefix the admin
+    # pages live at <prefix>/admin, and a path=/admin cookie would never
+    # be sent back.
     response.set_cookie(
         "admin_flash",
         payload,
@@ -183,7 +197,7 @@ def _flash(
         httponly=True,
         secure=False,
         samesite="lax",
-        path="/admin",
+        path=_prefix(request) + "/admin",
     )
 
 
@@ -198,7 +212,7 @@ def _read_flash(request: Request, response) -> dict | None:
     raw = request.cookies.get("admin_flash")
     if not raw:
         return None
-    response.delete_cookie("admin_flash", path="/admin")
+    response.delete_cookie("admin_flash", path=_prefix(request) + "/admin")
     try:
         return itsdangerous.URLSafeTimedSerializer(
             _get_secret(request),
@@ -222,7 +236,7 @@ def _redirect_with_flash(
     Folds the response-construct + cookie-mutate pattern into one call so
     every branch in admin_users_delete_post returns one of these.
     """
-    response = RedirectResponse("/admin/users", status_code=303)
+    response = RedirectResponse(_prefix(request) + "/admin/users", status_code=303)
     _flash(request, response, level, message)
     return response
 
@@ -233,9 +247,12 @@ def _redirect_with_flash(
 @handle_route_errors
 async def login_get(request: Request) -> HTMLResponse:
     body = LOGIN_HTML.render(
-        next=request.query_params.get("next", ""),
+        # Re-encode: Starlette decoded the param, and the value goes back
+        # into the form-action URL where a literal `&` would split it.
+        next=quote(request.query_params.get("next", ""), safe="/"),
         error=request.query_params.get("error") == "invalid",
         logged_out=request.query_params.get("logged_out") == "1",
+        prefix=_prefix(request),
     )
     response = HTMLResponse(body)
     # If the visitor brought a malformed cookie, clear it (spec §7.1 step 3)
@@ -276,10 +293,16 @@ async def login_post(request: Request) -> RedirectResponse:
         # password into the username field by accident otherwise leaks the
         # password into the journal.
         logger.warning("Failed login for username=%r", username[:32])
-        return RedirectResponse("/login?error=invalid", status_code=302)
+        return RedirectResponse(
+            _prefix(request) + "/login?error=invalid", status_code=302
+        )
 
     logger.info("Login success: user_id=%s username=%s", user.id, user.username)
-    target = _safe_next(request.query_params.get("next"))
+    # `next` is browser-facing (middleware embeds the prefix); fall back
+    # to the app's own root, not site root, when missing/rejected.
+    target = _safe_next(
+        request.query_params.get("next"), default=_prefix(request) + "/"
+    )
     response = RedirectResponse(target, status_code=302)
     _set_session_cookie(
         response,
@@ -294,7 +317,9 @@ async def login_post(request: Request) -> RedirectResponse:
 async def logout_post(request: Request) -> RedirectResponse:
     uid = request.scope.get("user_id")
     logger.info("Logout: user_id=%s", uid)
-    response = RedirectResponse("/login?logged_out=1", status_code=302)
+    response = RedirectResponse(
+        _prefix(request) + "/login?logged_out=1", status_code=302
+    )
     _clear_session_cookie(response, secure=request.url.scheme == "https")
     return response
 
@@ -324,7 +349,7 @@ button{background:#0a3d62;color:#fff;border:0;padding:.3rem .6rem;border-radius:
 <h1>Users</h1>
 {% if flash %}<div class="alert alert-{{ flash.level }}">{{ flash.message }}</div>{% endif %}
 {% if error %}<div class="err">{{ error }}</div>{% endif %}
-<form class="create" method="post" action="/admin/users/create">
+<form class="create" method="post" action="{{ prefix }}/admin/users/create">
   <h3>Create user</h3>
   <input name="username" placeholder="username" required>
   <input name="display_name" placeholder="display name (optional)">
@@ -342,21 +367,21 @@ button{background:#0a3d62;color:#fff;border:0;padding:.3rem .6rem;border-radius:
   <td>{{ "yes" if u.is_admin else "" }}</td>
   <td>{{ u.created_at }}</td>
   <td class="actions">
-    <form method="post" action="/admin/users/{{ u.id }}/edit" style="display:inline">
+    <form method="post" action="{{ prefix }}/admin/users/{{ u.id }}/edit" style="display:inline">
       <input name="display_name" placeholder="new display name" value="{{ u.display_name or '' }}" style="width:8rem">
       <input type="checkbox" name="is_admin"{% if u.is_admin %} checked{% endif %}>admin
       <button type="submit">Save</button>
     </form>
-    <form method="post" action="/admin/users/{{ u.id }}/reset-password" style="display:inline">
+    <form method="post" action="{{ prefix }}/admin/users/{{ u.id }}/reset-password" style="display:inline">
       <input name="password" type="password" placeholder="new password" style="width:8rem">
       <button type="submit">Reset PW</button>
     </form>
-    <a class="del-link" href="/admin/users/{{ u.id }}/delete">Delete</a>
+    <a class="del-link" href="{{ prefix }}/admin/users/{{ u.id }}/delete">Delete</a>
   </td>
 </tr>
 {% endfor %}
 </table>
-<form method="post" action="/logout"><button type="submit">Log out</button></form>
+<form method="post" action="{{ prefix }}/logout"><button type="submit">Log out</button></form>
 </body></html>
 """)
 
@@ -377,10 +402,10 @@ a.cancel{margin-left:1rem;color:#0a3d62}
   {{ usage.files }} file(s) / {{ usage.size_human }} from:</p>
 <pre><code>{{ resolved_path }}</code></pre>
 <p><strong>This action cannot be undone.</strong></p>
-<form method="post" action="/admin/users/{{ user.id }}/delete">
+<form method="post" action="{{ prefix }}/admin/users/{{ user.id }}/delete">
   <input type="hidden" name="confirm_token" value="{{ token }}">
   <button type="submit">Delete user + files</button>
-  <a class="cancel" href="/admin/users">Cancel</a>
+  <a class="cancel" href="{{ prefix }}/admin/users">Cancel</a>
 </form>
 </body></html>
 """)
@@ -411,11 +436,12 @@ def _render_users_page(
     error: str | None = None,
     status: int = 200,
     flash: dict | None = None,
+    prefix: str = "",
 ) -> HTMLResponse:
     with connect(db_path) as conn:
         users = list_users(conn)
     return HTMLResponse(
-        ADMIN_USERS_HTML.render(users=users, error=error, flash=flash),
+        ADMIN_USERS_HTML.render(users=users, error=error, flash=flash, prefix=prefix),
         status_code=status,
     )
 
@@ -431,7 +457,9 @@ async def admin_users_get(request: Request) -> HTMLResponse:
     with connect(_get_db_path(request)) as conn:
         users = list_users(conn)
     response = HTMLResponse(
-        ADMIN_USERS_HTML.render(users=users, error=None, flash=None)
+        ADMIN_USERS_HTML.render(
+            users=users, error=None, flash=None, prefix=_prefix(request)
+        )
     )
     flash = _read_flash(request, response)
     if flash is not None:
@@ -439,7 +467,7 @@ async def admin_users_get(request: Request) -> HTMLResponse:
         # header is already attached by _read_flash; rebuilding the body
         # via HTMLResponse() would discard it, so set body via .body=.)
         response.body = ADMIN_USERS_HTML.render(
-            users=users, error=None, flash=flash
+            users=users, error=None, flash=flash, prefix=_prefix(request)
         ).encode("utf-8")
     return response
 
@@ -454,15 +482,20 @@ async def admin_users_create(request: Request) -> HTMLResponse | RedirectRespons
     is_admin = form.get("is_admin") in ("on", "true", "1")
 
     if err := _validate_username(username):
-        return _render_users_page(_get_db_path(request), error=err, status=400)
+        return _render_users_page(
+            _get_db_path(request), error=err, status=400, prefix=_prefix(request)
+        )
     if display_name and not _DISPLAY_RE.match(display_name):
         return _render_users_page(
             _get_db_path(request),
             error="Display name must match [a-zA-Z0-9_ .-], 1–64 chars.",
             status=400,
+            prefix=_prefix(request),
         )
     if err := _validate_password(password):
-        return _render_users_page(_get_db_path(request), error=err, status=400)
+        return _render_users_page(
+            _get_db_path(request), error=err, status=400, prefix=_prefix(request)
+        )
 
     db = _get_db_path(request)
     with connect(db) as conn:
@@ -472,6 +505,7 @@ async def admin_users_create(request: Request) -> HTMLResponse | RedirectRespons
                 db,
                 error=f"Username {username!r} already exists.",
                 status=400,
+                prefix=_prefix(request),
             )
         try:
             create_user(
@@ -486,9 +520,10 @@ async def admin_users_create(request: Request) -> HTMLResponse | RedirectRespons
                 db,
                 error=f"Username {username!r} already exists.",
                 status=400,
+                prefix=_prefix(request),
             )
     logger.info("Admin created user: username=%s is_admin=%s", username, is_admin)
-    return RedirectResponse("/admin/users", status_code=302)
+    return RedirectResponse(_prefix(request) + "/admin/users", status_code=302)
 
 
 @handle_route_errors
@@ -503,6 +538,7 @@ async def admin_users_edit(request: Request) -> RedirectResponse | HTMLResponse:
             _get_db_path(request),
             error="Display name must match [a-zA-Z0-9_ .-], 1–64 chars.",
             status=400,
+            prefix=_prefix(request),
         )
     with connect(_get_db_path(request)) as conn:
         rc = update_user(
@@ -515,9 +551,10 @@ async def admin_users_edit(request: Request) -> RedirectResponse | HTMLResponse:
             _get_db_path(request),
             error=f"User id={user_id} no longer exists; refresh the page.",
             status=400,
+            prefix=_prefix(request),
         )
     logger.info("Admin edited user_id=%s", user_id)
-    return RedirectResponse("/admin/users", status_code=302)
+    return RedirectResponse(_prefix(request) + "/admin/users", status_code=302)
 
 
 @handle_route_errors
@@ -529,7 +566,9 @@ async def admin_users_reset_password(
     form = await request.form()
     password = form.get("password") or ""
     if err := _validate_password(password):
-        return _render_users_page(_get_db_path(request), error=err, status=400)
+        return _render_users_page(
+            _get_db_path(request), error=err, status=400, prefix=_prefix(request)
+        )
     with connect(_get_db_path(request)) as conn:
         rc = update_password_hash(
             conn, user_id=user_id, password_hash=hash_password(password)
@@ -542,9 +581,10 @@ async def admin_users_reset_password(
             _get_db_path(request),
             error=f"User id={user_id} no longer exists; cannot reset password.",
             status=400,
+            prefix=_prefix(request),
         )
     logger.info("Admin reset password for user_id=%s", user_id)
-    return RedirectResponse("/admin/users", status_code=302)
+    return RedirectResponse(_prefix(request) + "/admin/users", status_code=302)
 
 
 @handle_route_errors
@@ -575,7 +615,11 @@ async def admin_users_delete_get(request: Request) -> HTMLResponse:
         salt="admin-delete-confirm",
     ).dumps({"actor_id": _admin_actor_id(request), "target_id": user_id})
     body = ADMIN_DELETE_CONFIRM_HTML.render(
-        user=user, usage=usage, resolved_path=resolved_path, token=token
+        user=user,
+        usage=usage,
+        resolved_path=resolved_path,
+        token=token,
+        prefix=_prefix(request),
     )
     return HTMLResponse(body)
 

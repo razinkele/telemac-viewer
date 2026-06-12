@@ -8,9 +8,11 @@ from __future__ import annotations
 import functools
 import ipaddress
 import logging
+import re
 import sqlite3
 from pathlib import Path
 from typing import Awaitable, Callable
+from urllib.parse import quote
 
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
@@ -29,6 +31,34 @@ def _is_public(path: str) -> bool:
     return any(
         path == p or path.startswith(p + "/") or path == p for p in _PUBLIC_PREFIXES
     ) or path.startswith("/static/")
+
+
+# Browser-facing mount prefix (e.g. "/telemac" behind nginx+Shiny Server).
+# Strict charset: the header is attacker-controllable when nginx does NOT
+# set it, and an unvalidated value would turn the login redirect into an
+# open redirect (X-Forwarded-Prefix: https://evil → Location: https://evil/login).
+_PREFIX_RE = re.compile(r"^/[A-Za-z0-9_\-./]{0,128}$")
+
+
+def get_url_prefix(scope: dict) -> str:
+    """Return the validated X-Forwarded-Prefix header value, or "".
+
+    Shiny Server strips the mount path before the ASGI app sees the
+    request and sets no root_path, so the public prefix can only come
+    from the reverse proxy. Empty string when absent (direct/dev runs).
+    """
+    raw = ""
+    for k, v in scope.get("headers", []):
+        if k == b"x-forwarded-prefix":
+            raw = v.decode("latin-1").strip()
+            break
+    raw = raw.rstrip("/")
+    if not raw:
+        return ""
+    if not _PREFIX_RE.fullmatch(raw) or "//" in raw or ".." in raw:
+        logger.warning("Rejected malformed X-Forwarded-Prefix: %r", raw[:64])
+        return ""
+    return raw
 
 
 def auth_middleware(
@@ -67,6 +97,11 @@ def auth_middleware(
             if server:
                 warn_if_public_bind(server[0])
             _bind_warned[0] = True
+
+        # Browser-facing mount prefix — set for ALL http/ws requests
+        # (public login/logout routes need it to build form actions).
+        prefix = get_url_prefix(scope)
+        scope["url_prefix"] = prefix
 
         path = scope.get("path", "")
         if scope["type"] == "http" and _is_public(path):
@@ -114,13 +149,18 @@ def auth_middleware(
         scope["user_id"] = user_id
 
         if user_id is None and scope["type"] == "http":
-            # Unauthenticated → redirect to /login with next param
-            next_url = path
+            # Unauthenticated → redirect to <prefix>/login with next param.
+            # `next` carries the BROWSER-facing path (prefix included) so
+            # login_post can redirect to it verbatim after auth. quote()
+            # keeps `?` / `&` in the original query string from being
+            # parsed as separators of the /login URL itself.
+            next_url = prefix + path
             if scope.get("query_string"):
                 next_url += "?" + scope["query_string"].decode("latin-1")
-            await RedirectResponse(url=f"/login?next={next_url}", status_code=302)(
-                scope, receive, send
-            )
+            await RedirectResponse(
+                url=f"{prefix}/login?next={quote(next_url, safe='/')}",
+                status_code=302,
+            )(scope, receive, send)
             return
 
         if user_id is None and scope["type"] == "websocket":
